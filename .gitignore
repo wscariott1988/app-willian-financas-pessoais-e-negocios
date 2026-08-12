@@ -1,0 +1,60 @@
+# ============================================================
+# Repositorio de PRODUCAO (frontend mvp-app + migrations Supabase)
+# Nao versionar gateway local, dados financeiros, segredos ou artefatos.
+# ============================================================
+
+# ---------- Segredos e ambiente ----------
+.env
+.env.*
+!.env.example
+*.local
+
+# ---------- Gateway local (NAO vai para producao) ----------
+scripts/server/
+scripts/seed/
+scripts/converter/
+scripts/review/
+scripts/__init__.py
+tests/gateway_3d1.test.mjs
+tests/gateway_3d3.test.mjs
+tests/test_converter.py
+/package.json
+/package-lock.json
+
+# ---------- Banco local pglite (dados financeiros) ----------
+.pglite-data/
+.pglite-test/
+
+# ---------- Dependencias ----------
+node_modules/
+
+# ---------- Logs, backups, checkpoints e temporarios ----------
+logs/
+*.log
+backup_*/
+checkpoint_*/
+*.out.log
+*.err.log
+*.tmp
+
+# ---------- Dados financeiros locais (nunca versionar) ----------
+supabase/seed/
+data/
+
+# ---------- Artefatos de build / bytecode ----------
+__pycache__/
+*.pyc
+dist/
+build/
+reports/
+
+# ---------- Probes e depuracao temporaria ----------
+tests/*probe*.mjs
+tests/*_debug.mjs
+tests/verify_catraw.mjs
+tests/argv_probe.mjs
+tests/pglite_probe.mjs
+tests/rls_debug.mjs
+
+# ---------- Docs internos (baseline antigo, opcional) ----------
+docs/
