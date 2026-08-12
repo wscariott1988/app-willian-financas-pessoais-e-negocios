@@ -234,6 +234,45 @@ button {
   border: 1px solid rgba(6, 182, 212, 0.3);
 }
 
+.badge-scheduled {
+  background: rgba(167, 139, 250, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+}
+
+.badge-ignored {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* Cards do resumo: botões de filtro (Em revisão / Sem categoria) */
+.stat-card {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: default;
+  width: 100%;
+}
+
+button.stat-card {
+  cursor: pointer;
+}
+
+button.stat-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.stat-filter-active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary), var(--shadow-glow);
+  background: rgba(99, 102, 241, 0.06);
+}
+
 /* ============ Etapa 1 — Fundação visual (mobile-first) ============ */
 
 .app-shell {

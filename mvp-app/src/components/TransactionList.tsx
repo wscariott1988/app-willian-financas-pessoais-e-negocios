@@ -1,7 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX } from 'lucide-react';
 import { formatShortDate } from '../lib/period';
+import {
+  TX_PAGE_SIZE,
+  buildTxListOptions,
+  clearTxFilters,
+  createTxPageFetcher,
+  fetchAllTxPages,
+  hasActiveTxFilters,
+  statusLabel,
+  type TxListFilters,
+} from '../lib/txList';
 
 interface Account {
   id: string;
@@ -69,15 +79,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [totalLoaded, setTotalLoaded] = useState(0);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('occurred_on');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
-
-  // Pagination
-  const [page, setPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
-  const limit = 10;
 
   useEffect(() => {
     const fetchAccounts = async () => {
@@ -94,61 +100,42 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     fetchAccounts();
   }, [profileId]);
 
+  // Lista contínua: busca TODAS as páginas do recorte (perfil via RLS, período,
+  // busca, conta e filtros atuais), sem paginação visível.
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const opts = buildTxListOptions(
+      { reviewOnly: filterReviewOnly, noCategory: filterNoCategory } satisfies TxListFilters,
+      { search, accountId: selectedAccount, start: startDate, end: endDate },
+    );
+    const fetcher = createTxPageFetcher(supabase as any, opts);
     try {
-      let query = supabase
-        .from('transactions')
-        .select('*, categories(display_name), accounts(display_name)', { count: 'exact' });
-
-      if (search.trim()) {
-        query = query.ilike('raw_description', `%${search}%`);
-      }
-      if (selectedAccount) {
-        query = query.eq('account_id', selectedAccount);
-      }
-      if (startDate) {
-        query = query.gte('occurred_on', startDate);
-      }
-      if (endDate) {
-        query = query.lte('occurred_on', endDate);
-      }
-      if (filterNoCategory) {
-        query = query.is('category_id', null);
-      }
-      if (filterReviewOnly) {
-        query = query.eq('status', 'review');
-      }
-
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
-
-      const { data, error: txError, count } = await query
-        .order(sortField, { ascending: sortDir === 'asc' })
-        .order('created_at', { ascending: false })
-        .range(from, to);
-
-      if (txError) throw txError;
-
-      setTransactions(data || []);
-      setTotalCount(count || 0);
+      const { rows, totalCount } = await fetchAllTxPages(fetcher, TX_PAGE_SIZE);
+      setTransactions(rows as unknown as Transaction[]);
+      setTotalLoaded(totalCount);
     } catch (err: any) {
+      // Lote falhou: nunca apresentar parcial como completo.
       setError(err.message || 'Erro ao carregar transações');
+      setTransactions([]);
+      setTotalLoaded(0);
     } finally {
       setLoading(false);
     }
-  }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, profileId, refreshTrigger, page, sortField, sortDir]);
+  }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, profileId, refreshTrigger]);
 
   useEffect(() => {
     fetchTransactions();
   }, [fetchTransactions]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, sortField, sortDir, profileId]);
+  const filters: TxListFilters = { reviewOnly: filterReviewOnly, noCategory: filterNoCategory };
+  const filtersActive = hasActiveTxFilters(filters);
 
-  const totalPages = Math.ceil(totalCount / limit) || 1;
+  const handleClearFilters = () => {
+    const cleared = clearTxFilters();
+    onFilterReviewOnlyChange(cleared.reviewOnly);
+    onFilterNoCategoryChange(cleared.noCategory);
+  };
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -236,7 +223,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '13px', fontWeight: 600 }}>
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -244,7 +231,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
               style={{ width: '16px', height: '16px', cursor: 'pointer' }}
             />
-            <span>Somente fila de revisão (status = review)</span>
+            <span>Somente em revisão (status = review)</span>
           </label>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -256,6 +243,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             />
             <span>Sem categoria (category_id = null)</span>
           </label>
+
+          {filtersActive && (
+            <button
+              className="btn-secondary"
+              onClick={handleClearFilters}
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
+            >
+              <FilterX size={14} />
+              Limpar filtros
+            </button>
+          )}
         </div>
       </div>
 
@@ -277,7 +276,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-text-muted)' }}>
                     <RefreshCw size={24} className="spin-animation" style={{ marginBottom: '8px' }} />
-                    <div>Buscando transações do banco...</div>
+                    <div>Buscando transações do período...</div>
                   </td>
                 </tr>
               ) : error ? (
@@ -285,6 +284,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   <td colSpan={6} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-danger)' }}>
                     <AlertCircle size={24} style={{ marginBottom: '8px' }} />
                     <div>{error}</div>
+                    <div style={{ fontSize: '12px', marginTop: '6px' }}>
+                      A lista não foi exibida para evitar resultado parcial.
+                    </div>
                   </td>
                 </tr>
               ) : transactions.length === 0 ? (
@@ -295,70 +297,48 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                   </td>
                 </tr>
               ) : (
-                transactions.map((tx) => (
-                  <tr
-                    key={tx.id}
-                    className={`tx-row ${selectedTransactionId === tx.id ? 'selected' : ''}`}
-                    onClick={() => onSelectTransaction(tx)}
-                  >
-                    <td>{formatDate(tx.occurred_on)}</td>
-                    <td style={{ fontWeight: 600 }}>
-                      {tx.raw_description}
-                    </td>
-                    <td>{formatCurrency(tx.amount, tx.transaction_kind)}</td>
-                    <td>{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
-                    <td style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
-                      {tx.category_raw || 'Não informada'}
-                    </td>
-                    <td>
-                      <span className={`badge badge-${tx.status}`}>
-                        {tx.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                transactions.map((tx) => {
+                  const st = statusLabel(tx.status);
+                  return (
+                    <tr
+                      key={tx.id}
+                      className={`tx-row ${selectedTransactionId === tx.id ? 'selected' : ''}`}
+                      onClick={() => onSelectTransaction(tx)}
+                    >
+                      <td>{formatDate(tx.occurred_on)}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {tx.raw_description}
+                      </td>
+                      <td>{formatCurrency(tx.amount, tx.transaction_kind)}</td>
+                      <td>{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
+                      <td style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
+                        {tx.category_raw || 'Não informada'}
+                      </td>
+                      <td>
+                        <span className={`badge badge-${tx.status}`} title={st.hint}>
+                          {st.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
 
-        {!loading && !error && transactions.length > 0 && (
+        {!loading && !error && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 20px',
+            justifyContent: 'flex-end',
+            padding: '14px 20px',
             borderTop: '1px solid var(--border-card)',
             fontSize: '13px',
             color: 'var(--color-text-muted)'
           }}>
-            <div>
-              Exibindo <strong>{transactions.length}</strong> de <strong>{totalCount.toLocaleString('pt-BR')}</strong> transações
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button
-                className="btn-secondary"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-                style={{ padding: '6px 12px', fontSize: '12px' }}
-              >
-                Anterior
-              </button>
-
-              <span style={{ padding: '0 8px' }}>
-                Página <strong>{page}</strong> de {totalPages}
-              </span>
-
-              <button
-                className="btn-secondary"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-                style={{ padding: '6px 12px', fontSize: '12px' }}
-              >
-                Próxima
-              </button>
-            </div>
+            <strong style={{ color: '#f8fafc' }}>{totalLoaded.toLocaleString('pt-BR')}</strong>
+            <span>&nbsp;transações no período</span>
           </div>
         )}
       </div>

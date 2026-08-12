@@ -14,6 +14,7 @@
 
 import { supabase } from '../supabaseClient';
 import type { PeriodRange } from './period';
+import { fetchAllPages, type PageFetcher } from './pagination';
 
 export interface PeriodSummary {
   income: number;
@@ -38,45 +39,12 @@ export type PeriodPageFetcher = (from: number, to: number) => Promise<PeriodPage
 
 export const PERIOD_PAGE_SIZE = 1000;
 
-// Busca todas as páginas da projeção mínima. Termina quando o total acumulado
-// atinge o total informado (count=exact) ou, na ausência de total, quando a
-// página vem incompleta/vazia. Nunca entra em loop infinito: a cada iteração
-// ou avança o offset ou encerra; página vazia antes do total esperado é erro.
+// Busca todas as páginas da projeção mínima (loop genérico de paginação).
 export async function fetchAllPeriodRows(
   fetcher: PeriodPageFetcher,
   pageSize: number = PERIOD_PAGE_SIZE,
 ): Promise<{ rows: SummaryRow[]; totalCount: number }> {
-  if (!Number.isInteger(pageSize) || pageSize <= 0) {
-    throw new Error('pageSize deve ser um inteiro maior que zero');
-  }
-
-  const rows: SummaryRow[] = [];
-  let totalCount: number | null = null;
-  let from = 0;
-
-  for (;;) {
-    const page = await fetcher(from, from + pageSize - 1);
-    if (page.error) throw page.error;
-
-    const pageRows = page.rows ?? [];
-    totalCount = page.totalCount ?? totalCount;
-    rows.push(...pageRows);
-
-    if (totalCount !== null) {
-      if (rows.length >= totalCount) break;
-      if (pageRows.length === 0) {
-        throw new Error(
-          `página vazia antes do total esperado (${rows.length}/${totalCount}) — soma abortada`,
-        );
-      }
-    } else if (pageRows.length < pageSize || pageRows.length === 0) {
-      break;
-    }
-
-    from += pageSize;
-  }
-
-  return { rows, totalCount: totalCount ?? rows.length };
+  return fetchAllPages<SummaryRow>(fetcher as PageFetcher, pageSize);
 }
 
 // Soma as linhas do intervalo. Transferências ficam em campo próprio e NÃO

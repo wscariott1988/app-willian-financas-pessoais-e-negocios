@@ -4,7 +4,7 @@ import { TransactionList } from './TransactionList';
 import { CategorizerPanel } from './CategorizerPanel';
 import { AuditLogs } from './AuditLogs';
 import { PeriodSelector } from './PeriodSelector';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, User, Landmark, Server, AlertCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, User, Landmark, Server, AlertCircle, FilterX } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
 import type { PeriodController } from './AppShell';
 
@@ -45,11 +45,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Filters (shared with TransactionList) — a faixa de datas vem do período global
+  // Filters (shared with TransactionList) — a faixa de datas vem do período global.
+  // A lista abre sem filtro de status nem de categoria.
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
   const [filterNoCategory, setFilterNoCategory] = useState(false);
-  const [filterReviewOnly, setFilterReviewOnly] = useState(true);
+  const [filterReviewOnly, setFilterReviewOnly] = useState(false);
 
   const [summary, setSummary] = useState<Summary>({
     income: 0, expense: 0, balance: 0, reviewCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
@@ -99,7 +100,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const formatBRL = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  const stats = [
+  interface StatCard {
+    label: string;
+    value: string;
+    icon: React.ReactElement;
+    color: string;
+    filter?: 'reviewOnly' | 'noCategory';
+    hint?: string;
+  }
+
+  const statFilterActive = (filter: 'reviewOnly' | 'noCategory'): boolean =>
+    filter === 'reviewOnly' ? filterReviewOnly : filterNoCategory;
+
+  const stats: StatCard[] = [
     {
       label: 'Receitas',
       value: formatBRL(summary.income),
@@ -123,14 +136,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       value: String(summary.reviewCount),
       icon: <AlertTriangle size={18} />,
       color: 'var(--color-warning)',
+      filter: 'reviewOnly' as const,
+      hint: 'Filtra a lista abaixo para status = review',
     },
     {
       label: 'Sem categoria',
       value: String(summary.noCategoryCount),
       icon: <Tag size={18} />,
       color: 'var(--color-secondary)',
+      filter: 'noCategory' as const,
+      hint: 'Filtra a lista abaixo para category_id = null',
     },
   ];
+
+  const filtersActive = filterReviewOnly || filterNoCategory;
+
+  const handleClearFilters = () => {
+    setFilterReviewOnly(false);
+    setFilterNoCategory(false);
+  };
 
   const isProd = import.meta.env.PROD;
   const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '';
@@ -157,26 +181,74 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         onModeChange={period.onModeChange}
       />
 
-      {/* Resumo do período */}
+      {/* Resumo do período. Cards de Receita/Despesa/Resultado são informativos;
+          “Em revisão” e “Sem categoria” são botões que filtram APENAS a lista. */}
       <div className="summary-grid">
-        {stats.map((stat) => (
-          <div key={stat.label} className="glass glass-interactive" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {React.cloneElement(stat.icon, { color: stat.color })}
-              {stat.label}
-            </div>
-            {summary.loading ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
-                <RefreshCw size={14} className="spin-animation" /> calculando...
+        {stats.map((stat) => {
+          const statBody = (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {React.cloneElement(stat.icon as React.ReactElement<{ color?: string }>, { color: stat.color })}
+                {stat.label}
               </div>
-            ) : (
-              <div style={{ fontSize: '19px', fontWeight: 800, color: stat.color, letterSpacing: '-0.01em' }}>
-                {stat.value}
+              {summary.loading ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
+                  <RefreshCw size={14} className="spin-animation" /> calculando...
+                </div>
+              ) : (
+                <div style={{ fontSize: '19px', fontWeight: 800, color: stat.color, letterSpacing: '-0.01em' }}>
+                  {stat.value}
+                </div>
+              )}
+              {stat.filter && (
+                <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: statFilterActive(stat.filter) ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>
+                  {statFilterActive(stat.filter) ? 'Filtro ativo — clique para remover' : 'Clique para filtrar a lista'}
+                </div>
+              )}
+            </>
+          );
+
+          if (!stat.filter) {
+            return (
+              <div key={stat.label} className="glass glass-interactive stat-card">
+                {statBody}
               </div>
-            )}
-          </div>
-        ))}
+            );
+          }
+
+          const active = statFilterActive(stat.filter);
+          return (
+            <button
+              key={stat.label}
+              type="button"
+              className={`glass glass-interactive stat-card ${active ? 'stat-filter-active' : ''}`}
+              aria-pressed={active}
+              title={stat.hint}
+              onClick={() => {
+                if (stat.filter === 'reviewOnly') setFilterReviewOnly((v) => !v);
+                else setFilterNoCategory((v) => !v);
+              }}
+            >
+              {statBody}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Limpar filtros da lista */}
+      {filtersActive && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            className="btn-secondary"
+            onClick={handleClearFilters}
+            style={{ padding: '8px 14px', fontSize: '12px' }}
+            title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
+          >
+            <FilterX size={14} />
+            Limpar filtros
+          </button>
+        </div>
+      )}
 
       {/* Erro de consulta do resumo */}
       {summary.error && (
