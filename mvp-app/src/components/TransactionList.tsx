@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { formatShortDate } from '../lib/period';
 
 interface Account {
   id: string;
@@ -225,24 +226,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             </select>
           </div>
 
-          <div style={{ flex: '1 1 140px', position: 'relative' }}>
-            <Calendar size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--color-text-muted)' }} />
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => onStartDateChange(e.target.value)}
-              style={{ width: '100%', paddingLeft: '38px' }}
-            />
-          </div>
-
-          <div style={{ flex: '1 1 140px', position: 'relative' }}>
-            <Calendar size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--color-text-muted)' }} />
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => onEndDateChange(e.target.value)}
-              style={{ width: '100%', paddingLeft: '38px' }}
-            />
+          <div className="range-badge" title="Intervalo de datas aplicado pelo seletor global de período">
+            <Calendar size={18} style={{ color: 'var(--color-primary)' }} />
+            <span>
+              {startDate && endDate
+                ? `${formatShortDate(startDate)} → ${formatShortDate(endDate)}`
+                : 'Período completo'}
+            </span>
           </div>
         </div>
 

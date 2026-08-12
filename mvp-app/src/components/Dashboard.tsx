@@ -3,7 +3,10 @@ import { supabase } from '../supabaseClient';
 import { TransactionList } from './TransactionList';
 import { CategorizerPanel } from './CategorizerPanel';
 import { AuditLogs } from './AuditLogs';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, User, Landmark, Server } from 'lucide-react';
+import { PeriodSelector } from './PeriodSelector';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, User, Landmark, Server, AlertCircle } from 'lucide-react';
+import { fetchPeriodSummary } from '../lib/summary';
+import type { PeriodController } from './AppShell';
 
 interface Transaction {
   id: string;
@@ -24,6 +27,7 @@ interface Transaction {
 interface DashboardProps {
   profileId: string;
   profileCode?: 'personal' | 'business';
+  period: PeriodController;
 }
 
 interface Summary {
@@ -34,69 +38,54 @@ interface Summary {
   noCategoryCount: number;
   totalCount: number;
   loading: boolean;
+  error: string | null;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal' }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period }) => {
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Filters (shared with TransactionList)
+  // Filters (shared with TransactionList) — a faixa de datas vem do período global
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [filterNoCategory, setFilterNoCategory] = useState(false);
   const [filterReviewOnly, setFilterReviewOnly] = useState(true);
 
   const [summary, setSummary] = useState<Summary>({
-    income: 0, expense: 0, balance: 0, reviewCount: 0, noCategoryCount: 0, totalCount: 0, loading: true,
+    income: 0, expense: 0, balance: 0, reviewCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
   });
 
+  const { range } = period;
+
   const fetchSummary = useCallback(async () => {
-    setSummary((s) => ({ ...s, loading: true }));
+    setSummary((s) => ({ ...s, loading: true, error: null }));
     try {
-      let q = supabase
-        .from('transactions')
-        .select('amount, transaction_kind, status, category_id', { count: 'exact' })
-        .limit(5000);
+      const periodSummary = await fetchPeriodSummary(range);
 
-      if (selectedAccount) q = q.eq('account_id', selectedAccount);
-      if (startDate) q = q.gte('occurred_on', startDate);
-      if (endDate) q = q.lte('occurred_on', endDate);
-      if (filterNoCategory) q = q.is('category_id', null);
-      if (filterReviewOnly) q = q.eq('status', 'review');
-
-      const { data, error, count } = await q;
-      if (error) throw error;
-
-      const rows = data || [];
-      let income = 0;
-      let expense = 0;
+      // Contadores auxiliares (fila de revisão e sem categoria) apenas para o resumo da página inicial
+      const counters = await supabaseCounters(range);
       let reviewCount = 0;
       let noCategoryCount = 0;
-
-      for (const r of rows) {
-        const amt = parseFloat(r.amount) || 0;
-        if (r.transaction_kind === 'income') income += amt;
-        else if (r.transaction_kind === 'expense') expense += amt;
-        if (r.status === 'review') reviewCount += 1;
-        if (r.category_id === null) noCategoryCount += 1;
+      if (counters) {
+        reviewCount = counters.reviewCount;
+        noCategoryCount = counters.noCategoryCount;
       }
 
       setSummary({
-        income,
-        expense,
-        balance: income - expense,
+        income: periodSummary.income,
+        expense: periodSummary.expense,
+        balance: periodSummary.balance,
         reviewCount,
         noCategoryCount,
-        totalCount: count || rows.length,
+        totalCount: periodSummary.totalCount,
         loading: false,
+        error: null,
       });
     } catch (err: any) {
       console.error('Erro ao carregar resumo financeiro:', err);
-      setSummary((s) => ({ ...s, loading: false }));
+      setSummary((s) => ({ ...s, loading: false, error: err.message || 'Erro ao consultar o resumo do período.' }));
     }
-  }, [selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, profileId]);
+  }, [range]);
 
   useEffect(() => {
     fetchSummary();
@@ -124,7 +113,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       color: 'var(--color-danger)',
     },
     {
-      label: 'Saldo do período',
+      label: 'Resultado do período',
       value: formatBRL(summary.balance),
       icon: <Wallet size={18} />,
       color: summary.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
@@ -148,9 +137,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const gatewayLabel = rawUrl.replace(/^https?:\/\//, '') || (isProd ? 'Supabase Cloud' : 'Gateway local');
 
   return (
-    <div style={{ padding: '0 28px 28px', display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '1600px', margin: '0 auto' }}>
-      {/* Summary Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Título da página */}
+      <div>
+        <h1 style={{ fontSize: '22px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px' }}>
+          Início
+        </h1>
+        <p style={{ fontSize: '13px', color: 'var(--color-text-muted)' }}>
+          Resumo e transações do período selecionado para o perfil ativo
+        </p>
+      </div>
+
+      {/* Seletor global de mês */}
+      <PeriodSelector
+        selection={period.selection}
+        mode={period.mode}
+        range={period.range}
+        onSelectionChange={period.onSelectionChange}
+        onModeChange={period.onModeChange}
+      />
+
+      {/* Resumo do período */}
+      <div className="summary-grid">
         {stats.map((stat) => (
           <div key={stat.label} className="glass glass-interactive" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -170,6 +178,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         ))}
       </div>
 
+      {/* Erro de consulta do resumo */}
+      {summary.error && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.2)',
+          color: 'var(--color-danger)',
+          padding: '12px 16px',
+          borderRadius: '8px',
+          fontSize: '13px',
+        }}>
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span>{summary.error}</span>
+        </div>
+      )}
+
       {/* Environment strip */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '12px', color: 'var(--color-text-muted)' }}>
         <span className="badge badge-posted"><User size={12} /> Perfil: {profileCode === 'business' ? 'Negócio' : 'Pessoal'}</span>
@@ -187,7 +213,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       </div>
 
       {/* Main Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '24px', alignItems: 'start' }}>
+      <div className="dashboard-grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }}>
           <TransactionList
             profileId={profileId}
@@ -198,10 +224,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
             onSearchChange={setSearch}
             selectedAccount={selectedAccount}
             onAccountChange={setSelectedAccount}
-            startDate={startDate}
-            onStartDateChange={setStartDate}
-            endDate={endDate}
-            onEndDateChange={setEndDate}
+            startDate={range.start}
+            onStartDateChange={() => {}}
+            endDate={range.end}
+            onEndDateChange={() => {}}
             filterNoCategory={filterNoCategory}
             onFilterNoCategoryChange={setFilterNoCategory}
             filterReviewOnly={filterReviewOnly}
@@ -220,3 +246,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
     </div>
   );
 };
+
+// Contadores auxiliares do resumo (fila de revisão e sem categoria), no mesmo recorte de datas.
+async function supabaseCounters(range: { start: string; end: string }) {
+  try {
+    const [review, noCategory] = await Promise.all([
+      supabase
+        .from('transactions')
+        .select('id', { count: 'exact', head: true })
+        .gte('occurred_on', range.start)
+        .lte('occurred_on', range.end)
+        .eq('status', 'review'),
+      supabase
+        .from('transactions')
+        .select('id', { count: 'exact', head: true })
+        .gte('occurred_on', range.start)
+        .lte('occurred_on', range.end)
+        .is('category_id', null),
+    ]);
+    return { reviewCount: review.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
+  } catch (err) {
+    console.error('Erro ao carregar contadores do resumo:', err);
+    return null;
+  }
+}

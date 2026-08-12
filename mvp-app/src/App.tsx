@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { Login } from './components/Login';
-import { ProfileSwitcher } from './components/ProfileSwitcher';
-import { Dashboard } from './components/Dashboard';
+import { AppShell } from './components/AppShell';
 import './index.css';
 
 interface Session {
@@ -94,13 +93,14 @@ function App() {
 
   return (
     <div style={{ minHeight: '100vh' }}>
-      <ProfileSwitcher
-        currentProfileCode={profileCode}
+      <AppShell
+        key={profileId}
+        profileId={profileId}
+        profileCode={profileCode}
         userEmail={userEmail}
         onProfileSwitch={handleProfileSwitch}
         onLogout={handleLogout}
       />
-      <Dashboard key={profileId} profileId={profileId} profileCode={profileCode} />
     </div>
   );
 }
