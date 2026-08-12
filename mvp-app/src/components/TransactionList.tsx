@@ -80,6 +80,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalLoaded, setTotalLoaded] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('occurred_on');
@@ -223,38 +224,53 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={filterReviewOnly}
-              onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
-              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-            />
-            <span>Somente em revisão (status = review)</span>
-          </label>
+        {/* Filtros avançados: recolhíveis no mobile, sempre visíveis no desktop */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <button
+            type="button"
+            className="tx-filters-toggle"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((v) => !v)}
+          >
+            {advancedOpen ? 'Ocultar' : 'Mostrar'} filtros avançados
+            <span aria-hidden="true">{advancedOpen ? '▲' : '▼'}</span>
+          </button>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={filterNoCategory}
-              onChange={(e) => onFilterNoCategoryChange(e.target.checked)}
-              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-            />
-            <span>Sem categoria (category_id = null)</span>
-          </label>
+          <div className={`tx-filters-extra ${advancedOpen ? 'open' : ''}`}>
+            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={filterReviewOnly}
+                  onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <span>Somente em revisão (status = review)</span>
+              </label>
 
-          {filtersActive && (
-            <button
-              className="btn-secondary"
-              onClick={handleClearFilters}
-              style={{ padding: '6px 12px', fontSize: '12px' }}
-              title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
-            >
-              <FilterX size={14} />
-              Limpar filtros
-            </button>
-          )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={filterNoCategory}
+                  onChange={(e) => onFilterNoCategoryChange(e.target.checked)}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <span>Sem categoria (category_id = null)</span>
+              </label>
+
+              {filtersActive && (
+                <button
+                  className="btn-secondary"
+                  onClick={handleClearFilters}
+                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                  title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
+                >
+                  <FilterX size={14} />
+                  Limpar filtros
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -305,16 +321,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                       className={`tx-row ${selectedTransactionId === tx.id ? 'selected' : ''}`}
                       onClick={() => onSelectTransaction(tx)}
                     >
-                      <td>{formatDate(tx.occurred_on)}</td>
-                      <td style={{ fontWeight: 600 }}>
+                      <td data-label="Data">{formatDate(tx.occurred_on)}</td>
+                      <td data-label="Descrição" className="tx-desc">
                         {tx.raw_description}
                       </td>
-                      <td>{formatCurrency(tx.amount, tx.transaction_kind)}</td>
-                      <td>{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
-                      <td style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
+                      <td data-label="Valor" className="tx-value">{formatCurrency(tx.amount, tx.transaction_kind)}</td>
+                      <td data-label="Conta">{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
+                      <td data-label="Categoria" className="tx-cat">
                         {tx.category_raw || 'Não informada'}
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <span className={`badge badge-${tx.status}`} title={st.hint}>
                           {st.label}
                         </span>

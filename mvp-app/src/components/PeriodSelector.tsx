@@ -1,10 +1,9 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, CalendarRange, CalendarCheck } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarRange } from 'lucide-react';
 import {
   type PeriodMode,
   type PeriodRange,
   type PeriodSelection,
-  PERIOD_MODES,
   addMonths,
   formatMonthLabel,
   formatShortDate,
@@ -19,6 +18,12 @@ interface PeriodSelectorProps {
   onModeChange: (mode: PeriodMode) => void;
 }
 
+const MODE_LABELS: Record<PeriodMode, string> = {
+  up_to_today: 'Até hoje',
+  today_to_end: 'Até o fim do mês',
+  full_month: 'Mês todo',
+};
+
 export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
   selection,
   mode,
@@ -26,67 +31,72 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
   onSelectionChange,
   onModeChange,
 }) => {
+  const today = new Date();
   const isCurrentMonth = (() => {
-    const now = selectionFromDate(new Date());
+    const now = selectionFromDate(today);
     return now.year === selection.year && now.month === selection.month;
   })();
 
+  const modes: PeriodMode[] = ['up_to_today', 'today_to_end', 'full_month'];
+
   return (
-    <div className="glass period-selector">
-      <div className="period-selector-main">
-        <div className="period-label">
-          <CalendarRange size={16} style={{ color: 'var(--color-primary)' }} />
-          <span className="period-label-text">Período</span>
-        </div>
+    <div className="period-selector">
+      <div className="period-nav">
+        <button
+          type="button"
+          className="period-nav-btn"
+          onClick={() => onSelectionChange(addMonths(selection, -1))}
+          title="Mês anterior"
+          aria-label="Mês anterior"
+        >
+          <ChevronLeft size={20} />
+        </button>
 
-        <div className="period-nav">
-          <button
-            className="btn-secondary period-nav-btn"
-            onClick={() => onSelectionChange(addMonths(selection, -1))}
-            title="Mês anterior"
-            aria-label="Mês anterior"
-          >
-            <ChevronLeft size={16} />
-          </button>
+        <span className="period-month-label">{formatMonthLabel(selection)}</span>
 
-          <span className="period-month-label">{formatMonthLabel(selection)}</span>
+        <button
+          type="button"
+          className="period-nav-btn"
+          onClick={() => onSelectionChange(addMonths(selection, 1))}
+          title="Mês seguinte"
+          aria-label="Mês seguinte"
+        >
+          <ChevronRight size={20} />
+        </button>
+      </div>
 
-          <button
-            className="btn-secondary period-nav-btn"
-            onClick={() => onSelectionChange(addMonths(selection, 1))}
-            title="Mês seguinte"
-            aria-label="Mês seguinte"
-          >
-            <ChevronRight size={16} />
-          </button>
+      <div className="period-today-row">
+        <button
+          type="button"
+          className="period-today-btn"
+          onClick={() => onSelectionChange(selectionFromDate(today))}
+          disabled={isCurrentMonth}
+          title="Voltar ao mês atual"
+        >
+          Mês atual
+        </button>
+      </div>
 
-          <button
-            className="btn-secondary period-today-btn"
-            onClick={() => onSelectionChange(selectionFromDate(new Date()))}
-            disabled={isCurrentMonth}
-            title="Voltar ao mês atual"
-          >
-            <CalendarCheck size={14} />
-            Mês atual
-          </button>
-        </div>
-
-        <div className="period-modes" role="group" aria-label="Modo de período">
-          {PERIOD_MODES.map((m) => (
+      <div className="period-modes" role="group" aria-label="Modo de período">
+        {modes.map((m) => {
+          const active = mode === m;
+          return (
             <button
-              key={m.id}
-              className={`period-mode-btn ${mode === m.id ? 'active' : ''}`}
-              onClick={() => onModeChange(m.id)}
-              title={m.hint}
+              key={m}
+              type="button"
+              className={`period-mode-btn ${active ? 'active' : ''}`}
+              aria-pressed={active}
+              onClick={() => onModeChange(m)}
             >
-              {m.label}
+              {MODE_LABELS[m]}
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       <div className="period-range-applied">
-        <span className="period-range-title">Datas aplicadas</span>
+        <CalendarRange size={14} style={{ color: 'var(--color-primary)' }} />
+        <span className="period-range-title">Período aplicado</span>
         <span className="period-range-dates">
           {formatShortDate(range.start)} → {formatShortDate(range.end)}
         </span>

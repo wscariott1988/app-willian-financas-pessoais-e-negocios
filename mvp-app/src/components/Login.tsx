@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { LogIn, User, Briefcase, Key } from 'lucide-react';
+import { LogIn, User, Briefcase, Key, Info } from 'lucide-react';
 
 interface LoginProps {
   onLoginSuccess: (session: any) => void;
+  notice?: string | null;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
+export const Login: React.FC<LoginProps> = ({ onLoginSuccess, notice = null }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,15 +72,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       minHeight: '80vh',
       padding: '20px'
     }}>
-      <div className="glass animate-fade-in" style={{
-        maxWidth: '480px',
-        width: '100%',
-        padding: '40px',
-        border: '1px solid rgba(255,255,255,0.08)'
-      }}>
+      <div className="login-card animate-fade-in">
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{
-            background: 'linear-gradient(135deg, #6366f1 0%, #06b6d4 100%)',
+          <div className="login-logo" style={{
             width: '64px',
             height: '64px',
             borderRadius: '16px',
@@ -87,9 +82,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: '16px',
-            boxShadow: 'var(--shadow-glow)'
+            boxShadow: 'var(--shadow-lg)'
           }}>
-            <LogIn size={32} color="white" />
+            <LogIn size={32} />
           </div>
           <h1 style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '8px' }}>
             Finanças Pessoais
@@ -98,6 +93,30 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             Acesse o painel de conciliação e recategorização
           </p>
         </div>
+
+        {notice && (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              backgroundColor: 'rgba(6, 182, 212, 0.1)',
+              border: '1px solid rgba(6, 182, 212, 0.25)',
+              color: 'var(--color-secondary)',
+              padding: '12px 16px',
+              borderRadius: '8px',
+              fontSize: '13px',
+              fontWeight: 600,
+              marginBottom: '24px',
+              textAlign: 'left',
+              lineHeight: 1.4
+            }}
+          >
+            <Info size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span>{notice}</span>
+          </div>
+        )}
 
         {error && (
           <div style={{
@@ -161,33 +180,27 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div
-                className="glass glass-interactive"
-                style={{
-                  padding: '16px',
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                  borderRadius: '12px',
-                  border: '1px solid rgba(255, 255, 255, 0.05)'
-                }}
-                onClick={() => !loading && loginWithSeed('pessoal')}
-              >
-                <User size={20} style={{ color: 'var(--color-primary)', marginBottom: '8px' }} />
-                <div style={{ fontSize: '13px', fontWeight: 700 }}>Pessoal</div>
-                <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '2px' }}>Perfil pessoal (seed local)</div>
-              </div>
+              <div className="login-seed-card"
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer'
+              }}
+              onClick={() => !loading && loginWithSeed('pessoal')}
+            >
+              <User size={20} style={{ color: 'var(--color-primary)', marginBottom: '8px' }} />
+              <div style={{ fontSize: '13px', fontWeight: 700 }}>Pessoal</div>
+              <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '2px' }}>Perfil pessoal (seed local)</div>
+            </div>
 
-              <div
-                className="glass glass-interactive"
-                style={{
-                  padding: '16px',
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                  borderRadius: '12px',
-                  border: '1px solid rgba(255, 255, 255, 0.05)'
-                }}
-                onClick={() => !loading && loginWithSeed('negocio')}
-              >
+            <div className="login-seed-card"
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                cursor: 'pointer'
+              }}
+              onClick={() => !loading && loginWithSeed('negocio')}
+            >
                 <Briefcase size={20} style={{ color: 'var(--color-secondary)', marginBottom: '8px' }} />
                 <div style={{ fontSize: '13px', fontWeight: 700 }}>Negócio</div>
                 <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '2px' }}>Perfil de negócio (seed local)</div>

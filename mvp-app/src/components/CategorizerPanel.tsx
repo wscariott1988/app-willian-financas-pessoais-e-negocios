@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import { Check, Info, AlertCircle, Tag, RefreshCw } from 'lucide-react';
+import { Check, Info, AlertCircle, Tag, RefreshCw, X } from 'lucide-react';
 
 interface Transaction {
   id: string;
@@ -31,11 +31,13 @@ interface Category {
 interface CategorizerPanelProps {
   transaction: Transaction | null;
   onSuccess: () => void;
+  onClose?: () => void;
 }
 
 export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   transaction,
-  onSuccess
+  onSuccess,
+  onClose,
 }) => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
@@ -155,14 +157,28 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   };
 
   return (
-    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%' }}>
-      <div>
-        <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px' }}>
-          Painel de Recategorização
-        </h3>
-        <p style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-          Atribuição atômica de categoria e encerramento de pendência
-        </p>
+    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+        <div>
+          <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px' }}>
+            Painel de Recategorização
+          </h3>
+          <p style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+            Atribuição atômica de categoria e encerramento de pendência
+          </p>
+        </div>
+
+        {onClose && (
+          <button
+            type="button"
+            className="categorizer-close"
+            onClick={onClose}
+            aria-label="Fechar painel de recategorização"
+            title="Fechar"
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       {/* Transaction Details Card */}

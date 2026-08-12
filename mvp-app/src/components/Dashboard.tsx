@@ -4,7 +4,7 @@ import { TransactionList } from './TransactionList';
 import { CategorizerPanel } from './CategorizerPanel';
 import { AuditLogs } from './AuditLogs';
 import { PeriodSelector } from './PeriodSelector';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, User, Landmark, Server, AlertCircle, FilterX } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, FilterX } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
 import type { PeriodController } from './AppShell';
 
@@ -45,8 +45,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Filters (shared with TransactionList) — a faixa de datas vem do período global.
-  // A lista abre sem filtro de status nem de categoria.
+  // A lista abre sem filtro de status nem de categoria (período vem do seletor global).
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
   const [filterNoCategory, setFilterNoCategory] = useState(false);
@@ -63,7 +62,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
     try {
       const periodSummary = await fetchPeriodSummary(range);
 
-      // Contadores auxiliares (fila de revisão e sem categoria) apenas para o resumo da página inicial
       const counters = await supabaseCounters(range);
       let reviewCount = 0;
       let noCategoryCount = 0;
@@ -100,55 +98,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const formatBRL = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  interface StatCard {
-    label: string;
-    value: string;
-    icon: React.ReactElement;
-    color: string;
-    filter?: 'reviewOnly' | 'noCategory';
-    hint?: string;
-  }
-
-  const statFilterActive = (filter: 'reviewOnly' | 'noCategory'): boolean =>
-    filter === 'reviewOnly' ? filterReviewOnly : filterNoCategory;
-
-  const stats: StatCard[] = [
-    {
-      label: 'Receitas',
-      value: formatBRL(summary.income),
-      icon: <TrendingUp size={18} />,
-      color: 'var(--color-success)',
-    },
-    {
-      label: 'Despesas',
-      value: formatBRL(summary.expense),
-      icon: <TrendingDown size={18} />,
-      color: 'var(--color-danger)',
-    },
-    {
-      label: 'Resultado do período',
-      value: formatBRL(summary.balance),
-      icon: <Wallet size={18} />,
-      color: summary.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)',
-    },
-    {
-      label: 'Em revisão',
-      value: String(summary.reviewCount),
-      icon: <AlertTriangle size={18} />,
-      color: 'var(--color-warning)',
-      filter: 'reviewOnly' as const,
-      hint: 'Filtra a lista abaixo para status = review',
-    },
-    {
-      label: 'Sem categoria',
-      value: String(summary.noCategoryCount),
-      icon: <Tag size={18} />,
-      color: 'var(--color-secondary)',
-      filter: 'noCategory' as const,
-      hint: 'Filtra a lista abaixo para category_id = null',
-    },
-  ];
-
   const filtersActive = filterReviewOnly || filterNoCategory;
 
   const handleClearFilters = () => {
@@ -160,19 +109,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '';
   const gatewayLabel = rawUrl.replace(/^https?:\/\//, '') || (isProd ? 'Supabase Cloud' : 'Gateway local');
 
+  const summaryLoading = summary.loading ? (
+    <div className="stat-card-value" style={{ color: 'var(--color-text-muted)', fontSize: '14px', fontWeight: 500 }}>
+      <RefreshCw size={14} className="spin-animation" /> calculando...
+    </div>
+  ) : null;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Título da página */}
-      <div>
-        <h1 style={{ fontSize: '22px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px' }}>
-          Início
+    <div className="dash-root">
+      <div className="dash-title">
+        <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
+          Visão Geral
         </h1>
-        <p style={{ fontSize: '13px', color: 'var(--color-text-muted)' }}>
+        <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
           Resumo e transações do período selecionado para o perfil ativo
         </p>
       </div>
 
-      {/* Seletor global de mês */}
       <PeriodSelector
         selection={period.selection}
         mode={period.mode}
@@ -181,137 +134,155 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         onModeChange={period.onModeChange}
       />
 
-      {/* Resumo do período. Cards de Receita/Despesa/Resultado são informativos;
-          “Em revisão” e “Sem categoria” são botões que filtram APENAS a lista. */}
+      {/* Resumo real do período. Resultado = receitas − despesas (não é saldo). */}
       <div className="summary-grid">
-        {stats.map((stat) => {
-          const statBody = (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--color-text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {React.cloneElement(stat.icon as React.ReactElement<{ color?: string }>, { color: stat.color })}
-                {stat.label}
-              </div>
-              {summary.loading ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
-                  <RefreshCw size={14} className="spin-animation" /> calculando...
-                </div>
-              ) : (
-                <div style={{ fontSize: '19px', fontWeight: 800, color: stat.color, letterSpacing: '-0.01em' }}>
-                  {stat.value}
-                </div>
-              )}
-              {stat.filter && (
-                <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: statFilterActive(stat.filter) ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>
-                  {statFilterActive(stat.filter) ? 'Filtro ativo — clique para remover' : 'Clique para filtrar a lista'}
-                </div>
-              )}
-            </>
-          );
+        <div className="stat-card">
+          <span className="stat-card-label" style={{ color: 'var(--color-success)' }}>
+            <TrendingUp size={14} /> Receitas
+          </span>
+          {summaryLoading ?? (
+            <span className="stat-card-value" style={{ color: 'var(--color-success)' }}>
+              {formatBRL(summary.income)}
+            </span>
+          )}
+        </div>
 
-          if (!stat.filter) {
-            return (
-              <div key={stat.label} className="glass glass-interactive stat-card">
-                {statBody}
-              </div>
-            );
-          }
+        <div className="stat-card">
+          <span className="stat-card-label" style={{ color: 'var(--color-danger)' }}>
+            <TrendingDown size={14} /> Despesas
+          </span>
+          {summaryLoading ?? (
+            <span className="stat-card-value" style={{ color: 'var(--color-danger)' }}>
+              {formatBRL(summary.expense)}
+            </span>
+          )}
+        </div>
 
-          const active = statFilterActive(stat.filter);
-          return (
-            <button
-              key={stat.label}
-              type="button"
-              className={`glass glass-interactive stat-card ${active ? 'stat-filter-active' : ''}`}
-              aria-pressed={active}
-              title={stat.hint}
-              onClick={() => {
-                if (stat.filter === 'reviewOnly') setFilterReviewOnly((v) => !v);
-                else setFilterNoCategory((v) => !v);
-              }}
+        <div className="stat-card stat-result">
+          <span className="stat-card-label">
+            <Wallet size={14} /> Resultado do período
+          </span>
+          {summaryLoading ?? (
+            <span
+              className="stat-card-value"
+              style={{ color: summary.balance >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }}
             >
-              {statBody}
+              {summary.balance >= 0 ? '+' : ''}
+              {formatBRL(summary.balance)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Pendências: painel único com duas linhas acionáveis (filtram a lista) */}
+      <div className="pending-panel">
+        <div className="pending-title">Pendências</div>
+        <button
+          type="button"
+          className="pending-row"
+          aria-pressed={filterReviewOnly}
+          onClick={() => setFilterReviewOnly((v) => !v)}
+          title="Filtra a lista abaixo para status = review"
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <AlertTriangle size={16} style={{ color: 'var(--color-warning)' }} />
+            Em revisão
+          </span>
+          <span className="pending-row-count">{String(summary.reviewCount)}</span>
+        </button>
+        <button
+          type="button"
+          className="pending-row"
+          aria-pressed={filterNoCategory}
+          onClick={() => setFilterNoCategory((v) => !v)}
+          title="Filtra a lista abaixo para category_id = null"
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <Tag size={16} style={{ color: 'var(--color-secondary)' }} />
+            Sem categoria
+          </span>
+          <span className="pending-row-count">{String(summary.noCategoryCount)}</span>
+        </button>
+      </div>
+
+      {/* Limpar filtros, erro de consulta e ambiente (compactos) */}
+      <div className="dash-env">
+        {filtersActive && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleClearFilters}
+              style={{ padding: '8px 14px', fontSize: '12px' }}
+              title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
+            >
+              <FilterX size={14} />
+              Limpar filtros
             </button>
-          );
-        })}
-      </div>
-
-      {/* Limpar filtros da lista */}
-      {filtersActive && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button
-            className="btn-secondary"
-            onClick={handleClearFilters}
-            style={{ padding: '8px 14px', fontSize: '12px' }}
-            title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
-          >
-            <FilterX size={14} />
-            Limpar filtros
-          </button>
-        </div>
-      )}
-
-      {/* Erro de consulta do resumo */}
-      {summary.error && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          backgroundColor: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.2)',
-          color: 'var(--color-danger)',
-          padding: '12px 16px',
-          borderRadius: '8px',
-          fontSize: '13px',
-        }}>
-          <AlertCircle size={16} style={{ flexShrink: 0 }} />
-          <span>{summary.error}</span>
-        </div>
-      )}
-
-      {/* Environment strip */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '12px', color: 'var(--color-text-muted)' }}>
-        <span className="badge badge-posted"><User size={12} /> Perfil: {profileCode === 'business' ? 'Negócio' : 'Pessoal'}</span>
-        {import.meta.env.DEV ? (
-          <>
-            <span className="badge badge-pending"><Landmark size={12} /> Supabase Local (PGLite)</span>
-            <span className="badge"><Server size={12} /> {gatewayLabel}</span>
-          </>
-        ) : (
-          <span className="badge badge-pending"><Landmark size={12} /> Supabase Cloud</span>
+          </div>
         )}
-        <span style={{ marginLeft: 'auto' }}>
-          {summary.totalCount.toLocaleString('pt-BR')} transações no recorte
-        </span>
+
+        {summary.error && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            backgroundColor: 'rgba(255, 180, 171, 0.1)',
+            border: '1px solid rgba(255, 180, 171, 0.2)',
+            color: 'var(--color-error)',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            fontSize: '13px',
+          }}>
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+            <span>{summary.error}</span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '12px', color: 'var(--color-text-muted)' }}>
+          {import.meta.env.DEV ? (
+            <>
+              <span className="badge badge-pending"><Landmark size={12} /> Supabase Local (PGLite)</span>
+              <span className="badge"><Server size={12} /> {gatewayLabel}</span>
+            </>
+          ) : (
+            <span className="badge badge-pending"><Landmark size={12} /> Supabase Cloud</span>
+          )}
+          <span style={{ marginLeft: 'auto' }}>
+            {summary.totalCount.toLocaleString('pt-BR')} transações no recorte
+          </span>
+        </div>
       </div>
 
-      {/* Main Grid */}
-      <div className="dashboard-grid">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0 }}>
-          <TransactionList
-            profileId={profileId}
-            selectedTransactionId={selectedTransaction?.id || null}
-            onSelectTransaction={setSelectedTransaction}
-            refreshTrigger={refreshTrigger}
-            search={search}
-            onSearchChange={setSearch}
-            selectedAccount={selectedAccount}
-            onAccountChange={setSelectedAccount}
-            startDate={range.start}
-            onStartDateChange={() => {}}
-            endDate={range.end}
-            onEndDateChange={() => {}}
-            filterNoCategory={filterNoCategory}
-            onFilterNoCategoryChange={setFilterNoCategory}
-            filterReviewOnly={filterReviewOnly}
-            onFilterReviewOnlyChange={setFilterReviewOnly}
-          />
-          <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
-        </div>
+      {/* Área operacional: coluna principal (lista + auditoria) */}
+      <div className="dash-main">
+        <TransactionList
+          profileId={profileId}
+          selectedTransactionId={selectedTransaction?.id || null}
+          onSelectTransaction={setSelectedTransaction}
+          refreshTrigger={refreshTrigger}
+          search={search}
+          onSearchChange={setSearch}
+          selectedAccount={selectedAccount}
+          onAccountChange={setSelectedAccount}
+          startDate={range.start}
+          onStartDateChange={() => {}}
+          endDate={range.end}
+          onEndDateChange={() => {}}
+          filterNoCategory={filterNoCategory}
+          onFilterNoCategoryChange={setFilterNoCategory}
+          filterReviewOnly={filterReviewOnly}
+          onFilterReviewOnlyChange={setFilterReviewOnly}
+        />
+        <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
+      </div>
 
+      {/* Coluna lateral: recategorização existente (Pendências entra na lateral no desktop) */}
+      <div className="dash-side">
         <div style={{ position: 'sticky', top: '20px' }}>
           <CategorizerPanel
             transaction={selectedTransaction}
             onSuccess={handleSuccess}
+            onClose={() => setSelectedTransaction(null)}
           />
         </div>
       </div>

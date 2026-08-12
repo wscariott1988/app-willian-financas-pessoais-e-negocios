@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, ArrowLeftRight, Landmark, BarChart3, Settings, Hourglass } from 'lucide-react';
+import { Home, ArrowLeftRight, Landmark, BarChart3, Settings, Wallet } from 'lucide-react';
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { Dashboard } from './Dashboard';
 import { TransactionsView } from '../views/TransactionsView';
@@ -31,6 +31,7 @@ interface AppShellProps {
   userEmail: string;
   onProfileSwitch: (session: any) => void;
   onLogout: () => void;
+  onProfileSwitchRequest: (notice: string) => void;
 }
 
 const COMING_SOON: Record<Exclude<ViewId, 'inicio' | 'transacoes'>, { title: string; description: string }> = {
@@ -54,6 +55,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   userEmail,
   onProfileSwitch,
   onLogout,
+  onProfileSwitchRequest,
 }) => {
   const [view, setView] = useState<ViewId>('inicio');
   const [selection, setSelection] = useState<PeriodSelection>(() => selectionFromDate(new Date()));
@@ -69,39 +71,51 @@ export const AppShell: React.FC<AppShellProps> = ({
     onModeChange: setMode,
   };
 
-  const nav = (id: ViewId, index: number, className: string) => (
-    <button
-      key={id}
-      className={`${className} ${view === id ? 'active' : ''}`}
-      onClick={() => setView(id)}
-      aria-current={view === id ? 'page' : undefined}
-    >
-      {(() => {
-        const Icon = NAV_ITEMS[index].icon;
-        return <Icon size={18} />;
-      })()}
-      <span>{NAV_ITEMS[index].label}</span>
-    </button>
-  );
+  const switcherProps = {
+    currentProfileCode: profileCode,
+    userEmail,
+    onProfileSwitch,
+    onLogout,
+    onProfileSwitchRequest,
+  };
+
+  const navItem = (item: (typeof NAV_ITEMS)[number], className: string) => {
+    const Icon = item.icon;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className={`${className} ${view === item.id ? 'active' : ''}`}
+        onClick={() => setView(item.id)}
+        aria-current={view === item.id ? 'page' : undefined}
+      >
+        <Icon size={20} />
+        <span>{item.label}</span>
+      </button>
+    );
+  };
 
   return (
     <div className="app-shell">
-      <ProfileSwitcher
-        currentProfileCode={profileCode}
-        userEmail={userEmail}
-        onProfileSwitch={onProfileSwitch}
-        onLogout={onLogout}
-      />
+      {/* Cabeçalho mobile/tablet (oculto no desktop via CSS) */}
+      <ProfileSwitcher variant="header" {...switcherProps} />
 
       <div className="app-body">
-        <nav className="side-nav glass" aria-label="Navegação principal">
-          {NAV_ITEMS.map((item, i) => nav(item.id, i, 'side-nav-item'))}
-          <div className="side-nav-spacer" />
-          <div className="side-nav-foot">
-            <Hourglass size={13} />
-            <span>Fundamento visual — Etapa 1</span>
+        {/* Sidebar desktop (≥1024px) */}
+        <aside className="side-nav" aria-label="Navegação principal">
+          <div className="side-nav-brand">
+            <div className="side-nav-brand-logo">
+              <Wallet size={20} />
+            </div>
+            <span>Willian Finanças</span>
           </div>
-        </nav>
+
+          <nav className="side-nav-list">
+            {NAV_ITEMS.map((item) => navItem(item, 'side-nav-item'))}
+          </nav>
+
+          <ProfileSwitcher variant="sidebar" {...switcherProps} />
+        </aside>
 
         <main className="app-main">
           {view === 'inicio' && (
@@ -114,8 +128,9 @@ export const AppShell: React.FC<AppShellProps> = ({
         </main>
       </div>
 
-      <nav className="bottom-nav glass" aria-label="Navegação principal">
-        {NAV_ITEMS.map((item, i) => nav(item.id, i, 'bottom-nav-item'))}
+      {/* Navegação inferior mobile/tablet (oculta no desktop via CSS) */}
+      <nav className="bottom-nav" aria-label="Navegação principal">
+        {NAV_ITEMS.map((item) => navItem(item, 'bottom-nav-item'))}
       </nav>
     </div>
   );

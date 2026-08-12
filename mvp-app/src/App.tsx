@@ -19,6 +19,7 @@ interface Session {
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
 
   useEffect(() => {
     // Check existing session on mount
@@ -48,6 +49,7 @@ function App() {
 
   const handleLoginSuccess = (newSession: Session) => {
     setSession(newSession);
+    setLoginNotice(null);
   };
 
   const handleLogout = () => {
@@ -56,6 +58,12 @@ function App() {
 
   const handleProfileSwitch = (newSession: Session) => {
     setSession(newSession);
+    setLoginNotice(null);
+  };
+
+  // Troca segura de perfil (produção): após o signOut oficial, orienta o próximo login.
+  const handleProfileSwitchRequest = (notice: string) => {
+    setLoginNotice(notice);
   };
 
   if (loading) {
@@ -84,7 +92,7 @@ function App() {
   }
 
   if (!session) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return <Login onLoginSuccess={handleLoginSuccess} notice={loginNotice} />;
   }
 
   const profileCode = session.user?.user_metadata?.profile_code || 'personal';
@@ -100,6 +108,7 @@ function App() {
         userEmail={userEmail}
         onProfileSwitch={handleProfileSwitch}
         onLogout={handleLogout}
+        onProfileSwitchRequest={handleProfileSwitchRequest}
       />
     </div>
   );
