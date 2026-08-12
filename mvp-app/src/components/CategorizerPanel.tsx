@@ -137,14 +137,27 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
-        minHeight: '300px'
+        minHeight: '300px',
+        position: 'relative'
       }}>
+        {onClose && (
+          <button
+            type="button"
+            className="categorizer-close"
+            style={{ position: 'absolute', top: '12px', right: '12px' }}
+            onClick={onClose}
+            aria-label="Fechar painel de recategorização"
+            title="Fechar"
+          >
+            <X size={18} />
+          </button>
+        )}
         <Tag size={40} style={{ opacity: 0.3, marginBottom: '16px' }} />
         <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'white', marginBottom: '8px' }}>
           Nenhuma transação selecionada
         </h3>
         <p style={{ fontSize: '13px', maxWidth: '280px' }}>
-          Selecione uma transação na lista à esquerda para analisar e atribuir a categoria correspondente.
+          Selecione uma transação na lista para analisar e atribuir a categoria correspondente.
         </p>
       </div>
     );
@@ -157,14 +170,14 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   };
 
   return (
-    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', position: 'relative' }}>
+    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
         <div>
           <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px' }}>
-            Painel de Recategorização
+            Alterar categoria
           </h3>
           <p style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-            Atribuição atômica de categoria e encerramento de pendência
+            Escolha a categoria correta para esta transação
           </p>
         </div>
 
@@ -346,19 +359,19 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
           <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
             <button
               type="submit"
-              className="btn-primary"
+              className="btn-primary categorizer-submit"
               style={{ width: '100%', padding: '12px' }}
               disabled={!selectedCategoryId || loading || !!successMsg}
             >
               {loading ? (
                 <>
                   <RefreshCw size={16} className="spin-animation" />
-                  Salvando no Supabase...
+                  Salvando...
                 </>
               ) : (
                 <>
                   <Check size={16} />
-                  Confirmar Atribuição Atômica
+                  Alterar categoria
                 </>
               )}
             </button>

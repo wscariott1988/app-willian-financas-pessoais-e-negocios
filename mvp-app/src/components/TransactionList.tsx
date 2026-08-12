@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX } from 'lucide-react';
+import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal } from 'lucide-react';
 import { formatShortDate } from '../lib/period';
 import {
   TX_PAGE_SIZE,
@@ -19,7 +19,7 @@ interface Account {
   source_name: string;
 }
 
-interface Transaction {
+export interface Transaction {
   id: string;
   profile_id: string;
   account_id: string;
@@ -80,7 +80,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalLoaded, setTotalLoaded] = useState(0);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('occurred_on');
@@ -131,6 +131,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
   const filters: TxListFilters = { reviewOnly: filterReviewOnly, noCategory: filterNoCategory };
   const filtersActive = hasActiveTxFilters(filters);
+  const activeFilterCount = (filterReviewOnly ? 1 : 0) + (filterNoCategory ? 1 : 0);
 
   const handleClearFilters = () => {
     const cleared = clearTxFilters();
@@ -183,22 +184,28 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     return `${parts[2]}/${parts[1]}/${parts[0]}`;
   };
 
+  // Formato curto dd/mm — usado somente em larguras com espaço restrito
+  const formatDateShort = (dateStr: string) => {
+    const full = formatDate(dateStr);
+    return full.length >= 5 ? full.slice(0, 5) : full;
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%' }}>
-      <div className="glass" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ flex: '1 1 250px', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
+      <div className="glass tx-toolbar">
+        <div className="tx-toolbar-row">
+          <div className="tx-search" style={{ position: 'relative' }}>
             <Search size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--color-text-muted)' }} />
             <input
               type="text"
-              placeholder="Buscar descrição original..."
+              placeholder="Buscar descrição..."
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               style={{ width: '100%', paddingLeft: '38px' }}
             />
           </div>
 
-          <div style={{ flex: '1 1 180px', position: 'relative' }}>
+          <div className="tx-account-select" style={{ flex: '1 1 170px', position: 'relative' }}>
             <Landmark size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--color-text-muted)' }} />
             <select
               value={selectedAccount}
@@ -222,54 +229,57 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 : 'Período completo'}
             </span>
           </div>
-        </div>
 
-        {/* Filtros avançados: recolhíveis no mobile, sempre visíveis no desktop */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <button
             type="button"
-            className="tx-filters-toggle"
-            aria-expanded={advancedOpen}
-            onClick={() => setAdvancedOpen((v) => !v)}
+            className="tx-filters-btn"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((v) => !v)}
+            title="Filtros de status e categoria"
           >
-            {advancedOpen ? 'Ocultar' : 'Mostrar'} filtros avançados
-            <span aria-hidden="true">{advancedOpen ? '▲' : '▼'}</span>
+            <SlidersHorizontal size={16} />
+            Filtros{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
           </button>
+        </div>
 
-          <div className={`tx-filters-extra ${advancedOpen ? 'open' : ''}`}>
-            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={filterReviewOnly}
-                  onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
-                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                />
-                <span>Somente em revisão (status = review)</span>
-              </label>
+        <div className="tx-count-line">
+          <strong style={{ color: 'var(--color-text)' }}>{totalLoaded.toLocaleString('pt-BR')}</strong>
+          &nbsp;transações no período
+        </div>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={filterNoCategory}
-                  onChange={(e) => onFilterNoCategoryChange(e.target.checked)}
-                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                />
-                <span>Sem categoria (category_id = null)</span>
-              </label>
+        <div className={`tx-filters-panel ${filtersOpen ? 'open' : ''}`}>
+          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={filterReviewOnly}
+                onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
+                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+              />
+              <span>Em revisão</span>
+            </label>
 
-              {filtersActive && (
-                <button
-                  className="btn-secondary"
-                  onClick={handleClearFilters}
-                  style={{ padding: '6px 12px', fontSize: '12px' }}
-                  title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
-                >
-                  <FilterX size={14} />
-                  Limpar filtros
-                </button>
-              )}
-            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={filterNoCategory}
+                onChange={(e) => onFilterNoCategoryChange(e.target.checked)}
+                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+              />
+              <span>Sem categoria</span>
+            </label>
+
+            {filtersActive && (
+              <button
+                className="btn-secondary"
+                onClick={handleClearFilters}
+                style={{ padding: '6px 12px', fontSize: '12px' }}
+                title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
+              >
+                <FilterX size={14} />
+                Limpar filtros
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -315,22 +325,34 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               ) : (
                 transactions.map((tx) => {
                   const st = statusLabel(tx.status);
+                  const txLabel = [
+                    tx.raw_description,
+                    `Data: ${formatDate(tx.occurred_on)}`,
+                    `Categoria: ${tx.category_raw || 'Não informada'}`,
+                    `Conta: ${tx.accounts?.display_name || tx.account_id.slice(0, 8)}`,
+                    `Status: ${st.label}`,
+                  ].join(' · ');
                   return (
                     <tr
                       key={tx.id}
                       className={`tx-row ${selectedTransactionId === tx.id ? 'selected' : ''}`}
                       onClick={() => onSelectTransaction(tx)}
+                      title={txLabel}
+                      aria-label={txLabel}
                     >
-                      <td data-label="Data">{formatDate(tx.occurred_on)}</td>
+                      <td data-label="Data" className="tx-date">
+                        <span className="tx-date-full">{formatDate(tx.occurred_on)}</span>
+                        <span className="tx-date-short" aria-hidden="true">{formatDateShort(tx.occurred_on)}</span>
+                      </td>
                       <td data-label="Descrição" className="tx-desc">
                         {tx.raw_description}
                       </td>
                       <td data-label="Valor" className="tx-value">{formatCurrency(tx.amount, tx.transaction_kind)}</td>
-                      <td data-label="Conta">{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
+                      <td data-label="Conta" className="tx-account">{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
                       <td data-label="Categoria" className="tx-cat">
                         {tx.category_raw || 'Não informada'}
                       </td>
-                      <td data-label="Status">
+                      <td data-label="Status" className="tx-status">
                         <span className={`badge badge-${tx.status}`} title={st.hint}>
                           {st.label}
                         </span>
@@ -342,21 +364,6 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             </tbody>
           </table>
         </div>
-
-        {!loading && !error && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            padding: '14px 20px',
-            borderTop: '1px solid var(--border-card)',
-            fontSize: '13px',
-            color: 'var(--color-text-muted)'
-          }}>
-            <strong style={{ color: '#f8fafc' }}>{totalLoaded.toLocaleString('pt-BR')}</strong>
-            <span>&nbsp;transações no período</span>
-          </div>
-        )}
       </div>
     </div>
   );

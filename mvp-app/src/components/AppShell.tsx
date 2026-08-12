@@ -32,6 +32,7 @@ interface AppShellProps {
   onProfileSwitch: (session: any) => void;
   onLogout: () => void;
   onProfileSwitchRequest: (notice: string) => void;
+  initialView?: ViewId;
 }
 
 const COMING_SOON: Record<Exclude<ViewId, 'inicio' | 'transacoes'>, { title: string; description: string }> = {
@@ -56,8 +57,9 @@ export const AppShell: React.FC<AppShellProps> = ({
   onProfileSwitch,
   onLogout,
   onProfileSwitchRequest,
+  initialView = 'inicio',
 }) => {
-  const [view, setView] = useState<ViewId>('inicio');
+  const [view, setView] = useState<ViewId>(initialView);
   const [selection, setSelection] = useState<PeriodSelection>(() => selectionFromDate(new Date()));
   const [mode, setMode] = useState<PeriodMode>('up_to_today');
 
