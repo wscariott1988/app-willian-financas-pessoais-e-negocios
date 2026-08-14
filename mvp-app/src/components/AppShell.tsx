@@ -2,10 +2,11 @@ import React from 'react';
 import { Home, ArrowLeftRight, Landmark, BarChart3, Settings, Wallet } from 'lucide-react';
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { Dashboard } from './Dashboard';
-import { TransactionsView } from '../views/TransactionsView';
+import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { ComingSoonView } from '../views/ComingSoonView';
 import { useMemo, useState } from 'react';
 import { type PeriodMode, type PeriodRange, type PeriodSelection, computePeriodRange, selectionFromDate } from '../lib/period';
+import type { PendingFilter } from '../lib/txList';
 
 export type ViewId = 'inicio' | 'transacoes' | 'contas' | 'analises' | 'configuracoes';
 
@@ -62,8 +63,18 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [view, setView] = useState<ViewId>(initialView);
   const [selection, setSelection] = useState<PeriodSelection>(() => selectionFromDate(new Date()));
   const [mode, setMode] = useState<PeriodMode>('up_to_today');
+  // Modo da view Transações preservado durante a navegação interna (sessão ativa)
+  const [txMode, setTxMode] = useState<TxMode>('period');
+  const [txPendingFilter, setTxPendingFilter] = useState<PendingFilter>('all');
 
   const range = useMemo(() => computePeriodRange(selection, mode, new Date()), [selection, mode]);
+
+  // Cards de pendências da Início: abrem Transações na fila global filtrada.
+  const handleOpenPending = (filter: 'review' | 'noCategory') => {
+    setTxMode('pending');
+    setTxPendingFilter(filter);
+    setView('transacoes');
+  };
 
   const period: PeriodController = {
     selection,
@@ -121,9 +132,26 @@ export const AppShell: React.FC<AppShellProps> = ({
 
         <main className="app-main">
           {view === 'inicio' && (
-            <Dashboard key={profileId} profileId={profileId} profileCode={profileCode} period={period} />
+            <Dashboard
+              key={profileId}
+              profileId={profileId}
+              profileCode={profileCode}
+              period={period}
+              onOpenPending={handleOpenPending}
+            />
           )}
-          {view === 'transacoes' && <TransactionsView key={profileId} profileId={profileId} period={period} />}
+          {view === 'transacoes' && (
+            <TransactionsView
+              key={profileId}
+              profileId={profileId}
+              profileCode={profileCode}
+              period={period}
+              mode={txMode}
+              onModeChange={setTxMode}
+              pendingFilter={txPendingFilter}
+              onPendingFilterChange={setTxPendingFilter}
+            />
+          )}
           {view === 'contas' && <ComingSoonView {...COMING_SOON.contas} icon={Landmark} />}
           {view === 'analises' && <ComingSoonView {...COMING_SOON.analises} icon={BarChart3} />}
           {view === 'configuracoes' && <ComingSoonView {...COMING_SOON.configuracoes} icon={Settings} />}

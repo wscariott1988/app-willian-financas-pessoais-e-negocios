@@ -40,12 +40,13 @@ export function hasActiveTxFilters(f: TxListFilters): boolean {
 // ---------- Opções da consulta ----------
 
 export interface TxQueryOptions {
-  start: string; // período global — sempre presente
-  end: string; // período global — sempre presente
+  start?: string; // período global — opcional (modo Pendências não envia)
+  end?: string;
   search?: string;
   accountId?: string;
   statusFilter?: 'review' | null;
   noCategory?: boolean;
+  pendingFilter?: PendingFilter | null;
 }
 
 export function buildTxListOptions(
@@ -59,6 +60,24 @@ export function buildTxListOptions(
     accountId: base.accountId || undefined,
     statusFilter: filters.reviewOnly ? 'review' : null,
     noCategory: filters.noCategory || undefined,
+  };
+}
+
+// ---------- Fila global de pendências (todo o histórico, sem intervalo) ----------
+
+export type PendingFilter = 'all' | 'review' | 'noCategory';
+
+export interface PendingTxBase {
+  search: string;
+  accountId: string;
+  pendingFilter: PendingFilter;
+}
+
+export function buildPendingTxOptions(base: PendingTxBase): TxQueryOptions {
+  return {
+    search: base.search.trim() ? base.search.trim() : undefined,
+    accountId: base.accountId || undefined,
+    pendingFilter: base.pendingFilter,
   };
 }
 
@@ -77,11 +96,22 @@ export function createTxPageFetcher(client: TxClientLike, opts: TxQueryOptions):
 
     if (opts.search) q = q.ilike('raw_description', `%${opts.search}%`);
     if (opts.accountId) q = q.eq('account_id', opts.accountId);
-    if (opts.statusFilter) q = q.eq('status', opts.statusFilter);
-    if (opts.noCategory) q = q.is('category_id', null);
 
-    // Período global: aplicado em TODAS as páginas.
-    q = q.gte('occurred_on', opts.start).lte('occurred_on', opts.end);
+    // Fila global de pendências: OR no servidor (cada transação uma única vez).
+    if (opts.pendingFilter === 'all') {
+      q = q.or('status.eq.review,category_id.is.null');
+    } else if (opts.pendingFilter === 'review') {
+      q = q.eq('status', 'review');
+    } else if (opts.pendingFilter === 'noCategory') {
+      q = q.is('category_id', null);
+    } else {
+      if (opts.statusFilter) q = q.eq('status', opts.statusFilter);
+      if (opts.noCategory) q = q.is('category_id', null);
+    }
+
+    // Período: enviado somente no modo Do período (Pendências não tem intervalo).
+    if (opts.start) q = q.gte('occurred_on', opts.start);
+    if (opts.end) q = q.lte('occurred_on', opts.end);
 
     // Ordenação estável: ocorrência desc, depois criação desc.
     q = q.order('occurred_on', { ascending: false }).order('created_at', { ascending: false });

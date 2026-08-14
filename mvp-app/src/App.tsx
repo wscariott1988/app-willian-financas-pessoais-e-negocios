@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { Login } from './components/Login';
 import { AppShell } from './components/AppShell';
+import { resolveProfileCode, resolveProfileId } from './lib/profileIdentity';
 import './index.css';
 
 interface Session {
@@ -95,8 +96,8 @@ function App() {
     return <Login onLoginSuccess={handleLoginSuccess} notice={loginNotice} />;
   }
 
-  const profileCode = session.user?.user_metadata?.profile_code || 'personal';
-  const profileId = session.user?.user_metadata?.profile_id || '';
+  const profileCode = resolveProfileCode(session) ?? 'personal';
+  const profileId = resolveProfileId(session) ?? '';
   const userEmail = session.user?.email || '';
 
   return (

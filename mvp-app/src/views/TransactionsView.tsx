@@ -1,21 +1,51 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Plus } from 'lucide-react';
 import { TransactionList, type Transaction } from '../components/TransactionList';
 import { CategorizerPanel } from '../components/CategorizerPanel';
+import { TransactionEditor } from '../components/TransactionEditor';
 import { PeriodSelector } from '../components/PeriodSelector';
 import { addMonths, formatMonthLabel, PERIOD_MODES } from '../lib/period';
+import type { PendingFilter } from '../lib/txList';
 import type { PeriodController } from '../components/AppShell';
+
+export type TxMode = 'period' | 'pending';
+
+const PENDING_FILTERS: ReadonlyArray<{ id: PendingFilter; label: string }> = [
+  { id: 'all', label: 'Todas' },
+  { id: 'review', label: 'Em revisão' },
+  { id: 'noCategory', label: 'Sem categoria' },
+];
 
 interface TransactionsViewProps {
   profileId: string;
+  profileCode: 'personal' | 'business';
   period: PeriodController;
+  mode: TxMode;
+  onModeChange: (m: TxMode) => void;
+  pendingFilter: PendingFilter;
+  onPendingFilterChange: (f: PendingFilter) => void;
 }
 
-export const TransactionsView: React.FC<TransactionsViewProps> = ({ profileId, period }) => {
+interface EditorState {
+  tx: Transaction | null;
+  creating: boolean;
+}
+
+export const TransactionsView: React.FC<TransactionsViewProps> = ({
+  profileId,
+  profileCode,
+  period,
+  mode,
+  onModeChange,
+  pendingFilter,
+  onPendingFilterChange,
+}) => {
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [mobile, setMobile] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const lastFocused = useRef<HTMLElement | null>(null);
   const periodBtnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -41,7 +71,6 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ profileId, p
 
   const handleCloseCategorizer = () => {
     setSelectedTransaction(null);
-    // devolve o foco ao elemento que abriu o painel
     if (lastFocused.current) {
       requestAnimationFrame(() => lastFocused.current?.focus());
     }
@@ -52,27 +81,113 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ profileId, p
     requestAnimationFrame(() => periodBtnRef.current?.focus());
   };
 
+  const handleNewTransaction = () => {
+    setPeriodOpen(false);
+    setSelectedTransaction(null);
+    setEditor({ tx: null, creating: true });
+  };
+
+  const handleEditTransaction = (tx: Transaction) => {
+    lastFocused.current = document.activeElement as HTMLElement | null;
+    setPeriodOpen(false);
+    setSelectedTransaction(null);
+    setEditor({ tx, creating: false });
+  };
+
+  const handleCloseEditor = () => {
+    setEditor(null);
+    if (lastFocused.current) {
+      requestAnimationFrame(() => lastFocused.current?.focus());
+    }
+  };
+
+  const handleEditorSuccess = () => {
+    setEditor(null);
+    setRefreshTrigger((t) => t + 1);
+  };
+
   // Escape fecha o painel aberto (sem dependência nova)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (selectedTransaction) handleCloseCategorizer();
+      if (editor) handleCloseEditor();
+      else if (selectedTransaction) handleCloseCategorizer();
       else if (periodOpen) handleClosePeriod();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedTransaction, periodOpen]);
+  }, [editor, selectedTransaction, periodOpen]);
 
   const modeLabel = PERIOD_MODES.find((m) => m.id === period.mode)?.label ?? '';
+  const isPending = mode === 'pending';
+
+  const handleCategorized = () => {
+    setSelectedTransaction(null);
+    setRefreshTrigger((t) => t + 1);
+  };
 
   return (
     <div className="tx-view">
-      <div className="tx-view-title">
-        <h1>Transações</h1>
-        <p className="tx-view-subtitle">Todas as transações do perfil ativo no período selecionado</p>
+      <div className="tx-view-head">
+        <div className="tx-view-title">
+          <h1>{isPending ? 'Pendências' : 'Transações'}</h1>
+          <p className="tx-view-subtitle">
+            {isPending
+              ? 'Transações em revisão ou sem categoria de todo o histórico'
+              : 'Todas as transações do perfil ativo no período selecionado'}
+          </p>
+        </div>
+
+        <div className="tx-mode-toggle" role="group" aria-label="Modo de transações">
+          <button
+            type="button"
+            aria-pressed={mode === 'period'}
+            onClick={() => onModeChange('period')}
+          >
+            Do período
+          </button>
+          <button
+            type="button"
+            aria-pressed={isPending}
+            onClick={() => onModeChange('pending')}
+          >
+            Pendências
+          </button>
+        </div>
+
+        <button
+          type="button"
+          className="btn-primary tx-new-button"
+          onClick={handleNewTransaction}
+          aria-label="Nova transação"
+          title="Nova transação"
+        >
+          <Plus size={16} />
+          Nova transação
+        </button>
       </div>
 
-      {mobile ? (
+      {isPending ? (
+        /* Fila global: sem seletor mensal e sem intervalo de datas */
+        <div className="tx-pending-controls">
+          <div className="tx-pending-pills" role="group" aria-label="Filtro de pendências">
+            {PENDING_FILTERS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={pendingFilter === f.id ? 'active' : ''}
+                aria-pressed={pendingFilter === f.id}
+                onClick={() => onPendingFilterChange(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <span className="tx-pending-count">
+            {pendingCount.toLocaleString('pt-BR')} pendências no histórico
+          </span>
+        </div>
+      ) : mobile ? (
         <>
           {/* Barra compacta de período (mobile) */}
           <div className="tx-period-bar">
@@ -166,26 +281,52 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ profileId, p
             onFilterNoCategoryChange={setFilterNoCategory}
             filterReviewOnly={filterReviewOnly}
             onFilterReviewOnlyChange={setFilterReviewOnly}
+            mode={mode}
+            pendingFilter={pendingFilter}
+            onPendingCountChange={setPendingCount}
+            onEditTransaction={handleEditTransaction}
           />
         </div>
 
         {/* Recategorização: existe somente quando há seleção (sem painel vazio permanente) */}
-        {selectedTransaction && (
+        {editor ? (
+          <>
+            <div className="tx-view-backdrop open" onClick={handleCloseEditor} />
+            <div className="tx-view-side open">
+              <TransactionEditor
+                profileId={profileId}
+                profileCode={profileCode}
+                transaction={editor.tx}
+                creating={editor.creating}
+                onSuccess={handleEditorSuccess}
+                onClose={handleCloseEditor}
+              />
+            </div>
+          </>
+        ) : selectedTransaction ? (
           <>
             <div className="tx-view-backdrop open" onClick={handleCloseCategorizer} />
             <div className="tx-view-side open">
               <CategorizerPanel
                 transaction={selectedTransaction}
-                onSuccess={() => {
-                  setSelectedTransaction(null);
-                  setRefreshTrigger((t) => t + 1);
-                }}
+                activeProfileId={profileId}
+                onSuccess={handleCategorized}
                 onClose={handleCloseCategorizer}
               />
             </div>
           </>
-        )}
+        ) : null}
       </div>
+
+      <button
+        type="button"
+        className="tx-fab"
+        onClick={handleNewTransaction}
+        aria-label="Nova transação"
+        title="Nova transação"
+      >
+        <Plus size={24} />
+      </button>
     </div>
   );
 };

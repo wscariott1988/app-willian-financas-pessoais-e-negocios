@@ -28,6 +28,7 @@ interface DashboardProps {
   profileId: string;
   profileCode?: 'personal' | 'business';
   period: PeriodController;
+  onOpenPending?: (filter: 'review' | 'noCategory') => void;
 }
 
 interface Summary {
@@ -41,7 +42,7 @@ interface Summary {
   error: string | null;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending }) => {
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
@@ -62,7 +63,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
     try {
       const periodSummary = await fetchPeriodSummary(range);
 
-      const counters = await supabaseCounters(range);
+      const counters = await supabaseCounters();
       let reviewCount = 0;
       let noCategoryCount = 0;
       if (counters) {
@@ -174,34 +175,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         </div>
       </div>
 
-      {/* Pendências: painel único com duas linhas acionáveis (filtram a lista) */}
+      {/* Pendências: painel único com duas linhas acionáveis (histórico global) */}
       <div className="pending-panel">
-        <div className="pending-title">Pendências</div>
+        <div className="pending-title">Pendências <span className="pending-title-hint">· Todo o histórico</span></div>
         <button
           type="button"
           className="pending-row"
-          aria-pressed={filterReviewOnly}
-          onClick={() => setFilterReviewOnly((v) => !v)}
-          title="Filtra a lista abaixo para status = review"
+          aria-pressed={false}
+          onClick={() => onOpenPending?.('review')}
+          title="Abre Transações na fila global de pendências em revisão"
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
             <AlertTriangle size={16} style={{ color: 'var(--color-warning)' }} />
             Em revisão
           </span>
-          <span className="pending-row-count">{String(summary.reviewCount)}</span>
+          <span className="pending-row-count">{summary.reviewCount.toLocaleString('pt-BR')}</span>
         </button>
         <button
           type="button"
           className="pending-row"
-          aria-pressed={filterNoCategory}
-          onClick={() => setFilterNoCategory((v) => !v)}
-          title="Filtra a lista abaixo para category_id = null"
+          aria-pressed={false}
+          onClick={() => onOpenPending?.('noCategory')}
+          title="Abre Transações na fila global de pendências sem categoria"
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
             <Tag size={16} style={{ color: 'var(--color-secondary)' }} />
             Sem categoria
           </span>
-          <span className="pending-row-count">{String(summary.noCategoryCount)}</span>
+          <span className="pending-row-count">{summary.noCategoryCount.toLocaleString('pt-BR')}</span>
         </button>
       </div>
 
@@ -281,6 +282,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         <div style={{ position: 'sticky', top: '20px' }}>
           <CategorizerPanel
             transaction={selectedTransaction}
+            activeProfileId={profileId}
             onSuccess={handleSuccess}
             onClose={() => setSelectedTransaction(null)}
           />
@@ -290,26 +292,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   );
 };
 
-// Contadores auxiliares do resumo (fila de revisão e sem categoria), no mesmo recorte de datas.
-async function supabaseCounters(range: { start: string; end: string }) {
+// Contadores de pendências GLOBAIS (todo o histórico do perfil — independentes do período).
+async function supabaseCounters() {
   try {
     const [review, noCategory] = await Promise.all([
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
-        .gte('occurred_on', range.start)
-        .lte('occurred_on', range.end)
         .eq('status', 'review'),
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
-        .gte('occurred_on', range.start)
-        .lte('occurred_on', range.end)
         .is('category_id', null),
     ]);
     return { reviewCount: review.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
   } catch (err) {
-    console.error('Erro ao carregar contadores do resumo:', err);
+    console.error('Erro ao carregar contadores de pendências:', err);
     return null;
   }
 }

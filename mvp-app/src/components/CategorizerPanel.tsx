@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import { Check, Info, AlertCircle, Tag, RefreshCw, X } from 'lucide-react';
+import { Check, Info, AlertCircle, Tag, RefreshCw, X, ShieldAlert } from 'lucide-react';
+import { buildCategoryQuery } from '../lib/categoryQuery';
 
 interface Transaction {
   id: string;
@@ -32,12 +33,14 @@ interface CategorizerPanelProps {
   transaction: Transaction | null;
   onSuccess: () => void;
   onClose?: () => void;
+  activeProfileId?: string | null;
 }
 
 export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   transaction,
   onSuccess,
   onClose,
+  activeProfileId = null,
 }) => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
@@ -46,32 +49,51 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  // Isolamento: perfil ativo autorizado da sessão precisa existir e ser o
+  // mesmo da transação selecionada. Caso contrário, falha fechado (sem consulta).
+  const profileBlocked =
+    !!transaction &&
+    (!activeProfileId || !transaction.profile_id || activeProfileId !== transaction.profile_id);
+
   // Fetch compatible categories when transaction changes
   useEffect(() => {
     setError(null);
     setSuccessMsg(null);
     setSelectedCategoryId('');
-    
+    // descarta categorias anteriores imediatamente (nunca exibir resultados velhos)
+    setCategories([]);
+
     if (!transaction) return;
 
+    if (!activeProfileId || !transaction.profile_id || activeProfileId !== transaction.profile_id) {
+      if (import.meta.env.DEV) {
+        console.error(
+          '[CategorizerPanel] perfil divergente: active=',
+          activeProfileId,
+          'tx=',
+          transaction.profile_id,
+        );
+      }
+      return;
+    }
+
     if (transaction.transaction_kind === 'transfer') {
-      setCategories([]);
       return;
     }
 
     const fetchCategories = async () => {
       setLoadingCats(true);
       try {
-        const { data, error: catError } = await supabase
-          .from('categories')
-          .select('*')
-          .eq('direction', transaction.transaction_kind)
-          .eq('status', 'active');
-        
+        const { data, error: catError } = await buildCategoryQuery(supabase as any, {
+          profileId: activeProfileId,
+          direction: transaction.transaction_kind,
+          status: 'active',
+        });
+
         if (catError) throw catError;
-        
+
         // Sort categories by canonical_path or display_name
-        const sorted = (data || []).sort((a, b) => {
+        const sorted = (data || []).sort((a: any, b: any) => {
           const pathA = a.canonical_path || a.display_name;
           const pathB = b.canonical_path || b.display_name;
           return pathA.localeCompare(pathB);
@@ -80,14 +102,14 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         setCategories(sorted);
       } catch (err: any) {
         console.error('Erro ao carregar categorias:', err);
-        setError('Falha ao carregar lista de categorias compatíveis.');
+        setError('Não foi possível carregar as categorias. Tente novamente.');
       } finally {
         setLoadingCats(false);
       }
     };
 
     fetchCategories();
-  }, [transaction]);
+  }, [transaction, activeProfileId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,7 +142,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
 
     } catch (err: any) {
       console.error('Erro no RPC assign_category_atomic:', err);
-      setError(err.message || 'Erro ao atribuir categoria atômica.');
+      setError('Não foi possível alterar a categoria. Tente novamente em instantes.');
     } finally {
       setLoading(false);
     }
@@ -194,6 +216,27 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         )}
       </div>
 
+      {/* Perfil ausente ou divergente: falha fechada, sem consulta de categorias */}
+      {profileBlocked && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '10px',
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid rgba(245, 158, 11, 0.25)',
+          color: 'var(--color-warning)',
+          padding: '12px 16px',
+          borderRadius: '8px',
+          fontSize: '13px',
+          fontWeight: 600,
+          lineHeight: 1.4,
+        }}>
+          <ShieldAlert size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+          <span>Não foi possível identificar o perfil ativo. Entre novamente.</span>
+        </div>
+      )}
+
+      {!profileBlocked && (<>
       {/* Transaction Details Card */}
       <div style={{
         backgroundColor: 'rgba(255, 255, 255, 0.02)',
@@ -206,14 +249,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         gap: '12px'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: 'var(--color-text-muted)' }}>ID Transação</span>
-          <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}>
-            {transaction.id.slice(0, 8)}...
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: 'var(--color-text-muted)' }}>Descrição Original</span>
+          <span style={{ color: 'var(--color-text-muted)' }}>Descrição</span>
           <strong style={{ color: '#fff', fontSize: '14px' }}>{transaction.raw_description}</strong>
         </div>
 
@@ -228,7 +264,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: 'var(--color-text-muted)' }}>Categoria da Origem (category_raw)</span>
+          <span style={{ color: 'var(--color-text-muted)' }}>Categoria informada</span>
           <span style={{
             backgroundColor: 'rgba(255, 255, 255, 0.05)',
             padding: '3px 8px',
@@ -236,14 +272,14 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
             fontWeight: 600,
             color: 'var(--color-text-muted)'
           }}>
-            {transaction.category_raw || 'Nula'}
+            {transaction.category_raw || 'Não informada'}
           </span>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: 'var(--color-text-muted)' }}>Direção / Tipo</span>
+          <span style={{ color: 'var(--color-text-muted)' }}>Tipo</span>
           <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>
-            {transaction.transaction_kind === 'expense' ? 'Saída (Despesa)' : transaction.transaction_kind === 'income' ? 'Entrada (Receita)' : 'Transferência'}
+            {transaction.transaction_kind === 'expense' ? 'Despesa' : transaction.transaction_kind === 'income' ? 'Receita' : 'Transferência'}
           </span>
         </div>
       </div>
@@ -307,7 +343,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <label style={{ fontSize: '13px', fontWeight: 700 }}>
-              Selecione a Categoria Canônica
+              Selecione a categoria
             </label>
             
             {loadingCats ? (
@@ -361,7 +397,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
               type="submit"
               className="btn-primary categorizer-submit"
               style={{ width: '100%', padding: '12px' }}
-              disabled={!selectedCategoryId || loading || !!successMsg}
+              disabled={!selectedCategoryId || loading || !!successMsg || profileBlocked}
             >
               {loading ? (
                 <>
@@ -378,6 +414,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
           </div>
         </form>
       )}
+      </>)}
     </div>
   );
 };

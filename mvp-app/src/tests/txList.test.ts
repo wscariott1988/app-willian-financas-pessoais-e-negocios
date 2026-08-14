@@ -5,6 +5,7 @@ import {
   toggleNoCategoryFilter,
   clearTxFilters,
   hasActiveTxFilters,
+  buildPendingTxOptions,
   buildTxListOptions,
   createTxPageFetcher,
   fetchAllTxPages,
@@ -45,6 +46,7 @@ function makeFakeClient(rows: unknown[], total: number) {
     ilike: (c: string, v: unknown) => { log.push(['ilike', c, v]); return query; },
     eq: (c: string, v: unknown) => { log.push(['eq', c, v]); return query; },
     is: (c: string, v: unknown) => { log.push(['is', c, v]); return query; },
+    or: (v: unknown) => { log.push(['or', v]); return query; },
     gte: (c: string, v: unknown) => { log.push(['gte', c, v]); return query; },
     lte: (c: string, v: unknown) => { log.push(['lte', c, v]); return query; },
     order: (c: string, v: unknown) => { log.push(['order', c, v]); return query; },
@@ -252,5 +254,80 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
     const opts = buildTxListOptions(txFilterInitial(), { ...BASE, search: '  ', accountId: '' });
     expect(opts.search).toBeUndefined();
     expect(opts.accountId).toBeUndefined();
+  });
+});
+
+describe('fila global de pendências (1.2A.4B)', () => {
+  it('5) Todas usa status=review OR category_id IS NULL (uma única condição, sem duplicação)', async () => {
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'all' }));
+    await fetcher(0, 29);
+
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['or', 'status.eq.review,category_id.is.null']));
+    expect(s.filter((x) => x.includes('"or"')).length).toBe(1);
+    // a união é feita no servidor: nenhum braço é enviado separadamente
+    expect(s).not.toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(s).not.toContain(JSON.stringify(['is', 'category_id', null]));
+  });
+
+  it('7) Em revisão usa somente o filtro correspondente', async () => {
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'review' }));
+    await fetcher(0, 29);
+
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(s).not.toContain('"or"');
+    expect(s).not.toContain(JSON.stringify(['is', 'category_id', null]));
+  });
+
+  it('8) Sem categoria usa somente o filtro correspondente', async () => {
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'noCategory' }));
+    await fetcher(0, 29);
+
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['is', 'category_id', null]));
+    expect(s).not.toContain('"or"');
+    expect(s).not.toContain(JSON.stringify(['eq', 'status', 'review']));
+  });
+
+  it('3) Pendências não envia intervalo de datas', async () => {
+    const opts = buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'all' });
+    expect(opts.start).toBeUndefined();
+    expect(opts.end).toBeUndefined();
+
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, opts);
+    await fetcher(0, 29);
+    const s = log.map((c) => JSON.stringify(c));
+    // a ordenação por occurred_on é mantida, mas NENHUM filtro gte/lte é enviado
+    expect(s.some((x) => x.includes('gte'))).toBe(false);
+    expect(s.some((x) => x.includes('lte'))).toBe(false);
+  });
+
+  it('4) Do período continua enviando o intervalo de datas', async () => {
+    const opts = buildTxListOptions(txFilterInitial(), BASE);
+    expect(opts.start).toBe('2026-08-01');
+    expect(opts.end).toBe('2026-08-31');
+
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, opts);
+    await fetcher(0, 9);
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['gte', 'occurred_on', '2026-08-01']));
+    expect(s).toContain(JSON.stringify(['lte', 'occurred_on', '2026-08-31']));
+  });
+
+  it('9) busca e conta funcionam no modo Pendências', async () => {
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: 'ifood', accountId: 'acc-1', pendingFilter: 'noCategory' }));
+    await fetcher(0, 29);
+
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['ilike', 'raw_description', '%ifood%']));
+    expect(s).toContain(JSON.stringify(['eq', 'account_id', 'acc-1']));
+    expect(s).toContain(JSON.stringify(['is', 'category_id', null]));
   });
 });

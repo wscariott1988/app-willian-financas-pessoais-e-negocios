@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
-import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal } from 'lucide-react';
+import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil } from 'lucide-react';
 import { formatShortDate } from '../lib/period';
 import {
   TX_PAGE_SIZE,
+  buildPendingTxOptions,
   buildTxListOptions,
   clearTxFilters,
   createTxPageFetcher,
   fetchAllTxPages,
   hasActiveTxFilters,
   statusLabel,
+  type PendingFilter,
   type TxListFilters,
 } from '../lib/txList';
 
@@ -55,6 +57,19 @@ interface TransactionListProps {
   onFilterNoCategoryChange: (v: boolean) => void;
   filterReviewOnly: boolean;
   onFilterReviewOnlyChange: (v: boolean) => void;
+  mode?: 'period' | 'pending';
+  pendingFilter?: PendingFilter;
+  onPendingCountChange?: (count: number) => void;
+  onEditTransaction?: (transaction: Transaction) => void;
+}
+
+// Lote do modo Pendências: adequado à interface, carregado progressivamente.
+const PENDING_PAGE_SIZE = 30;
+
+// Erros técnicos não vão para a interface; detalhes somente no console DEV.
+function friendlyListError(err: unknown): string {
+  if (import.meta.env.DEV) console.error('[Erro técnico da lista]', err);
+  return 'Não foi possível carregar as transações. Tente novamente em instantes.';
 }
 
 export const TransactionList: React.FC<TransactionListProps> = ({
@@ -74,6 +89,10 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   onFilterNoCategoryChange,
   filterReviewOnly,
   onFilterReviewOnlyChange,
+  mode = 'period',
+  pendingFilter = 'all',
+  onPendingCountChange,
+  onEditTransaction,
 }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -81,6 +100,15 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [totalLoaded, setTotalLoaded] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Modo Pendências: paginação progressiva por lotes (nunca todo o histórico).
+  const [pendingTxns, setPendingTxns] = useState<Transaction[]>([]);
+  const [pendingOffset, setPendingOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const isPending = mode === 'pending';
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>('occurred_on');
@@ -101,8 +129,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     fetchAccounts();
   }, [profileId]);
 
-  // Lista contínua: busca TODAS as páginas do recorte (perfil via RLS, período,
-  // busca, conta e filtros atuais), sem paginação visível.
+  // Lista contínua do período: busca todas as páginas do recorte (perfil via RLS,
+  // período, busca, conta e filtros atuais), sem paginação visível.
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -117,7 +145,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
       setTotalLoaded(totalCount);
     } catch (err: any) {
       // Lote falhou: nunca apresentar parcial como completo.
-      setError(err.message || 'Erro ao carregar transações');
+      setError(friendlyListError(err));
       setTransactions([]);
       setTotalLoaded(0);
     } finally {
@@ -125,9 +153,57 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     }
   }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, profileId, refreshTrigger]);
 
+  // Modo Pendências: carrega um lote por vez (offset), substituindo ou anexando.
+  const loadPendingPage = useCallback(async (offset: number, replace: boolean) => {
+    if (!replace) setLoadingMore(true);
+    try {
+      const opts = buildPendingTxOptions({ search, accountId: selectedAccount, pendingFilter });
+      const fetcher = createTxPageFetcher(supabase as any, opts);
+      const page = await fetcher(offset, offset + PENDING_PAGE_SIZE - 1);
+      if (page.error) throw page.error;
+      const rows = (page.rows ?? []) as Transaction[];
+      setPendingTxns((prev) => (replace ? rows : [...prev, ...rows]));
+      setPendingOffset(offset + rows.length);
+      setHasMore(rows.length === PENDING_PAGE_SIZE);
+      if (page.totalCount !== null) {
+        setTotalLoaded(page.totalCount);
+        onPendingCountChange?.(page.totalCount);
+      }
+    } catch (err) {
+      setError(friendlyListError(err));
+    } finally {
+      if (!replace) setLoadingMore(false);
+      setLoading(false);
+    }
+  }, [search, selectedAccount, pendingFilter, profileId, onPendingCountChange, refreshTrigger]);
+
   useEffect(() => {
-    fetchTransactions();
-  }, [fetchTransactions]);
+    if (isPending) {
+      setError(null);
+      setLoading(true);
+      setPendingTxns([]);
+      loadPendingPage(0, true);
+    } else {
+      fetchTransactions();
+    }
+  }, [isPending, loadPendingPage, fetchTransactions, refreshTrigger]);
+
+  // Próximo lote progressivo quando o sentinel entra na área visível.
+  useEffect(() => {
+    if (!isPending || !hasMore || loading || loadingMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          loadPendingPage(pendingOffset, false);
+        }
+      },
+      { rootMargin: '240px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [isPending, hasMore, loading, loadingMore, pendingOffset, loadPendingPage]);
 
   const filters: TxListFilters = { reviewOnly: filterReviewOnly, noCategory: filterNoCategory };
   const filtersActive = hasActiveTxFilters(filters);
@@ -191,7 +267,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
+    <div className={`tx-list ${isPending ? 'tx-list-pending' : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
       <div className="glass tx-toolbar">
         <div className="tx-toolbar-row">
           <div className="tx-search" style={{ position: 'relative' }}>
@@ -242,10 +318,12 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           </button>
         </div>
 
-        <div className="tx-count-line">
-          <strong style={{ color: 'var(--color-text)' }}>{totalLoaded.toLocaleString('pt-BR')}</strong>
-          &nbsp;transações no período
-        </div>
+        {!isPending && (
+          <div className="tx-count-line">
+            <strong style={{ color: 'var(--color-text)' }}>{totalLoaded.toLocaleString('pt-BR')}</strong>
+            &nbsp;transações no período
+          </div>
+        )}
 
         <div className={`tx-filters-panel ${filtersOpen ? 'open' : ''}`}>
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center', fontSize: '13px', fontWeight: 600 }}>
@@ -293,21 +371,22 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <SortHeader field="raw_description">Descrição Original</SortHeader>
                 <SortHeader field="amount">Valor</SortHeader>
                 <th>Conta</th>
-                <th>Categ. Original</th>
+                <th>Categoria</th>
                 <th>Status</th>
+                <th style={{ width: '64px', textAlign: 'center' }} aria-label="Editar">Editar</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-text-muted)' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-text-muted)' }}>
                     <RefreshCw size={24} className="spin-animation" style={{ marginBottom: '8px' }} />
                     <div>Buscando transações do período...</div>
                   </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-danger)' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-danger)' }}>
                     <AlertCircle size={24} style={{ marginBottom: '8px' }} />
                     <div>{error}</div>
                     <div style={{ fontSize: '12px', marginTop: '6px' }}>
@@ -315,15 +394,15 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     </div>
                   </td>
                 </tr>
-              ) : transactions.length === 0 ? (
+              ) : (isPending ? pendingTxns : transactions).length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-text-muted)' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '60px', color: 'var(--color-text-muted)' }}>
                     <Layers size={24} style={{ marginBottom: '8px', opacity: 0.5 }} />
-                    <div>Nenhuma transação encontrada para os filtros selecionados.</div>
+                    <div>{isPending ? 'Nenhuma pendência encontrada para os filtros selecionados.' : 'Nenhuma transação encontrada para os filtros selecionados.'}</div>
                   </td>
                 </tr>
               ) : (
-                transactions.map((tx) => {
+                (isPending ? pendingTxns : transactions).map((tx) => {
                   const st = statusLabel(tx.status);
                   const txLabel = [
                     tx.raw_description,
@@ -357,6 +436,20 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                           {st.label}
                         </span>
                       </td>
+                      <td data-label="Editar" className="tx-edit-cell">
+                        <button
+                          type="button"
+                          className="tx-edit-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditTransaction?.(tx);
+                          }}
+                          aria-label={`Editar ${tx.raw_description}`}
+                          title={`Editar ${tx.raw_description}`}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })
@@ -364,6 +457,28 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* Modo Pendências: sentinel de próximo lote + estados de fim/carregando */}
+        {isPending && !loading && !error && (isPending ? pendingTxns : transactions).length > 0 && (
+          <div
+            ref={sentinelRef}
+            style={{
+              padding: '10px 20px',
+              fontSize: '12px',
+              color: 'var(--color-text-muted)',
+              textAlign: 'center',
+              borderTop: '1px solid var(--border-card)',
+            }}
+          >
+            {loadingMore ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <RefreshCw size={13} className="spin-animation" /> Carregando mais...
+              </span>
+            ) : !hasMore ? (
+              <span>Fim da lista</span>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );

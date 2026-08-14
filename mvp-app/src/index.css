@@ -177,6 +177,81 @@ button {
   background: var(--bg-high);
 }
 
+/* Animação de mensagens de sucesso (criação/edição atômica) */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Botão de editar por linha (alvo de toque >= 44px) */
+.tx-edit-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+}
+
+.tx-edit-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--color-primary);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+
+.tx-row.selected .tx-edit-btn {
+  color: var(--color-primary);
+}
+
+.tx-table th:nth-child(7) {
+  width: 64px;
+}
+
+.tx-edit-cell {
+  text-align: center;
+}
+
+/* Botão "Nova transação" (desktop) */
+.tx-new-button {
+  display: inline-flex;
+}
+
+/* Floating Action Button (mobile/tablet) */
+.tx-fab {
+  position: fixed;
+  right: 20px;
+  bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  min-height: 52px;
+  padding: 0;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, #4f46e5 100%);
+  color: white;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tx-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(99, 102, 241, 0.5);
+}
+
+.tx-fab:active {
+  transform: translateY(0);
+}
+
 /* ============ Cabeçalho mobile compacto (≤104px) ============ */
 
 .app-header {
@@ -726,6 +801,14 @@ button {
   gap: 8px;
 }
 
+.tx-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
 .tx-view-title h1 {
   font-size: 22px;
   font-weight: 700;
@@ -736,6 +819,82 @@ button {
 .tx-view-subtitle {
   font-size: 13px;
   color: var(--color-text-muted);
+}
+
+/* Controle Do período / Pendências */
+.tx-mode-toggle {
+  display: flex;
+  gap: 3px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  flex-shrink: 0;
+}
+
+.tx-mode-toggle button {
+  min-height: 40px;
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tx-mode-toggle button[aria-pressed='true'] {
+  background: var(--bg-high);
+  color: var(--color-text);
+}
+
+/* Fila global de pendências: controles sem intervalo de datas */
+.tx-pending-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tx-pending-pills {
+  display: flex;
+  gap: 3px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-full);
+  padding: 3px;
+}
+
+.tx-pending-pills button {
+  min-height: 40px;
+  padding: 6px 16px;
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tx-pending-pills button[aria-pressed='true'] {
+  background: var(--color-primary);
+  color: var(--on-primary);
+}
+
+.tx-pending-count {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* Pendências da Início: nota discreta de histórico global */
+.pending-title-hint {
+  font-weight: 500;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* No modo Pendências o intervalo do período não se aplica */
+.tx-list-pending .range-badge {
+  display: none;
 }
 
 /* Barra compacta de período (mobile <768px) */
@@ -1147,14 +1306,14 @@ button {
     padding: 0;
   }
 
-  /* Linha compacta em grid de duas faixas: descrição+valor / metas+status.
-     Colunas reais: data (max-content), categoria (flexível 1fr), conta e status (max-content). */
+  /* Linha compacta em grid de duas faixas: descrição+valor / metas+status+editar.
+     Colunas reais: data (max-content), categoria (flexível 1fr), conta, status e editar (max-content). */
   .tx-table tr {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content;
     grid-template-areas:
-      'desc desc desc value'
-      'date cat account status';
+      'desc desc desc value value'
+      'date cat account status edit';
     align-items: center;
     gap: 2px 10px;
     min-height: 56px;
@@ -1241,6 +1400,13 @@ button {
     min-width: 0;
   }
 
+  /* Separador discreto dentro da própria célula da conta (sem coluna extra) */
+  .tx-table td.tx-account::before {
+    content: '•';
+    margin-right: 6px;
+    color: var(--color-text-faint);
+  }
+
   .tx-table td.tx-status {
     grid-area: status;
     justify-content: flex-end;
@@ -1252,6 +1418,26 @@ button {
     text-align: right;
     padding: 2px 6px;
     font-size: 11px;
+  }
+
+  .tx-table td.tx-edit-cell {
+    grid-area: edit;
+    justify-content: flex-end;
+  }
+
+  .tx-table td.tx-edit-cell .tx-edit-btn {
+    width: 36px;
+    height: 40px;
+    min-width: 36px;
+    min-height: 40px;
+  }
+
+  .tx-new-button {
+    display: none;
+  }
+
+  .tx-fab {
+    display: inline-flex;
   }
 }
 
