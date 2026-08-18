@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { TransactionList } from './TransactionList';
-import { CategorizerPanel } from './CategorizerPanel';
+import { TransactionEditor } from './TransactionEditor';
+import { DeleteConfirmation } from './DeleteConfirmation';
+import { Modal } from './Modal';
 import { AuditLogs } from './AuditLogs';
 import { PeriodSelector } from './PeriodSelector';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, FilterX } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, FilterX, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
 import type { PeriodController } from './AppShell';
 
@@ -31,6 +33,11 @@ interface DashboardProps {
   onOpenPending?: (filter: 'review' | 'noCategory') => void;
 }
 
+interface EditorState {
+  tx: Transaction | null;
+  creating: boolean;
+}
+
 interface Summary {
   income: number;
   expense: number;
@@ -43,7 +50,8 @@ interface Summary {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending }) => {
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // A lista abre sem filtro de status nem de categoria (período vem do seletor global).
@@ -91,10 +99,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
     fetchSummary();
   }, [fetchSummary, refreshTrigger]);
 
-  const handleSuccess = () => {
-    setSelectedTransaction(null);
+  const handleEditorSuccess = () => {
+    setEditor(null);
     setRefreshTrigger((t) => t + 1);
   };
+
+  const handleCloseEditor = () => setEditor(null);
+
+  const handleNewTransaction = () => setEditor({ tx: null, creating: true });
+
+  const handleEditTransaction = (tx: Transaction) => {
+    setEditor({ tx, creating: false });
+  };
+
+  const handleDeleteTransaction = (tx: Transaction) => {
+    setDeleteTarget(tx);
+  };
+
+  const handleDeleteSuccess = () => {
+    setDeleteTarget(null);
+    setRefreshTrigger((t) => t + 1);
+  };
+
+  const handleCloseDelete = () => setDeleteTarget(null);
 
   const formatBRL = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -119,12 +146,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   return (
     <div className="dash-root">
       <div className="dash-title">
-        <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
-          Visão Geral
-        </h1>
-        <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
-          Resumo e transações do período selecionado para o perfil ativo
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
+              Visão Geral
+            </h1>
+            <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
+              Resumo e transações do período selecionado para o perfil ativo
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-primary tx-new-button"
+            onClick={handleNewTransaction}
+            aria-label="Nova transação"
+            title="Nova transação"
+          >
+            <Plus size={16} />
+            Nova transação
+          </button>
+        </div>
       </div>
 
       <PeriodSelector
@@ -258,8 +299,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       <div className="dash-main">
         <TransactionList
           profileId={profileId}
-          selectedTransactionId={selectedTransaction?.id || null}
-          onSelectTransaction={setSelectedTransaction}
+          selectedTransactionId={null}
+          onSelectTransaction={() => {}}
           refreshTrigger={refreshTrigger}
           search={search}
           onSearchChange={setSearch}
@@ -273,21 +314,52 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
           onFilterNoCategoryChange={setFilterNoCategory}
           filterReviewOnly={filterReviewOnly}
           onFilterReviewOnlyChange={setFilterReviewOnly}
+          onEditTransaction={handleEditTransaction}
+          onDeleteTransaction={handleDeleteTransaction}
         />
         <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
       </div>
 
-      {/* Coluna lateral: recategorização existente (Pendências entra na lateral no desktop) */}
-      <div className="dash-side">
-        <div style={{ position: 'sticky', top: '20px' }}>
-          <CategorizerPanel
-            transaction={selectedTransaction}
-            activeProfileId={profileId}
-            onSuccess={handleSuccess}
-            onClose={() => setSelectedTransaction(null)}
+      <Modal
+        open={!!editor}
+        onClose={handleCloseEditor}
+        ariaLabel={editor?.creating ? 'Nova transação' : 'Editar transação'}
+      >
+        {editor && (
+          <TransactionEditor
+            profileId={profileId}
+            profileCode={profileCode}
+            transaction={editor.tx}
+            creating={editor.creating}
+            onSuccess={handleEditorSuccess}
+            onClose={handleCloseEditor}
           />
-        </div>
-      </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!deleteTarget}
+        onClose={handleCloseDelete}
+        ariaLabel="Confirmar exclusao"
+      >
+        {deleteTarget && (
+          <DeleteConfirmation
+            transaction={deleteTarget}
+            onClose={handleCloseDelete}
+            onSuccess={handleDeleteSuccess}
+          />
+        )}
+      </Modal>
+
+      <button
+        type="button"
+        className="tx-fab"
+        onClick={handleNewTransaction}
+        aria-label="Nova transação"
+        title="Nova transação"
+      >
+        <Plus size={24} />
+      </button>
     </div>
   );
 };
@@ -299,10 +371,12 @@ async function supabaseCounters() {
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
+        .is('deleted_at', null)
         .eq('status', 'review'),
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
+        .is('deleted_at', null)
         .is('category_id', null),
     ]);
     return { reviewCount: review.count ?? 0, noCategoryCount: noCategory.count ?? 0 };

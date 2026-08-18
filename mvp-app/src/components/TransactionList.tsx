@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
-import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil } from 'lucide-react';
+import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { formatShortDate } from '../lib/period';
 import {
   TX_PAGE_SIZE,
@@ -61,6 +61,7 @@ interface TransactionListProps {
   pendingFilter?: PendingFilter;
   onPendingCountChange?: (count: number) => void;
   onEditTransaction?: (transaction: Transaction) => void;
+  onDeleteTransaction?: (transaction: Transaction) => void;
 }
 
 // Lote do modo Pendências: adequado à interface, carregado progressivamente.
@@ -93,6 +94,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   pendingFilter = 'all',
   onPendingCountChange,
   onEditTransaction,
+  onDeleteTransaction,
 }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -373,7 +375,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 <th>Conta</th>
                 <th>Categoria</th>
                 <th>Status</th>
-                <th style={{ width: '64px', textAlign: 'center' }} aria-label="Editar">Editar</th>
+                <th style={{ width: '96px', textAlign: 'center' }} aria-label="Ações">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -404,10 +406,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
               ) : (
                 (isPending ? pendingTxns : transactions).map((tx) => {
                   const st = statusLabel(tx.status);
+                  const catDisplay = (tx as any).categories?.display_name || tx.category_raw || 'Não informada';
                   const txLabel = [
                     tx.raw_description,
                     `Data: ${formatDate(tx.occurred_on)}`,
-                    `Categoria: ${tx.category_raw || 'Não informada'}`,
+                    `Categoria: ${catDisplay}`,
                     `Conta: ${tx.accounts?.display_name || tx.account_id.slice(0, 8)}`,
                     `Status: ${st.label}`,
                   ].join(' · ');
@@ -429,14 +432,14 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                       <td data-label="Valor" className="tx-value">{formatCurrency(tx.amount, tx.transaction_kind)}</td>
                       <td data-label="Conta" className="tx-account">{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
                       <td data-label="Categoria" className="tx-cat">
-                        {tx.category_raw || 'Não informada'}
+                        {catDisplay}
                       </td>
                       <td data-label="Status" className="tx-status">
                         <span className={`badge badge-${tx.status}`} title={st.hint}>
                           {st.label}
                         </span>
                       </td>
-                      <td data-label="Editar" className="tx-edit-cell">
+                      <td data-label="Ações" className="tx-edit-cell" style={{ display: 'flex', gap: '2px', justifyContent: 'center', alignItems: 'center' }}>
                         <button
                           type="button"
                           className="tx-edit-btn"
@@ -446,8 +449,22 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                           }}
                           aria-label={`Editar ${tx.raw_description}`}
                           title={`Editar ${tx.raw_description}`}
+                          style={{ minWidth: '44px', minHeight: '44px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                         >
                           <Pencil size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          className="tx-edit-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteTransaction?.(tx);
+                          }}
+                          aria-label={`Excluir ${tx.raw_description}`}
+                          title={`Excluir ${tx.raw_description}`}
+                          style={{ minWidth: '44px', minHeight: '44px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-danger)' }}
+                        >
+                          <Trash2 size={15} />
                         </button>
                       </td>
                     </tr>

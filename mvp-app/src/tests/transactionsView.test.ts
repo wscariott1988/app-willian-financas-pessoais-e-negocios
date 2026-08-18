@@ -240,7 +240,7 @@ describe('view Transações — desktop mínimo e amplo', () => {
 });
 
 describe('view Transações — seleção e recategorização', () => {
-  it('11) selecionar abre o recategorizador (renderizado somente com seleção)', () => {
+  it('11) editor abre via Modal global (sem painel vazio permanente)', () => {
     const viewHtml = renderToString(
       createElement(TransactionsView, {
         profileId: shellProps.profileId,
@@ -252,23 +252,24 @@ describe('view Transações — seleção e recategorização', () => {
         onPendingFilterChange: NOOP,
       }),
     );
-    // sem seleção: nenhum painel vazio permanente
+    // sem seleção: nenhum painel vazio permanente e nenhum modal aberto
     expect(viewHtml).not.toContain('Nenhuma transação selecionada');
     expect(viewHtml).not.toContain('tx-view-side');
 
     const source = readSource('views/TransactionsView.tsx');
-    expect(source).toContain('onSelectTransaction={handleSelect}');
-    expect(source).toContain(': selectedTransaction ? (');
-    expect(source).toContain('transaction={selectedTransaction}');
+    expect(source).toContain('Modal');
+    expect(source).toContain('open={!!editor}');
+    expect(source).toContain('TransactionEditor');
   });
 
-  it('12) fechar restaura a largura da lista (classe with-side condicional)', () => {
+  it('12) editor abre em Modal global (sem classe with-side)', () => {
     const source = readSource('views/TransactionsView.tsx');
-    expect(source).toContain('handleCloseCategorizer');
-    expect(source).toContain(`tx-view-grid \${selectedTransaction ? 'with-side' : ''}`);
-    // fechar com Escape continua presente
+    expect(source).not.toContain('with-side');
+    expect(source).toContain('handleCloseEditor');
     expect(source).toContain("'Escape'");
-    // o botão de fechar do painel permanece testado em categorizerClose.test.tsx
+    // Modal global substitui o painel lateral
+    expect(source).toContain('<Modal');
+    expect(source).toContain('open={!!editor}');
   });
 });
 
@@ -487,11 +488,11 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
     expect(shell).not.toMatch(/handleOpenPending[\s\S]{0,200}setSelection/);
   });
 
-  it('14) categorização atualiza lista e contagens (refresh após sucesso)', () => {
+  it('14) edição via modal atualiza lista e contagens (refresh após sucesso)', () => {
     const viewSource = readSource('views/TransactionsView.tsx');
-    expect(viewSource).toContain('handleCategorized');
+    expect(viewSource).toContain('handleEditorSuccess');
     expect(viewSource).toContain('setRefreshTrigger((t) => t + 1)');
-    expect(viewSource).toContain('onSuccess={handleCategorized}');
+    expect(viewSource).toContain('onSuccess={handleEditorSuccess}');
   });
 
   it('15) categorização não remove o status de revisão', () => {
@@ -789,5 +790,121 @@ describe('isolamento de categorias no painel (1.2A.4B.2)', () => {
     expect(html).toContain('Não foi possível identificar o perfil ativo. Entre novamente.');
     expect(html).not.toContain('profile_id');
     expect(html).not.toContain('UUID');
+  });
+});
+
+describe('lapis e lixeira na lista', () => {
+  it('1) TransactionList exporta onDeleteTransaction como prop opcional', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('onDeleteTransaction?: (transaction: Transaction) => void');
+  });
+
+  it('2) TransactionList importa Trash2 do lucide-react', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('Trash2');
+  });
+
+  it('3) botao de lixeira tem aria-label com a descricao da transacao', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('Excluir ${tx.raw_description}');
+  });
+
+  it('4) botoes de lapis e lixeira usam stopPropagation', () => {
+    const src = readSource('components/TransactionList.tsx');
+    const txIdx = src.indexOf('onClick={(e) => {');
+    const block = src.slice(txIdx, txIdx + 800);
+    const stopCount = (block.match(/e\.stopPropagation\(\)/g) ?? []).length;
+    expect(stopCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('5) coluna de acoes tem largura minima para lapis + lixeira (96px)', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain("width: '96px'");
+    expect(src).toContain('aria-label="A');
+  });
+
+  it('6) botoes de acao tem area clicavel minima de 44px', () => {
+    const src = readSource('components/TransactionList.tsx');
+    const editIdx = src.indexOf("minWidth: '44px'");
+    expect(editIdx).toBeGreaterThan(0);
+    const block = src.slice(editIdx, editIdx + 300);
+    expect(block).toContain("minHeight: '44px'");
+  });
+
+  it('7) Dashboard passa onEditTransaction e onDeleteTransaction', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('onEditTransaction={handleEditTransaction}');
+    expect(src).toContain('onDeleteTransaction={handleDeleteTransaction}');
+  });
+
+  it('8) lixeira abre DeleteConfirmation (nao TransactionEditor)', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('deleteTarget');
+    expect(src).toContain('setDeleteTarget(tx)');
+    expect(src).toContain('DeleteConfirmation');
+    expect(src).not.toContain('deleteIntent');
+  });
+
+  it('9) lixeira da TransactionsView abre DeleteConfirmation (nao TransactionEditor)', () => {
+    const src = readSource('views/TransactionsView.tsx');
+    expect(src).toContain('deleteTarget');
+    expect(src).toContain('setDeleteTarget(tx)');
+    expect(src).toContain('DeleteConfirmation');
+    expect(src).not.toContain('deleteIntent');
+  });
+
+  it('10) TransactionEditor nao tem deleteIntent nem deleteIntentApplied', () => {
+    const src = readSource('components/TransactionEditor.tsx');
+    expect(src).not.toContain('deleteIntent');
+    expect(src).not.toContain('deleteIntentApplied');
+  });
+
+  it('11) TransactionEditor mantem lixeira interna (exclusao via editor)', () => {
+    const src = readSource('components/TransactionEditor.tsx');
+    expect(src).toContain("supabase.rpc('transaction_delete'");
+    expect(src).toContain('p_transaction_id: editId');
+    expect(src).toContain('p_expected_updated_at: expectedUpdatedAt');
+    expect(src).toContain('Confirmar exclus');
+  });
+
+  it('12) DeleteConfirmation existe e usa transaction_delete', () => {
+    const src = readSource('components/DeleteConfirmation.tsx');
+    expect(src).toContain("supabase.rpc('transaction_delete'");
+    expect(src).toContain('p_transaction_id: tx.id');
+    expect(src).toContain('p_expected_updated_at: expectedUpdatedAt');
+    expect(src).toContain("supabase.rpc('transaction_get_detail'");
+    expect(src).toContain('transaction_id: tx.id');
+  });
+
+  it('13) DeleteConfirmation mostra descricao, data, valor e conta', () => {
+    const src = readSource('components/DeleteConfirmation.tsx');
+    expect(src).toContain('Descricao');
+    expect(src).toContain('Data');
+    expect(src).toContain('Valor');
+    expect(src).toContain('Conta');
+    expect(src).toContain('tx.raw_description');
+    expect(src).toContain('formatTxDate');
+    expect(src).toContain('formatTxCurrency');
+  });
+
+  it('14) DeleteConfirmation trata conflito 409', () => {
+    const src = readSource('components/DeleteConfirmation.tsx');
+    expect(src).toContain('CONFLITO');
+    expect(src).toContain('Recarregue a lista e tente novamente');
+  });
+
+  it('15) DeleteConfirmation avisa transferencia', () => {
+    const src = readSource('components/DeleteConfirmation.tsx');
+    expect(src).toContain('ambas as pontas');
+    expect(src).toContain('isTransfer');
+  });
+
+  it('16) DeleteConfirmation fecha e atualiza lista apos sucesso', () => {
+    const src = readSource('components/DeleteConfirmation.tsx');
+    expect(src).toContain('onSuccess');
+    const dash = readSource('components/Dashboard.tsx');
+    expect(dash).toContain('handleDeleteSuccess');
+    expect(dash).toContain('setDeleteTarget(null)');
+    expect(dash).toContain('setRefreshTrigger');
   });
 });

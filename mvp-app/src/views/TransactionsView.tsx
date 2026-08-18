@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronLeft, ChevronRight, X, Plus } from 'lucide-react';
 import { TransactionList, type Transaction } from '../components/TransactionList';
-import { CategorizerPanel } from '../components/CategorizerPanel';
 import { TransactionEditor } from '../components/TransactionEditor';
+import { DeleteConfirmation } from '../components/DeleteConfirmation';
+import { Modal } from '../components/Modal';
 import { PeriodSelector } from '../components/PeriodSelector';
 import { addMonths, formatMonthLabel, PERIOD_MODES } from '../lib/period';
 import type { PendingFilter } from '../lib/txList';
@@ -40,8 +41,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   pendingFilter,
   onPendingFilterChange,
 }) => {
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [mobile, setMobile] = useState(false);
@@ -63,19 +64,6 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  const handleSelect = (tx: Transaction) => {
-    lastFocused.current = document.activeElement as HTMLElement | null;
-    setPeriodOpen(false);
-    setSelectedTransaction(tx);
-  };
-
-  const handleCloseCategorizer = () => {
-    setSelectedTransaction(null);
-    if (lastFocused.current) {
-      requestAnimationFrame(() => lastFocused.current?.focus());
-    }
-  };
-
   const handleClosePeriod = () => {
     setPeriodOpen(false);
     requestAnimationFrame(() => periodBtnRef.current?.focus());
@@ -83,15 +71,19 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
   const handleNewTransaction = () => {
     setPeriodOpen(false);
-    setSelectedTransaction(null);
     setEditor({ tx: null, creating: true });
   };
 
   const handleEditTransaction = (tx: Transaction) => {
     lastFocused.current = document.activeElement as HTMLElement | null;
     setPeriodOpen(false);
-    setSelectedTransaction(null);
     setEditor({ tx, creating: false });
+  };
+
+  const handleDeleteTransaction = (tx: Transaction) => {
+    lastFocused.current = document.activeElement as HTMLElement | null;
+    setPeriodOpen(false);
+    setDeleteTarget(tx);
   };
 
   const handleCloseEditor = () => {
@@ -106,25 +98,34 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     setRefreshTrigger((t) => t + 1);
   };
 
-  // Escape fecha o painel aberto (sem dependência nova)
+  const handleDeleteSuccess = () => {
+    setDeleteTarget(null);
+    setRefreshTrigger((t) => t + 1);
+    if (lastFocused.current) {
+      requestAnimationFrame(() => lastFocused.current?.focus());
+    }
+  };
+
+  const handleCloseDelete = () => {
+    setDeleteTarget(null);
+    if (lastFocused.current) {
+      requestAnimationFrame(() => lastFocused.current?.focus());
+    }
+  };
+
+  // Escape fecha o painel aberto
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (editor) handleCloseEditor();
-      else if (selectedTransaction) handleCloseCategorizer();
       else if (periodOpen) handleClosePeriod();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [editor, selectedTransaction, periodOpen]);
+  }, [editor, periodOpen]);
 
   const modeLabel = PERIOD_MODES.find((m) => m.id === period.mode)?.label ?? '';
   const isPending = mode === 'pending';
-
-  const handleCategorized = () => {
-    setSelectedTransaction(null);
-    setRefreshTrigger((t) => t + 1);
-  };
 
   return (
     <div className="tx-view">
@@ -262,12 +263,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         />
       )}
 
-      <div className={`tx-view-grid ${selectedTransaction ? 'with-side' : ''}`}>
+      <div className="tx-view-grid">
         <div className="tx-view-main">
           <TransactionList
             profileId={profileId}
-            selectedTransactionId={selectedTransaction?.id ?? null}
-            onSelectTransaction={handleSelect}
+            selectedTransactionId={null}
+            onSelectTransaction={() => {}}
             refreshTrigger={refreshTrigger}
             search={search}
             onSearchChange={setSearch}
@@ -285,38 +286,41 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             pendingFilter={pendingFilter}
             onPendingCountChange={setPendingCount}
             onEditTransaction={handleEditTransaction}
+            onDeleteTransaction={handleDeleteTransaction}
           />
         </div>
-
-        {/* Recategorização: existe somente quando há seleção (sem painel vazio permanente) */}
-        {editor ? (
-          <>
-            <div className="tx-view-backdrop open" onClick={handleCloseEditor} />
-            <div className="tx-view-side open">
-              <TransactionEditor
-                profileId={profileId}
-                profileCode={profileCode}
-                transaction={editor.tx}
-                creating={editor.creating}
-                onSuccess={handleEditorSuccess}
-                onClose={handleCloseEditor}
-              />
-            </div>
-          </>
-        ) : selectedTransaction ? (
-          <>
-            <div className="tx-view-backdrop open" onClick={handleCloseCategorizer} />
-            <div className="tx-view-side open">
-              <CategorizerPanel
-                transaction={selectedTransaction}
-                activeProfileId={profileId}
-                onSuccess={handleCategorized}
-                onClose={handleCloseCategorizer}
-              />
-            </div>
-          </>
-        ) : null}
       </div>
+
+      <Modal
+        open={!!editor}
+        onClose={handleCloseEditor}
+        ariaLabel={editor?.creating ? 'Nova transação' : 'Editar transação'}
+      >
+        {editor && (
+          <TransactionEditor
+            profileId={profileId}
+            profileCode={profileCode}
+            transaction={editor.tx}
+            creating={editor.creating}
+            onSuccess={handleEditorSuccess}
+            onClose={handleCloseEditor}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!deleteTarget}
+        onClose={handleCloseDelete}
+        ariaLabel="Confirmar exclusao"
+      >
+        {deleteTarget && (
+          <DeleteConfirmation
+            transaction={deleteTarget}
+            onClose={handleCloseDelete}
+            onSuccess={handleDeleteSuccess}
+          />
+        )}
+      </Modal>
 
       <button
         type="button"

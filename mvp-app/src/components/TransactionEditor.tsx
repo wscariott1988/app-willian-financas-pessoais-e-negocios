@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import {
-  Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info,
+  Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2,
 } from 'lucide-react';
 
 interface Transaction {
@@ -147,7 +147,10 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const mounted = useRef(true);
+  const savingRef = useRef(false);
 
   const isEdit = !!transaction && !creating;
   const editId = transaction?.id ?? null;
@@ -328,7 +331,8 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     !!form.status;
 
   const doSave = async () => {
-    if (!canSave) return;
+    if (!canSave || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     setConflict(false);
@@ -390,7 +394,37 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         setError(msg || 'Erro ao salvar a transação.');
       }
     } finally {
+      savingRef.current = false;
       if (mounted.current) setSaving(false);
+    }
+  };
+
+  const doDelete = async () => {
+    if (!isEdit || !editId || !expectedUpdatedAt) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('transaction_delete', {
+        p_transaction_id: editId,
+        p_expected_updated_at: expectedUpdatedAt,
+      });
+      if (rpcError) {
+        const msg = String(rpcError.message || rpcError);
+        if (msg.includes('CONFLITO')) {
+          setError('Conflito: a transação foi modificada por outra operação. Recarregue e tente novamente.');
+        } else {
+          setError(msg || 'Erro ao excluir a transação.');
+        }
+        return;
+      }
+      setSuccessMsg('Transação excluída com sucesso!');
+      if (!mounted.current) return;
+      setTimeout(() => { if (mounted.current) onSuccess(); }, 1200);
+    } catch (err: any) {
+      console.error('Erro ao excluir transação:', err);
+      setError(String(err.message || 'Erro ao excluir a transação.'));
+    } finally {
+      if (mounted.current) setDeleting(false);
     }
   };
 
@@ -657,13 +691,67 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+          {confirmDelete && (
+            <div style={{
+              backgroundColor: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.2)',
+              borderRadius: '8px', padding: '12px 14px',
+              display: 'flex', flexDirection: 'column', gap: '10px',
+              fontSize: '13px', color: 'var(--color-danger)',
+            }}>
+              {form.kind === 'transfer' ? (
+                <>
+                  <span><strong>Transferência:</strong> ambas as pontas (saída e entrada) e o vínculo serão excluídos.</span>
+                  <span>Tem certeza que deseja excluir esta transferência? Esta ação não pode ser desfeita.</span>
+                </>
+              ) : (
+                <span>Tem certeza que deseja excluir esta transação? Esta ação não pode ser desfeita.</span>
+              )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setConfirmDelete(false)}
+                  style={{ flex: 1, padding: '8px' }}
+                  disabled={deleting}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={doDelete}
+                  style={{ flex: 1, padding: '8px', backgroundColor: 'var(--color-danger)', border: 'none' }}
+                  disabled={deleting}
+                >
+                  {deleting ? <><RefreshCw size={14} className="spin-animation" /> Excluindo...</> : <><Trash2 size={14} /> Confirmar exclusão</>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '10px', marginTop: '4px', alignItems: 'center' }}>
+            {isEdit && !confirmDelete && (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                style={{
+                  background: 'transparent', border: 'none', color: 'var(--color-danger)',
+                  padding: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                  fontSize: '13px', opacity: 0.7,
+                }}
+                title="Excluir transação"
+                disabled={saving || deleting}
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
             <button
               type="button"
               className="btn-secondary"
               onClick={onClose}
               style={{ flex: 1, padding: '12px' }}
-              disabled={saving}
+              disabled={saving || deleting}
             >
               Cancelar
             </button>
@@ -672,7 +760,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               className="btn-primary"
               onClick={doSave}
               style={{ flex: 1, padding: '12px' }}
-              disabled={!canSave || saving}
+              disabled={!canSave || saving || deleting}
             >
               {saving ? (
                 <>

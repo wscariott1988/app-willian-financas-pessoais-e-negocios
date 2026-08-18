@@ -89,6 +89,7 @@ async function fetchPeriodPage(
   const { data, error, count } = await supabase
     .from('transactions')
     .select('amount, transaction_kind', { count: 'exact' })
+    .is('deleted_at', null)
     .gte('occurred_on', range.start)
     .lte('occurred_on', range.end)
     .range(from, to);

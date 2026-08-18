@@ -210,12 +210,10 @@ describe('Início — informações reais e ausência de itens falsos', () => {
     expect(html).toContain('Sem categoria');
   });
 
-  it('10) nenhum FAB inerte é renderizado (componente nem CSS)', () => {
+  it('10) FAB de Nova transação está presente na Início', () => {
     const html = renderToString(createElement(AppShell, shellProps));
-    expect(html.toLowerCase()).not.toContain('fab');
-    expect(html).not.toContain('aria-label="Nova transação"');
-    expect(html).not.toContain('>+<');
-    expect(css.toLowerCase()).not.toContain('.fab');
+    // Dashboard agora inclui FAB + botão "Nova transação"
+    expect(html).toContain('aria-label="Nova transação"');
   });
 });
 
@@ -266,10 +264,11 @@ describe('composição desktop da Início (≥1024px / ≥1280px)', () => {
 
   it('8) nenhum conteúdo interativo é duplicado (um único conjunto no DOM)', () => {
     const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
-    // painel de recategorização renderizado uma única vez (estado vazio)
-    expect((html.match(/Nenhuma transação selecionada/g) ?? []).length).toBe(1);
+    // lista, painel de pendências e FAB renderizados uma única vez
     expect((html.match(/tx-table/g) ?? []).length).toBe(1);
     expect((html.match(/pending-panel/g) ?? []).length).toBe(1);
+    expect((html.match(/tx-fab/g) ?? []).length).toBe(1);
+    expect((html.match(/Nova transação/g) ?? []).length).toBeGreaterThanOrEqual(1);
     expect((html.match(/period-mode-btn/g) ?? []).length).toBe(3);
   });
 

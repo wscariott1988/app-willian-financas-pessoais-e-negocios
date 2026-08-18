@@ -272,7 +272,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
             fontWeight: 600,
             color: 'var(--color-text-muted)'
           }}>
-            {transaction.category_raw || 'Não informada'}
+            {(transaction as any).categories?.display_name || transaction.category_raw || 'Não informada'}
           </span>
         </div>
 

@@ -1010,6 +1010,45 @@ button {
   font-weight: 700;
 }
 
+/* ── Modal global (editor/criação) ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-content {
+  position: relative;
+  width: 92vw;
+  max-width: 560px;
+  max-height: min(90vh, 720px);
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.45);
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(24px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-content-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4);
+  flex: 1;
+  min-height: 0;
+}
+
 /* Barra de filtros compacta */
 .tx-toolbar {
   padding: 8px 10px;
@@ -1266,6 +1305,23 @@ button {
   /* Data completa no mobile; o formato curto é usado apenas no desktop restrito */
   .tx-date-short {
     display: none;
+  }
+
+  /* Modal global: bottom sheet full width no mobile */
+  .modal-overlay {
+    align-items: flex-end;
+  }
+  .modal-content {
+    width: 100vw;
+    max-width: none;
+    max-height: 92vh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border-bottom: none;
+  }
+  .modal-content::after {
+    content: '';
+    display: block;
+    height: env(safe-area-inset-bottom, 0);
   }
 }
 
