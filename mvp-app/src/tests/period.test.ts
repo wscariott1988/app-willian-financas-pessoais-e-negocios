@@ -8,6 +8,7 @@ import {
   toLocalISODate,
   formatMonthLabel,
   formatShortDate,
+  validateCustomRange,
 } from '../lib/period';
 
 // Datas locais fixas (construídas com componentes locais — nunca com UTC).
@@ -170,5 +171,39 @@ describe('formatMonthLabel / formatShortDate', () => {
 
   it('formata data curta dd/mm/aaaa', () => {
     expect(formatShortDate('2026-08-12')).toBe('12/08/2026');
+  });
+});
+
+describe('validateCustomRange', () => {
+  it('intervalo válido', () => {
+    expect(validateCustomRange('2026-06-01', '2026-06-30')).toEqual({ valid: true });
+  });
+
+  it('intervalo com mesma data', () => {
+    expect(validateCustomRange('2026-08-18', '2026-08-18')).toEqual({ valid: true });
+  });
+
+  it('rejeita data inicial vazia', () => {
+    const r = validateCustomRange('', '2026-06-30');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('data inicial');
+  });
+
+  it('rejeita data final vazia', () => {
+    const r = validateCustomRange('2026-06-01', '');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('data final');
+  });
+
+  it('rejeita início posterior ao fim', () => {
+    const r = validateCustomRange('2026-07-01', '2026-06-30');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('posterior');
+  });
+
+  it('rejeita formato inválido', () => {
+    const r = validateCustomRange('01/06/2026', '30/06/2026');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('Formato');
   });
 });

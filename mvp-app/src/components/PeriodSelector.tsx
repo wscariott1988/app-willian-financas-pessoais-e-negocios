@@ -16,6 +16,8 @@ interface PeriodSelectorProps {
   range: PeriodRange;
   onSelectionChange: (sel: PeriodSelection) => void;
   onModeChange: (mode: PeriodMode) => void;
+  onPickerOpen?: () => void;
+  onCustomReset?: () => void;
 }
 
 const MODE_LABELS: Record<PeriodMode, string> = {
@@ -30,14 +32,32 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
   range,
   onSelectionChange,
   onModeChange,
+  onPickerOpen,
+  onCustomReset,
 }) => {
   const today = new Date();
   const isCurrentMonth = (() => {
     const now = selectionFromDate(today);
     return now.year === selection.year && now.month === selection.month;
   })();
+  const isCustom = mode === 'custom';
 
   const modes: PeriodMode[] = ['up_to_today', 'today_to_end', 'full_month'];
+
+  const handleArrowClick = (delta: number) => {
+    if (isCustom) onCustomReset?.();
+    onSelectionChange(addMonths(selection, delta));
+  };
+
+  const handleMonthActual = () => {
+    if (isCustom) onCustomReset?.();
+    onSelectionChange(selectionFromDate(today));
+  };
+
+  const handleModeChange = (m: PeriodMode) => {
+    if (isCustom) onCustomReset?.();
+    onModeChange(m);
+  };
 
   return (
     <div className="period-selector">
@@ -45,7 +65,7 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
         <button
           type="button"
           className="period-nav-btn"
-          onClick={() => onSelectionChange(addMonths(selection, -1))}
+          onClick={() => handleArrowClick(-1)}
           title="Mês anterior"
           aria-label="Mês anterior"
         >
@@ -57,7 +77,7 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
         <button
           type="button"
           className="period-nav-btn"
-          onClick={() => onSelectionChange(addMonths(selection, 1))}
+          onClick={() => handleArrowClick(1)}
           title="Mês seguinte"
           aria-label="Mês seguinte"
         >
@@ -69,8 +89,8 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
         <button
           type="button"
           className="period-today-btn"
-          onClick={() => onSelectionChange(selectionFromDate(today))}
-          disabled={isCurrentMonth}
+          onClick={handleMonthActual}
+          disabled={!isCustom && isCurrentMonth}
           title="Voltar ao mês atual"
         >
           Mês atual
@@ -86,7 +106,7 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
               type="button"
               className={`period-mode-btn ${active ? 'active' : ''}`}
               aria-pressed={active}
-              onClick={() => onModeChange(m)}
+              onClick={() => handleModeChange(m)}
             >
               {MODE_LABELS[m]}
             </button>
@@ -94,13 +114,30 @@ export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
         })}
       </div>
 
-      <div className="period-range-applied">
-        <CalendarRange size={14} style={{ color: 'var(--color-primary)' }} />
-        <span className="period-range-title">Período aplicado</span>
-        <span className="period-range-dates">
-          {formatShortDate(range.start)} → {formatShortDate(range.end)}
-        </span>
-      </div>
+      {onPickerOpen ? (
+        <button
+          type="button"
+          className={`period-range-applied ${isCustom ? 'period-range-custom' : ''}`}
+          onClick={onPickerOpen}
+          aria-label="Escolher período personalizado"
+        >
+          <CalendarRange size={14} style={{ color: 'var(--color-primary)' }} />
+          <span className="period-range-title">
+            {isCustom ? 'Período personalizado' : 'Período aplicado'}
+          </span>
+          <span className="period-range-dates">
+            {formatShortDate(range.start)} → {formatShortDate(range.end)}
+          </span>
+        </button>
+      ) : (
+        <div className="period-range-applied">
+          <CalendarRange size={14} style={{ color: 'var(--color-primary)' }} />
+          <span className="period-range-title">Período aplicado</span>
+          <span className="period-range-dates">
+            {formatShortDate(range.start)} → {formatShortDate(range.end)}
+          </span>
+        </div>
+      )}
     </div>
   );
 };

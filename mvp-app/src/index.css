@@ -732,6 +732,120 @@ button {
   white-space: nowrap;
 }
 
+/* Botão de período aplicado (abre o picker) */
+button.period-range-applied {
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  min-height: 44px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+button.period-range-applied:hover {
+  border-color: var(--color-primary);
+  background: var(--bg-high);
+}
+
+button.period-range-applied:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+button.period-range-custom {
+  border-color: var(--color-primary);
+  background: rgba(var(--color-primary-rgb, 59, 130, 246), 0.06);
+}
+
+/* ============ PeriodPicker (modal de intervalo) ============ */
+
+.period-picker {
+  padding: var(--space-6);
+  max-width: 420px;
+}
+
+.period-picker-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.period-picker-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.period-picker-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.period-picker-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.period-picker-label span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.period-picker-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--color-text);
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.period-picker-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15);
+}
+
+.period-picker-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 180, 171, 0.1);
+  border: 1px solid rgba(255, 180, 171, 0.2);
+  color: var(--color-error, #dc2626);
+  font-size: 13px;
+}
+
+.period-picker-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.period-picker-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
 /* ============ Lista de transações ============ */
 
 .range-badge {
@@ -1322,6 +1436,24 @@ button {
     content: '';
     display: block;
     height: env(safe-area-inset-bottom, 0);
+  }
+
+  .period-picker {
+    padding: var(--space-4);
+  }
+
+  .period-picker-fields {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .period-picker-actions {
+    flex-direction: column;
+  }
+
+  .period-picker-btn {
+    width: 100%;
+    justify-content: center;
   }
 }
 

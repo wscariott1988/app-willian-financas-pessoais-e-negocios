@@ -6,6 +6,7 @@ import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { ComingSoonView } from '../views/ComingSoonView';
 import { useMemo, useState } from 'react';
 import { type PeriodMode, type PeriodRange, type PeriodSelection, computePeriodRange, selectionFromDate } from '../lib/period';
+import { PeriodPicker } from './PeriodPicker';
 import type { PendingFilter } from '../lib/txList';
 
 export type ViewId = 'inicio' | 'transacoes' | 'contas' | 'analises' | 'configuracoes';
@@ -24,6 +25,9 @@ export interface PeriodController {
   range: PeriodRange;
   onSelectionChange: (sel: PeriodSelection) => void;
   onModeChange: (mode: PeriodMode) => void;
+  onCustomApply: (start: string, end: string) => void;
+  onCustomReset: () => void;
+  onPickerOpen: () => void;
 }
 
 interface AppShellProps {
@@ -63,11 +67,17 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [view, setView] = useState<ViewId>(initialView);
   const [selection, setSelection] = useState<PeriodSelection>(() => selectionFromDate(new Date()));
   const [mode, setMode] = useState<PeriodMode>('up_to_today');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
   // Modo da view Transações preservado durante a navegação interna (sessão ativa)
   const [txMode, setTxMode] = useState<TxMode>('period');
   const [txPendingFilter, setTxPendingFilter] = useState<PendingFilter>('all');
 
-  const range = useMemo(() => computePeriodRange(selection, mode, new Date()), [selection, mode]);
+  const monthRange = useMemo(() => computePeriodRange(selection, mode, new Date()), [selection, mode]);
+  const range: PeriodRange = mode === 'custom' && customStart && customEnd
+    ? { start: customStart, end: customEnd }
+    : monthRange;
 
   // Cards de pendências da Início: abrem Transações na fila global filtrada.
   const handleOpenPending = (filter: 'review' | 'noCategory') => {
@@ -76,12 +86,27 @@ export const AppShell: React.FC<AppShellProps> = ({
     setView('transacoes');
   };
 
+  const handleCustomApply = (start: string, end: string) => {
+    setCustomStart(start);
+    setCustomEnd(end);
+    setMode('custom');
+    setPeriodPickerOpen(false);
+  };
+
+  const handleCustomReset = () => {
+    setMode('up_to_today');
+    setSelection(selectionFromDate(new Date()));
+  };
+
   const period: PeriodController = {
     selection,
     mode,
     range,
     onSelectionChange: setSelection,
     onModeChange: setMode,
+    onCustomApply: handleCustomApply,
+    onCustomReset: handleCustomReset,
+    onPickerOpen: () => setPeriodPickerOpen(true),
   };
 
   const switcherProps = {
@@ -162,6 +187,14 @@ export const AppShell: React.FC<AppShellProps> = ({
       <nav className="bottom-nav" aria-label="Navegação principal">
         {NAV_ITEMS.map((item) => navItem(item, 'bottom-nav-item'))}
       </nav>
+
+      <PeriodPicker
+        open={periodPickerOpen}
+        onClose={() => setPeriodPickerOpen(false)}
+        onApply={handleCustomApply}
+        currentStart={mode === 'custom' ? customStart : undefined}
+        currentEnd={mode === 'custom' ? customEnd : undefined}
+      />
     </div>
   );
 };

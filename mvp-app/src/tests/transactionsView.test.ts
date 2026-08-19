@@ -9,6 +9,8 @@ import { TransactionList } from '../components/TransactionList';
 import { CategorizerPanel } from '../components/CategorizerPanel';
 import { Dashboard } from '../components/Dashboard';
 import { TransactionsView } from '../views/TransactionsView';
+import { PeriodSelector } from '../components/PeriodSelector';
+import { PeriodPicker } from '../components/PeriodPicker';
 import { buildCategoryQuery } from '../lib/categoryQuery';
 
 vi.mock('../supabaseClient', () => ({ supabase: {} }));
@@ -61,6 +63,9 @@ const period = {
   range: { start: '2026-08-01', end: '2026-08-12' },
   onSelectionChange: NOOP,
   onModeChange: NOOP,
+  onCustomApply: NOOP,
+  onCustomReset: NOOP,
+  onPickerOpen: NOOP,
 };
 const shellProps = {
   profileId: '11111111-1111-1111-1111-111111111111',
@@ -906,5 +911,219 @@ describe('lapis e lixeira na lista', () => {
     expect(dash).toContain('handleDeleteSuccess');
     expect(dash).toContain('setDeleteTarget(null)');
     expect(dash).toContain('setRefreshTrigger');
+  });
+});
+
+describe('seletor de período personalizado', () => {
+  it('1) PeriodPicker existe e renderiza campos de data', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain("ariaLabel=\"Escolher período\"");
+    expect(src).toContain('type="date"');
+    expect(src).toContain('Data inicial');
+    expect(src).toContain('Data final');
+    expect(src).toContain('Aplicar');
+    expect(src).toContain('Cancelar');
+    expect(src).toContain('Voltar ao mês atual');
+  });
+
+  it('2) PeriodPicker rejeita início posterior ao fim e mostra erro', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('validateCustomRange');
+    expect(src).toContain('setError(result.error');
+    expect(src).toContain('role="alert"');
+  });
+
+  it('3) PeriodPicker não fecha o modal ao mostrar erro', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('if (!result.valid)');
+    expect(src).toContain('return');
+  });
+
+  it('4) PeriodPicker chama onApply com start e end ao validar', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('onApply(start, end)');
+  });
+
+  it('5) Voltar ao mês atual chama onApply com primeiro dia até hoje', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('handleReset');
+    expect(src).toContain('01');
+  });
+
+  it('6) PeriodPicker usa Modal global', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('<Modal');
+    expect(src).toContain('open={open}');
+  });
+
+  it('7) AppShell gerencia periodPickerOpen e customStart/customEnd', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('periodPickerOpen');
+    expect(src).toContain('customStart');
+    expect(src).toContain('customEnd');
+    expect(src).toContain('setPeriodPickerOpen');
+  });
+
+  it('8) AppShell handleCustomApply define datas e fecha o picker', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('handleCustomApply');
+    expect(src).toContain("setMode('custom')");
+    expect(src).toContain('setPeriodPickerOpen(false)');
+  });
+
+  it('9) AppShell handleCustomReset volta para up_to_today', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('handleCustomReset');
+    expect(src).toContain("setMode('up_to_today')");
+  });
+
+  it('10) AppShell range é custom quando mode=custom e datas existem', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain("mode === 'custom'");
+    expect(src).toContain('customStart');
+    expect(src).toContain('customEnd');
+  });
+
+  it('11) PeriodController inclui onCustomApply, onCustomReset e onPickerOpen', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('onCustomApply: handleCustomApply');
+    expect(src).toContain('onCustomReset: handleCustomReset');
+    expect(src).toContain('onPickerOpen:');
+  });
+
+  it('12) Dashboard passa onPickerOpen e onCustomReset ao PeriodSelector', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('onPickerOpen={period.onPickerOpen}');
+    expect(src).toContain('onCustomReset={period.onCustomReset}');
+  });
+
+  it('13) TransactionsView passa onPickerOpen e onCustomReset ao PeriodSelector', () => {
+    const src = readSource('views/TransactionsView.tsx');
+    expect(src).toContain('onPickerOpen={period.onPickerOpen}');
+    expect(src).toContain('onCustomReset={period.onCustomReset}');
+  });
+
+  it('14) PeriodSelector renderiza botão clicável quando onPickerOpen existe', () => {
+    const html = renderToString(
+      createElement(PeriodSelector, {
+        selection: period.selection,
+        mode: period.mode,
+        range: period.range,
+        onSelectionChange: NOOP,
+        onModeChange: NOOP,
+        onPickerOpen: NOOP,
+      }),
+    );
+    expect(html).toContain('aria-label="Escolher período personalizado"');
+    expect(html).toContain('button');
+  });
+
+  it('15) PeriodSelector mostra período personalizado quando mode=custom', () => {
+    const html = renderToString(
+      createElement(PeriodSelector, {
+        selection: period.selection,
+        mode: 'custom',
+        range: { start: '2026-03-01', end: '2026-06-15' },
+        onSelectionChange: NOOP,
+        onModeChange: NOOP,
+        onPickerOpen: NOOP,
+      }),
+    );
+    expect(html).toContain('Período personalizado');
+    expect(html).toContain('01/03/2026');
+    expect(html).toContain('15/06/2026');
+  });
+
+  it('16) PeriodSelector sem onPickerOpen mostra div estática', () => {
+    const html = renderToString(
+      createElement(PeriodSelector, {
+        selection: period.selection,
+        mode: period.mode,
+        range: period.range,
+        onSelectionChange: NOOP,
+        onModeChange: NOOP,
+      }),
+    );
+    expect(html).toContain('Período aplicado');
+    expect(html).not.toContain('Escolher período personalizado');
+  });
+
+  it('17) setas de mês chamam onCustomReset quando em modo custom', () => {
+    const src = readSource('components/PeriodSelector.tsx');
+    expect(src).toContain('if (isCustom) onCustomReset');
+  });
+
+  it('18) Mês atual chama onCustomReset quando em modo custom', () => {
+    const src = readSource('components/PeriodSelector.tsx');
+    expect(src).toContain('handleMonthActual');
+    expect(src).toContain('if (isCustom) onCustomReset');
+  });
+
+  it('19) botões de modo mensal chamam onCustomReset quando em custom', () => {
+    const src = readSource('components/PeriodSelector.tsx');
+    expect(src).toContain('handleModeChange');
+    expect(src).toContain('if (isCustom) onCustomReset');
+  });
+
+  it('20) TransactionsView setas mobile resetam modo custom', () => {
+    const src = readSource('views/TransactionsView.tsx');
+    expect(src).toContain("period.mode === 'custom'");
+    expect(src).toContain('period.onCustomReset()');
+  });
+
+  it('21) TransactionsView mostra "Personalizado" no label quando mode=custom', () => {
+    const src = readSource('views/TransactionsView.tsx');
+    expect(src).toContain("mode === 'custom'");
+    expect(src).toContain("'Personalizado'");
+  });
+
+  it('22) Pendências não exibe seletor de período', () => {
+    const html = renderToString(
+      createElement(TransactionsView, {
+        ...{
+          profileId: shellProps.profileId,
+          profileCode: 'personal',
+          period,
+          mode: 'pending',
+          onModeChange: NOOP,
+          pendingFilter: 'all',
+          onPendingFilterChange: NOOP,
+        },
+      }),
+    );
+    expect(html).not.toContain('period-range-applied');
+    expect(html).not.toContain('tx-period-bar');
+  });
+
+  it('23) CSS tem estilos para period-range-custom e period-picker', () => {
+    expect(css).toContain('period-range-custom');
+    expect(css).toContain('period-picker');
+    expect(css).toContain('period-picker-fields');
+    expect(css).toContain('period-picker-error');
+    expect(css).toContain('period-picker-actions');
+  });
+
+  it('24) PeriodPicker inputs possuem aria-label', () => {
+    const src = readSource('components/PeriodPicker.tsx');
+    expect(src).toContain('aria-label="Data inicial"');
+    expect(src).toContain('aria-label="Data final"');
+  });
+
+  it('25) PeriodPicker inputs têm área mínima 44px', () => {
+    expect(css).toContain('period-picker-input');
+    expect(css).toContain('min-height: 44px');
+  });
+
+  it('26) botões do PeriodPicker têm área mínima 44px', () => {
+    expect(css).toContain('period-picker-btn');
+    expect(css).toContain('min-width: 44px');
+  });
+
+  it('27) navegação Início→Transações preserva o período custom', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('customStart');
+    expect(src).toContain('customEnd');
+    expect(src).toContain('mode');
+    expect(src).not.toMatch(/setCustomStart\(null\)/);
   });
 });

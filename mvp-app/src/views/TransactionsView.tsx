@@ -124,7 +124,9 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [editor, periodOpen]);
 
-  const modeLabel = PERIOD_MODES.find((m) => m.id === period.mode)?.label ?? '';
+  const modeLabel = period.mode === 'custom'
+    ? 'Personalizado'
+    : PERIOD_MODES.find((m) => m.id === period.mode)?.label ?? '';
   const isPending = mode === 'pending';
 
   return (
@@ -195,7 +197,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             <button
               type="button"
               className="tx-period-nav"
-              onClick={() => period.onSelectionChange(addMonths(period.selection, -1))}
+              onClick={() => {
+                if (period.mode === 'custom') period.onCustomReset();
+                period.onSelectionChange(addMonths(period.selection, -1));
+              }}
               aria-label="Mês anterior"
               title="Mês anterior"
             >
@@ -208,7 +213,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             <button
               type="button"
               className="tx-period-nav"
-              onClick={() => period.onSelectionChange(addMonths(period.selection, 1))}
+              onClick={() => {
+                if (period.mode === 'custom') period.onCustomReset();
+                period.onSelectionChange(addMonths(period.selection, 1));
+              }}
               aria-label="Mês seguinte"
               title="Mês seguinte"
             >
@@ -248,6 +256,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                   range={period.range}
                   onSelectionChange={period.onSelectionChange}
                   onModeChange={period.onModeChange}
+                  onPickerOpen={period.onPickerOpen}
+                  onCustomReset={period.onCustomReset}
                 />
               </div>
             </div>
@@ -260,6 +270,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           range={period.range}
           onSelectionChange={period.onSelectionChange}
           onModeChange={period.onModeChange}
+          onPickerOpen={period.onPickerOpen}
+          onCustomReset={period.onCustomReset}
         />
       )}
 

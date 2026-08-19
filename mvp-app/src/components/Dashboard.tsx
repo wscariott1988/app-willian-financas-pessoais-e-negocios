@@ -174,6 +174,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         range={period.range}
         onSelectionChange={period.onSelectionChange}
         onModeChange={period.onModeChange}
+        onPickerOpen={period.onPickerOpen}
+        onCustomReset={period.onCustomReset}
       />
 
       {/* Resumo real do período. Resultado = receitas − despesas (não é saldo). */}

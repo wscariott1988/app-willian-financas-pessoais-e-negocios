@@ -2,7 +2,7 @@
 // Todas as datas são LOCAIS: construídas com new Date(y, m, d) e serializadas
 // manualmente (nunca toISOString/toJSON, que deslocariam para UTC).
 
-export type PeriodMode = 'up_to_today' | 'today_to_end' | 'full_month';
+export type PeriodMode = 'up_to_today' | 'today_to_end' | 'full_month' | 'custom';
 
 export interface PeriodSelection {
   year: number;
@@ -84,4 +84,24 @@ export function formatShortDate(iso: string): string {
   const parts = iso.split('-');
   if (parts.length !== 3) return iso;
   return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+export interface CustomRangeValidation {
+  valid: boolean;
+  error?: string;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function validateCustomRange(start: string, end: string): CustomRangeValidation {
+  if (!start || !end) {
+    return { valid: false, error: 'Informe a data inicial e a data final.' };
+  }
+  if (!ISO_DATE_RE.test(start) || !ISO_DATE_RE.test(end)) {
+    return { valid: false, error: 'Formato de data inválido. Use AAAA-MM-DD.' };
+  }
+  if (start > end) {
+    return { valid: false, error: 'A data inicial não pode ser posterior à data final.' };
+  }
+  return { valid: true };
 }
