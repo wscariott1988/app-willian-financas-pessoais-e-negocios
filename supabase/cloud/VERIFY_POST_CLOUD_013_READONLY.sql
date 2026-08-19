@@ -76,7 +76,7 @@ SELECT 4 AS ord, 'stg_013_fn_delete' AS stage,
            'security_definer', (SELECT p.prosecdef FROM pg_proc p
                                  JOIN pg_namespace n ON n.oid=p.pronamespace
                                 WHERE n.nspname='app' AND p.proname='transaction_delete'),
-           'args', (SELECT pg_get_function_identity_arguments(p.oid)
+           'args', (SELECT oidvectortypes(p.proargtypes)
                      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
                     WHERE n.nspname='app' AND p.proname='transaction_delete')
        ) AS detail
@@ -97,7 +97,7 @@ SELECT 5 AS ord, 'stg_013_wrapper_delete' AS stage,
            'security_invoker', NOT (SELECT p.prosecdef FROM pg_proc p
                                      JOIN pg_namespace n ON n.oid=p.pronamespace
                                     WHERE n.nspname='public' AND p.proname='transaction_delete'),
-           'args', (SELECT pg_get_function_identity_arguments(p.oid)
+           'args', (SELECT oidvectortypes(p.proargtypes)
                      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
                     WHERE n.nspname='public' AND p.proname='transaction_delete')
        ) AS detail
@@ -108,29 +108,29 @@ UNION ALL
 SELECT 6 AS ord, 'stg_013_grants' AS stage,
        CASE WHEN
          has_function_privilege('authenticated',
-           (SELECT 'app.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+           (SELECT 'app.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
             WHERE n.nspname='app' AND p.proname='transaction_delete'), 'EXECUTE')
          AND has_function_privilege('authenticated',
-           (SELECT 'public.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+           (SELECT 'public.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
             WHERE n.nspname='public' AND p.proname='transaction_delete'), 'EXECUTE')
          AND NOT has_function_privilege('anon',
-           (SELECT 'public.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+           (SELECT 'public.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
             WHERE n.nspname='public' AND p.proname='transaction_delete'), 'EXECUTE')
             THEN 'PASS' ELSE 'BLOCKED' END AS status,
        jsonb_build_object(
            'app_exec_auth', has_function_privilege('authenticated',
-             (SELECT 'app.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+             (SELECT 'app.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
               FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
               WHERE n.nspname='app' AND p.proname='transaction_delete'), 'EXECUTE'),
            'public_exec_auth', has_function_privilege('authenticated',
-             (SELECT 'public.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+             (SELECT 'public.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
               FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
               WHERE n.nspname='public' AND p.proname='transaction_delete'), 'EXECUTE'),
            'public_exec_anon', has_function_privilege('anon',
-             (SELECT 'public.transaction_delete(' || pg_get_function_identity_arguments(p.oid) || ')'
+             (SELECT 'public.transaction_delete(' || oidvectortypes(p.proargtypes) || ')'
               FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
               WHERE n.nspname='public' AND p.proname='transaction_delete'), 'EXECUTE')
        ) AS detail
