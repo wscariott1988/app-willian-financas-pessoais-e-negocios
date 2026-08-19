@@ -848,20 +848,6 @@ button.period-range-custom {
 
 /* ============ Lista de transações ============ */
 
-.range-badge {
-  flex: 1 1 220px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  min-height: var(--touch-min);
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  color: var(--color-text);
-}
-
 .tx-table {
   width: 100%;
   border-collapse: collapse;
@@ -1004,11 +990,6 @@ button.period-range-custom {
   font-weight: 500;
   color: var(--color-text-muted);
   font-size: 12px;
-}
-
-/* No modo Pendências o intervalo do período não se aplica */
-.tx-list-pending .range-badge {
-  display: none;
 }
 
 /* Barra compacta de período (mobile <768px) */
@@ -1404,10 +1385,6 @@ button.period-range-custom {
 
   /* Conta e intervalo ficam dentro do painel de filtros; só busca + Filtros na barra */
   .tx-account-select {
-    display: none;
-  }
-
-  .range-badge {
     display: none;
   }
 
@@ -2007,10 +1984,6 @@ button.period-range-custom {
 
   .tx-account-select {
     display: block;
-  }
-
-  .range-badge {
-    display: inline-flex;
   }
 }
 

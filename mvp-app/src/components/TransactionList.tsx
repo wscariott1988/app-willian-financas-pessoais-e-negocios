@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
-import { Search, Calendar, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { formatShortDate } from '../lib/period';
+import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
 import {
   TX_PAGE_SIZE,
   buildPendingTxOptions,
@@ -297,15 +296,6 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="range-badge" title="Intervalo de datas aplicado pelo seletor global de período">
-            <Calendar size={18} style={{ color: 'var(--color-primary)' }} />
-            <span>
-              {startDate && endDate
-                ? `${formatShortDate(startDate)} → ${formatShortDate(endDate)}`
-                : 'Período completo'}
-            </span>
           </div>
 
           <button
