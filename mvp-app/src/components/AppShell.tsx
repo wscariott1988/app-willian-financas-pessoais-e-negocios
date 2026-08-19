@@ -4,6 +4,7 @@ import { ProfileSwitcher } from './ProfileSwitcher';
 import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { ComingSoonView } from '../views/ComingSoonView';
+import { SettingsView } from '../views/SettingsView';
 import { useMemo, useState } from 'react';
 import { type PeriodMode, type PeriodRange, type PeriodSelection, computePeriodRange, selectionFromDate } from '../lib/period';
 import { PeriodPicker } from './PeriodPicker';
@@ -185,7 +186,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           )}
           {view === 'contas' && <ComingSoonView {...COMING_SOON.contas} icon={Landmark} />}
           {view === 'analises' && <ComingSoonView {...COMING_SOON.analises} icon={BarChart3} />}
-          {view === 'configuracoes' && <ComingSoonView {...COMING_SOON.configuracoes} icon={Settings} />}
+          {view === 'configuracoes' && <SettingsView profileId={profileId} />}
         </main>
       </div>
 

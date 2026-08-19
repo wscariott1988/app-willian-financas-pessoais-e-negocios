@@ -1,11 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { ClipboardList, RefreshCw } from 'lucide-react';
+import { ClipboardList, RefreshCw, AlertCircle, ChevronDown } from 'lucide-react';
 
 interface AuditLogEntry {
   id: string;
-  transaction_id: string;
-  queue_item_id: string | null;
   from_category_id: string | null;
   to_category_id: string;
   reason: string | null;
@@ -17,65 +15,74 @@ interface AuditLogEntry {
   } | null;
 }
 
-interface Category {
-  id: string;
-  display_name: string;
-  canonical_path: string | null;
-}
-
 interface AuditLogsProps {
   refreshTrigger: number;
   profileId: string;
 }
 
+const PAGE_SIZE = 10;
+
 export const AuditLogs: React.FC<AuditLogsProps> = ({ refreshTrigger, profileId }) => {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [categories, setCategories] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
 
-  // Load all categories for local mapping of category names
-  const fetchAllCategories = async () => {
+  const fetchAllCategories = useCallback(async () => {
     try {
-      const { data } = await supabase.from('categories').select('id, display_name, canonical_path');
+      const { data } = await supabase.from('categories').select('id, display_name');
       if (data) {
         const mapping: Record<string, string> = {};
         data.forEach((cat: any) => {
-          mapping[cat.id] = cat.canonical_path || cat.display_name;
+          mapping[cat.id] = cat.display_name;
         });
         setCategories(mapping);
       }
-    } catch (err) {
-      console.error('Erro ao carregar categorias para mapeamento de logs:', err);
+    } catch {
+      // Categories are optional enrichment; ignore failures silently
     }
-  };
+  }, []);
 
-  const fetchLogs = async () => {
-    setLoading(true);
+  const fetchLogs = useCallback(async (offset = 0, append = false) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+
+    setError(null);
     try {
-      // Query standard audit log joined with transactions, scoped to the profile
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('category_assignment_audit')
-        .select('*, transactions(raw_description, amount, transaction_kind)')
+        .select('id, from_category_id, to_category_id, reason, created_at, transactions(raw_description, amount, transaction_kind)')
         .order('created_at', { ascending: false })
-        .limit(10);
+        .range(offset, offset + PAGE_SIZE - 1);
 
-      if (error) throw error;
-      // A RLS (audit_select_own) já limita os logs ao perfil autenticado no servidor.
-      setLogs(data || []);
-    } catch (err) {
-      console.error('Erro ao buscar logs de auditoria:', err);
+      if (fetchError) throw fetchError;
+
+      const rows = (data ?? []) as AuditLogEntry[];
+      setLogs((prev) => append ? [...prev, ...rows] : rows);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (err: unknown) {
+      if (import.meta.env.DEV) console.error('[Erro técnico auditoria]', err);
+      setError('Não foi possível carregar o histórico de alterações. Tente novamente em instantes.');
+      if (!append) setLogs([]);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    const initialize = async () => {
+    const init = async () => {
       await fetchAllCategories();
-      await fetchLogs();
+      await fetchLogs(0, false);
     };
-    initialize();
-  }, [refreshTrigger]);
+    init();
+  }, [refreshTrigger, fetchAllCategories, fetchLogs]);
+
+  const handleLoadMore = () => {
+    fetchLogs(logs.length, true);
+  };
 
   const formatAmount = (val?: string, kind?: string) => {
     if (!val) return '';
@@ -90,60 +97,86 @@ export const AuditLogs: React.FC<AuditLogsProps> = ({ refreshTrigger, profileId 
   };
 
   return (
-    <div className="glass" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <ClipboardList size={18} style={{ color: 'var(--color-primary)' }} />
-        <h3 style={{ fontSize: '15px', fontWeight: 800 }}>Logs Recentes de Auditoria</h3>
+    <div className="settings-audit">
+      <div className="settings-audit-header">
+        <ClipboardList size={18} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+        <div>
+          <h2 className="settings-audit-title">Histórico de alterações</h2>
+          <p className="settings-audit-desc">
+            Consulte as alterações realizadas nas suas transações e categorias.
+          </p>
+        </div>
       </div>
 
-      <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div className="settings-audit-list">
         {loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '20px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
+          <div className="settings-audit-state">
             <RefreshCw size={16} className="spin-animation" />
-            Carregando auditorias...
+            <span>Carregando...</span>
+          </div>
+        ) : error ? (
+          <div className="settings-audit-state settings-audit-error">
+            <AlertCircle size={16} />
+            <span>{error}</span>
           </div>
         ) : logs.length === 0 ? (
-          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '13px' }}>
-            Nenhuma atribuição de auditoria registrada ainda.
+          <div className="settings-audit-state">
+            <ClipboardList size={18} style={{ opacity: 0.4 }} />
+            <span>Nenhuma alteração registrada.</span>
           </div>
         ) : (
-          logs.map((log) => (
-            <div key={log.id} style={{
-              backgroundColor: 'rgba(255,255,255,0.01)',
-              border: '1px solid var(--border-card)',
-              borderRadius: '8px',
-              padding: '12px',
-              fontSize: '12px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '6px',
-              animation: 'fadeIn 0.2s ease'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                <span>{log.transactions?.raw_description || 'Transação'}</span>
-                <span style={{ color: log.transactions?.transaction_kind === 'expense' ? 'var(--color-danger)' : 'var(--color-success)' }}>
-                  {formatAmount(log.transactions?.amount, log.transactions?.transaction_kind)}
-                </span>
-              </div>
+          <>
+            {logs.map((log) => (
+              <div key={log.id} className="settings-audit-entry">
+                <div className="settings-audit-entry-top">
+                  <span className="settings-audit-entry-desc">
+                    {log.transactions?.raw_description || 'Transação'}
+                  </span>
+                  <span
+                    className="settings-audit-entry-amount"
+                    style={{
+                      color: log.transactions?.transaction_kind === 'expense'
+                        ? 'var(--color-danger)'
+                        : 'var(--color-success)',
+                    }}
+                  >
+                    {formatAmount(log.transactions?.amount, log.transactions?.transaction_kind)}
+                  </span>
+                </div>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center', color: 'var(--color-text-muted)' }}>
-                <span>De:</span>
-                <span style={{ textDecoration: log.from_category_id ? 'line-through' : 'none', color: '#fff', fontWeight: 500 }}>
-                  {log.from_category_id ? (categories[log.from_category_id] || 'Categoria Antiga') : 'Sem Categoria'}
-                </span>
-                <span style={{ margin: '0 4px' }}>→</span>
-                <span>Para:</span>
-                <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>
-                  {categories[log.to_category_id] || 'Categoria Nova'}
-                </span>
-              </div>
+                <div className="settings-audit-entry-change">
+                  <span className="settings-audit-from">
+                    {log.from_category_id ? (categories[log.from_category_id] || 'Categoria anterior') : 'Sem categoria'}
+                  </span>
+                  <span className="settings-audit-arrow">→</span>
+                  <span className="settings-audit-to">
+                    {categories[log.to_category_id] || 'Categoria nova'}
+                  </span>
+                </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--color-text-muted)', marginTop: '4px' }}>
-                <span>Motivo: {log.reason}</span>
-                <span>{formatDate(log.created_at)}</span>
+                <div className="settings-audit-entry-footer">
+                  {log.reason && <span>Motivo: {log.reason}</span>}
+                  <span>{formatDate(log.created_at)}</span>
+                </div>
               </div>
-            </div>
-          ))
+            ))}
+
+            {hasMore && (
+              <button
+                type="button"
+                className="settings-audit-load-more"
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore ? (
+                  <RefreshCw size={14} className="spin-animation" />
+                ) : (
+                  <ChevronDown size={14} />
+                )}
+                {loadingMore ? 'Carregando...' : 'Carregar mais'}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

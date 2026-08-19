@@ -4,7 +4,6 @@ import { RecentTransactions } from './RecentTransactions';
 import { TransactionEditor } from './TransactionEditor';
 import { DeleteConfirmation } from './DeleteConfirmation';
 import { Modal } from './Modal';
-import { AuditLogs } from './AuditLogs';
 import { PeriodSelector } from './PeriodSelector';
 import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
@@ -271,7 +270,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         </div>
       </div>
 
-      {/* Área operacional: transações recentes + auditoria */}
+      {/* Área operacional: transações recentes */}
       <div className="dash-main">
         <RecentTransactions
           profileId={profileId}
@@ -281,7 +280,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
           onDeleteTransaction={handleDeleteTransaction}
           onNavigateToTransactions={() => onNavigateToTransactions?.()}
         />
-        <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
       </div>
 
       <Modal
