@@ -70,6 +70,8 @@ export function computePeriodRange(
       return { start: inCurrentMonth ? dayOfToday : dayOfCut, end: endOfMonth };
     case 'full_month':
       return { start: startOfMonth, end: endOfMonth };
+    case 'custom':
+      return { start: startOfMonth, end: endOfMonth };
   }
 }
 

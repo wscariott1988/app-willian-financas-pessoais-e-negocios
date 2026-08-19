@@ -61,6 +61,9 @@ const period = {
   range: { start: '2026-08-01', end: '2026-08-12' },
   onSelectionChange: NOOP,
   onModeChange: NOOP,
+  onCustomApply: NOOP,
+  onCustomReset: NOOP,
+  onPickerOpen: NOOP,
 };
 
 const shellProps = {

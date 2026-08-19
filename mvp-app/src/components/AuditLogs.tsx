@@ -59,7 +59,7 @@ export const AuditLogs: React.FC<AuditLogsProps> = ({ refreshTrigger, profileId 
 
       if (fetchError) throw fetchError;
 
-      const rows = (data ?? []) as AuditLogEntry[];
+      const rows = (data ?? []) as unknown as AuditLogEntry[];
       setLogs((prev) => append ? [...prev, ...rows] : rows);
       setHasMore(rows.length === PAGE_SIZE);
     } catch (err: unknown) {

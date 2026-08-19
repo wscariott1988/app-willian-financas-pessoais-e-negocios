@@ -24,6 +24,7 @@ const MODE_LABELS: Record<PeriodMode, string> = {
   up_to_today: 'Até hoje',
   today_to_end: 'Até o fim do mês',
   full_month: 'Mês todo',
+  custom: 'Personalizado',
 };
 
 export const PeriodSelector: React.FC<PeriodSelectorProps> = ({
