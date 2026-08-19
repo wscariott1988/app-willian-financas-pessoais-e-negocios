@@ -480,6 +480,133 @@ button {
   min-width: 0;
 }
 
+/* ============ Transações recentes (Início) ============ */
+
+.recent-tx-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recent-tx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recent-tx-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.recent-tx-view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  min-height: 36px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.recent-tx-view-all:hover {
+  background: var(--color-primary);
+  color: var(--on-primary, #fff);
+}
+
+.recent-tx-view-all:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.recent-tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-tx-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 52px;
+  background: var(--bg-card, var(--bg-primary));
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  transition: background 0.12s;
+}
+
+.recent-tx-row:hover {
+  background: var(--bg-high);
+}
+
+.recent-tx-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-tx-desc {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-tx-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-tx-value {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.recent-tx-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.recent-tx-empty,
+.recent-tx-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 16px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.recent-tx-error {
+  color: var(--color-error);
+  background: rgba(255, 180, 171, 0.08);
+  border: 1px solid rgba(255, 180, 171, 0.2);
+  border-radius: var(--radius-sm);
+}
+
 /* ============ Resumo da Início (mobile: aberto, sem caixas) ============ */
 
 .summary-grid {
@@ -1396,6 +1523,25 @@ button.period-range-custom {
   /* Data completa no mobile; o formato curto é usado apenas no desktop restrito */
   .tx-date-short {
     display: none;
+  }
+
+  /* Transações recentes: mobile */
+  .recent-tx-row {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 12px 14px;
+  }
+
+  .recent-tx-info {
+    flex: 1 1 100%;
+  }
+
+  .recent-tx-value {
+    flex: 1 1 auto;
+  }
+
+  .recent-tx-actions {
+    flex-shrink: 1;
   }
 
   /* Modal global: bottom sheet full width no mobile */

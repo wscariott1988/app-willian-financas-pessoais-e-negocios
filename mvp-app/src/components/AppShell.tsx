@@ -86,6 +86,11 @@ export const AppShell: React.FC<AppShellProps> = ({
     setView('transacoes');
   };
 
+  const handleNavigateToTransactions = () => {
+    setTxMode('period');
+    setView('transacoes');
+  };
+
   const handleCustomApply = (start: string, end: string) => {
     setCustomStart(start);
     setCustomEnd(end);
@@ -163,6 +168,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               profileCode={profileCode}
               period={period}
               onOpenPending={handleOpenPending}
+              onNavigateToTransactions={handleNavigateToTransactions}
             />
           )}
           {view === 'transacoes' && (

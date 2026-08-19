@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { TransactionList } from './TransactionList';
+import { RecentTransactions } from './RecentTransactions';
 import { TransactionEditor } from './TransactionEditor';
 import { DeleteConfirmation } from './DeleteConfirmation';
 import { Modal } from './Modal';
 import { AuditLogs } from './AuditLogs';
 import { PeriodSelector } from './PeriodSelector';
-import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, FilterX, Plus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
 import type { PeriodController } from './AppShell';
 
@@ -31,6 +31,7 @@ interface DashboardProps {
   profileCode?: 'personal' | 'business';
   period: PeriodController;
   onOpenPending?: (filter: 'review' | 'noCategory') => void;
+  onNavigateToTransactions?: () => void;
 }
 
 interface EditorState {
@@ -49,16 +50,10 @@ interface Summary {
   error: string | null;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending, onNavigateToTransactions }) => {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-
-  // A lista abre sem filtro de status nem de categoria (período vem do seletor global).
-  const [search, setSearch] = useState('');
-  const [selectedAccount, setSelectedAccount] = useState('');
-  const [filterNoCategory, setFilterNoCategory] = useState(false);
-  const [filterReviewOnly, setFilterReviewOnly] = useState(false);
 
   const [summary, setSummary] = useState<Summary>({
     income: 0, expense: 0, balance: 0, reviewCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
@@ -125,13 +120,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
 
   const formatBRL = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-  const filtersActive = filterReviewOnly || filterNoCategory;
-
-  const handleClearFilters = () => {
-    setFilterReviewOnly(false);
-    setFilterNoCategory(false);
-  };
 
   const isProd = import.meta.env.PROD;
   const rawUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '';
@@ -251,20 +239,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
 
       {/* Limpar filtros, erro de consulta e ambiente (compactos) */}
       <div className="dash-env">
-        {filtersActive && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              className="btn-secondary"
-              onClick={handleClearFilters}
-              style={{ padding: '8px 14px', fontSize: '12px' }}
-              title="Remove os filtros de status e categoria (mantém mês, período, busca e conta)"
-            >
-              <FilterX size={14} />
-              Limpar filtros
-            </button>
-          </div>
-        )}
-
         {summary.error && (
           <div style={{
             display: 'flex',
@@ -297,27 +271,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         </div>
       </div>
 
-      {/* Área operacional: coluna principal (lista + auditoria) */}
+      {/* Área operacional: transações recentes + auditoria */}
       <div className="dash-main">
-        <TransactionList
+        <RecentTransactions
           profileId={profileId}
-          selectedTransactionId={null}
-          onSelectTransaction={() => {}}
+          range={range}
           refreshTrigger={refreshTrigger}
-          search={search}
-          onSearchChange={setSearch}
-          selectedAccount={selectedAccount}
-          onAccountChange={setSelectedAccount}
-          startDate={range.start}
-          onStartDateChange={() => {}}
-          endDate={range.end}
-          onEndDateChange={() => {}}
-          filterNoCategory={filterNoCategory}
-          onFilterNoCategoryChange={setFilterNoCategory}
-          filterReviewOnly={filterReviewOnly}
-          onFilterReviewOnlyChange={setFilterReviewOnly}
           onEditTransaction={handleEditTransaction}
           onDeleteTransaction={handleDeleteTransaction}
+          onNavigateToTransactions={() => onNavigateToTransactions?.()}
         />
         <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
       </div>

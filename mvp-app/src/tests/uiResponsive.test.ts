@@ -264,8 +264,8 @@ describe('composição desktop da Início (≥1024px / ≥1280px)', () => {
 
   it('8) nenhum conteúdo interativo é duplicado (um único conjunto no DOM)', () => {
     const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
-    // lista, painel de pendências e FAB renderizados uma única vez
-    expect((html.match(/tx-table/g) ?? []).length).toBe(1);
+    // transações recentes, painel de pendências e FAB renderizados uma única vez
+    expect((html.match(/recent-tx-section/g) ?? []).length).toBe(1);
     expect((html.match(/pending-panel/g) ?? []).length).toBe(1);
     expect((html.match(/tx-fab/g) ?? []).length).toBe(1);
     expect((html.match(/Nova transação/g) ?? []).length).toBeGreaterThanOrEqual(1);

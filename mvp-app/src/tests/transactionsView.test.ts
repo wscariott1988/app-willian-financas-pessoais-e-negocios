@@ -1127,3 +1127,131 @@ describe('seletor de período personalizado', () => {
     expect(src).not.toMatch(/setCustomStart\(null\)/);
   });
 });
+
+describe('Diferenciação Início ↔ Transações', () => {
+  it('28) RecentTransactions limita a 5 transações (MAX_RECENT = 5)', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain('MAX_RECENT = 5');
+  });
+
+  it('29) RecentTransactions ordena por occurred_on decrescente', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain("order('occurred_on', { ascending: false })");
+  });
+
+  it('30) RecentTransactions filtra deleted_at IS NULL', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain("is('deleted_at', null)");
+  });
+
+  it('31) Dashboard não possui state de busca, conta ou filtros de status', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).not.toMatch(/useState.*search/);
+    expect(src).not.toMatch(/useState.*selectedAccount/);
+    expect(src).not.toMatch(/useState.*filterNoCategory/);
+    expect(src).not.toMatch(/useState.*filterReviewOnly/);
+  });
+
+  it('32) Dashboard não renderiza TransactionList', () => {
+    const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
+    expect(html).not.toContain('tx-table');
+    expect(html).not.toContain('tx-search');
+  });
+
+  it('33) Dashboard renderiza RecentTransactions com classe recent-tx-section', () => {
+    const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
+    expect(html).toContain('recent-tx-section');
+  });
+
+  it('34) Dashboard aceita prop onNavigateToTransactions', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('onNavigateToTransactions');
+    expect(src).toMatch(/interface DashboardProps/);
+    expect(src).toContain("onNavigateToTransactions?: () => void");
+  });
+
+  it('35) AppShell passa onNavigateToTransactions ao Dashboard', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain('handleNavigateToTransactions');
+    expect(src).toContain('onNavigateToTransactions={handleNavigateToTransactions}');
+  });
+
+  it('36) handleNavigateToTransactions volta para modo period e view transacoes', () => {
+    const src = readSource('components/AppShell.tsx');
+    expect(src).toContain("setTxMode('period')");
+    expect(src).toContain("setView('transacoes')");
+  });
+
+  it('37) RecentTransactions renderiza botão "Ver todas" com link', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain('Ver todas');
+    expect(src).toContain('onNavigateToTransactions');
+  });
+
+  it('38) Dashboard mantém editor state e DeleteConfirmation', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('TransactionEditor');
+    expect(src).toContain('DeleteConfirmation');
+    expect(src).toContain('handleEditTransaction');
+    expect(src).toContain('handleDeleteTransaction');
+  });
+
+  it('39) Dashboard mantém summary, pending panel e FAB', () => {
+    const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
+    expect(html).toContain('Pendências');
+    expect(html).toContain('tx-fab');
+    expect(html).toContain('Nova transação');
+  });
+
+  it('40) Transações view não foi alterada — ainda renderiza TransactionList completo', () => {
+    const html = renderToString(
+      createElement(TransactionsView, {
+        profileId: shellProps.profileId,
+        profileCode: 'personal',
+        period,
+        mode: 'period' as const,
+        onModeChange: NOOP,
+        pendingFilter: 'all',
+        onPendingFilterChange: NOOP,
+      }),
+    );
+    expect(html).toContain('tx-table');
+    expect(html).toContain('tx-search');
+    expect(html).toContain('transações no período');
+  });
+
+  it('41) CSS contém estilos para recent-tx-* (seção, cabeçalho, lista, linha, vazio)', () => {
+    expect(css).toContain('recent-tx-section');
+    expect(css).toContain('recent-tx-header');
+    expect(css).toContain('recent-tx-title');
+    expect(css).toContain('recent-tx-view-all');
+    expect(css).toContain('recent-tx-list');
+    expect(css).toContain('recent-tx-row');
+    expect(css).toContain('recent-tx-info');
+    expect(css).toContain('recent-tx-desc');
+    expect(css).toContain('recent-tx-meta');
+    expect(css).toContain('recent-tx-value');
+    expect(css).toContain('recent-tx-actions');
+  });
+
+  it('42) CSS mobile adapta recent-tx-row para wrap e min-height', () => {
+    const mobile = extractMediaBlock(css, '@media (max-width: 767px)');
+    expect(mobile).toContain('recent-tx-row');
+    expect(mobile).toContain('flex-wrap: wrap');
+    expect(mobile).toContain('padding: 12px 14px');
+  });
+
+  it('43) RecentTransactions aceita props de edição e exclusão', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain('onEditTransaction');
+    expect(src).toContain('onDeleteTransaction');
+    expect(src).toContain('Pencil');
+    expect(src).toContain('Trash2');
+  });
+
+  it('44) Dashboard não renderiza filterX ou limpar filtros', () => {
+    const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
+    expect(html).not.toContain('Limpar filtros');
+    expect(html).not.toContain('filterX');
+  });
+});
