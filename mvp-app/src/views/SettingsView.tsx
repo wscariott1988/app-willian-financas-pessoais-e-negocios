@@ -1,12 +1,11 @@
 import React from 'react';
-import { AuditLogs } from '../components/AuditLogs';
 
 interface SettingsViewProps {
   profileId: string;
   refreshTrigger?: number;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ profileId, refreshTrigger = 0 }) => {
+export const SettingsView: React.FC<SettingsViewProps> = () => {
   return (
     <div className="settings-view">
       <div className="settings-view-header">
@@ -14,11 +13,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ profileId, refreshTr
           Configurações
         </h1>
         <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
-          Preferências e histórico do perfil ativo
+          Preferências do perfil ativo
         </p>
       </div>
-
-      <AuditLogs profileId={profileId} refreshTrigger={refreshTrigger} />
     </div>
   );
 };
