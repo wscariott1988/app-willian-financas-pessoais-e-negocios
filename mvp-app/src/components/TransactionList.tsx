@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
 import {
   TX_PAGE_SIZE,
   buildPendingTxOptions,
@@ -118,11 +119,9 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   useEffect(() => {
     const fetchAccounts = async () => {
       try {
-        const { data, error: accError } = await supabase
-          .from('accounts')
-          .select('id, display_name, source_name');
+        const { data, error: accError } = await buildAccountQuery(supabase as any, profileId);
         if (accError) throw accError;
-        setAccounts(data || []);
+        setAccounts(mapAccountPeriods((data ?? []) as AccountPeriodRow[]));
       } catch (err: any) {
         console.error('Erro ao buscar contas:', err);
       }

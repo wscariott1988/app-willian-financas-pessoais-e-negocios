@@ -12,6 +12,7 @@ import { TransactionsView } from '../views/TransactionsView';
 import { PeriodSelector } from '../components/PeriodSelector';
 import { PeriodPicker } from '../components/PeriodPicker';
 import { buildCategoryQuery } from '../lib/categoryQuery';
+import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
 
 vi.mock('../supabaseClient', () => ({ supabase: {} }));
 
@@ -1263,3 +1264,64 @@ describe('Diferenciação Início ↔ Transações', () => {
     expect(html).toContain('tx-fab');
     expect(html).toContain('Nova transação');
   });
+
+describe('filtro de contas — isolamento por perfil (CFG-P0a)', () => {
+  function mockChain() {
+    const calls: string[] = [];
+    const q = {
+      from: (t: string) => { calls.push(`from:${t}`); return q; },
+      select: () => { calls.push('select'); return q; },
+      eq: (c: string, v: unknown) => { calls.push(`eq:${c}=${String(v)}`); return q; },
+    };
+    return { q, calls };
+  }
+
+  it('Pessoal consulta contas pela relação de perfil (account_profile_periods + profile_id)', () => {
+    const { q, calls } = mockChain();
+    buildAccountQuery(q as any, 'PERFIL_PESSOAL');
+    expect(calls).toContain('from:account_profile_periods');
+    expect(calls).toContain('eq:profile_id=PERFIL_PESSOAL');
+    expect(calls).not.toContain('from:accounts');
+  });
+
+  it('Negócio consulta contas pelo seu profile_id', () => {
+    const { q, calls } = mockChain();
+    buildAccountQuery(q as any, 'PERFIL_NEGOCIO');
+    expect(calls).toContain('from:account_profile_periods');
+    expect(calls).toContain('eq:profile_id=PERFIL_NEGOCIO');
+    expect(calls).toContain('select');
+  });
+
+  it('conta pertencente apenas ao outro perfil não aparece no filtro (conjunto escopado por profile_id)', () => {
+    const rows = [
+      { account_id: 'ACC_PESSOAL', starts_on: '2022-01-01', ends_on: null, accounts: { display_name: 'Conta Pessoal', source_name: 'Banco' } },
+    ] as AccountPeriodRow[];
+    const result = mapAccountPeriods(rows);
+    expect(result.map((a) => a.id)).toEqual(['ACC_PESSOAL']);
+    expect(result.map((a) => a.id)).not.toContain('ACC_NEGOCIO');
+  });
+
+  it('mapAccountPeriods deduplica por conta e ordena por display_name', () => {
+    const rows = [
+      { account_id: 'B', starts_on: '2022-01-01', ends_on: null, accounts: { display_name: 'Banco B', source_name: 'B' } },
+      { account_id: 'A', starts_on: '2022-01-01', ends_on: null, accounts: { display_name: 'Banco A', source_name: 'A' } },
+      { account_id: 'B', starts_on: '2022-06-01', ends_on: null, accounts: { display_name: 'Banco B', source_name: 'B' } },
+    ] as AccountPeriodRow[];
+    const result = mapAccountPeriods(rows);
+    expect(result.map((a) => a.id)).toEqual(['A', 'B']);
+  });
+
+  it('troca de perfil refaz a consulta de contas (TransactionList usa buildAccountQuery com profileId e depende de [profileId])', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('buildAccountQuery(supabase as any, profileId)');
+    expect(src).toContain('}, [profileId]);');
+    expect(src).not.toContain(".from('accounts')");
+  });
+
+  it('demais filtros/listagem de Transações continuam (helpers txList inalterados)', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('createTxPageFetcher(supabase as any, opts)');
+    expect(src).toContain('buildTxListOptions');
+    expect(src).toContain('onSearchChange');
+  });
+});

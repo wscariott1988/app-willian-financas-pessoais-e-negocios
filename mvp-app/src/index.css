@@ -2267,3 +2267,107 @@ button.period-range-custom {
     display: inline;
   }
 }
+
+/* ============ Configurações: seções read-only (CFG-P0b) ============ */
+
+.settings-section {
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.settings-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.settings-state {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.settings-state-error {
+  color: var(--color-error, var(--color-danger));
+}
+
+.settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-item {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(13, 18, 34, 0.4);
+  border: 1px solid var(--border-card);
+  font-size: 13px;
+}
+
+.settings-dir-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-dir-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  margin: var(--space-2) 0 0;
+}
+
+.settings-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-tree .settings-tree {
+  margin-top: var(--space-2);
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border-card);
+}
+
+.settings-tree-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-tree-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(13, 18, 34, 0.4);
+  border: 1px solid var(--border-card);
+}
+
+.settings-status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--color-warning);
+}
