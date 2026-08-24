@@ -82,3 +82,55 @@ Nenhum segredo/token/senha neste diretório. Estado atual: 016 **aplicada** (exi
 - Total afetado = 29.
 
 Finding de **qualidade/hierarquia de dados** de categorias (vinculos `parent_id` cruzando `direction`, tornando nós não renderizáveis na árvore por direção da UI). **Não é corrigido pela CLOUD 016**, não invalida ACC-P0 e **requer decisão separada**.
+
+## 14. WRITE-SMOKE CONTROLADO DE PRODUÇÃO — APROVADO
+
+Status: **WRITE-SMOKE CONTROLADO DE PRODUÇÃO = APROVADO** (fechamento formal registrado em 2026-08-24; nada acima foi reescrito).
+
+Run funcional aprovado:
+
+| Item | Valor |
+|---|---|
+| runId | `20260824T183807-jgqn` |
+| log | `C:\Users\willi\AppData\Local\AppFinancas\smoke\smoke-write-production-20260824T183807-jgqn.log` |
+| log SHA-256 | `7DA5F8AAD68636A5588C53BF1D63482A2116B25CFF6B88703A1D279496A53F75` |
+| harness final | `C:\Users\willi\OneDrive\Documentos\phase4_local_mvp\tests\smoke_production_write_controlled.mjs` |
+| harness SHA-256 | `72D6FF878B491D504C3097C315AFEA5AFA749551A2CCBB0B6AD6524E97BF90DB` |
+| manifesto SHA-256 pré-alteração | `BF90224706855A49BCCBDBF7A67258BA904E71CF0362E5975EF4E4499B2A2006` |
+
+Resultados por perfil:
+
+- **PESSOAL**: CREATE PASS | isolamento cross-profile PASS | UPDATE mesmo transaction_id PASS | SOFT-DELETE PASS
+- **NEGÓCIO**: CREATE PASS | isolamento cross-profile PASS | UPDATE mesmo transaction_id PASS | SOFT-DELETE PASS
+
+Pós-check: fingerprints de transações sem os IDs do smoke = preservados; `category_id` fingerprint = preservado; `category_raw` fingerprint = preservado; `account_profile_periods` = 46; `schema_migrations` = 8; console errors = 0; HTTP >=400 = 0.
+
+Auditoria: Pessoal = create + update + delete, profile correto = true; Negócio = create + update + delete, profile correto = true.
+
+Network: transaction mutations Pessoal = 3; transaction mutations Negócio = 3; other_data_mutation = 0; http_errors = 0.
+
+Falsos positivos (corrigidos no classificador do harness, sem regra genérica): as 4 requests inicialmente classificadas como `other_data_mutation` eram **READ-ONLY RPC**:
+
+- `POST /rest/v1/rpc/transaction_get_detail` (2 chamadas por perfil; 4 no total).
+- Motivo: `app.transaction_get_detail(uuid)` executa **somente SELECT**; é chamada ao carregar os detalhes do editor; ocorreu 1 chamada antes do UPDATE e 1 antes do SOFT-DELETE por perfil.
+- Correção: lista explícita `READ_ONLY_RPC = ['transaction_get_detail']` no `classifyRequest()` do harness; RPCs desconhecidos permanecem audíveis como `other_data_mutation`.
+
+Counters reconstruídos offline (log capturado + classificador corrigido):
+
+- Pessoal: auth = 5, read = 27, transaction_mutation = 3
+- Negócio: auth = 5, read = 27, transaction_mutation = 3
+- Total: read = 54, auth = 10, transaction_mutation = 6, other_data_mutation = 0, rpc = 0, http_errors = 0, other = 0
+
+Estado final do smoke: os 2 registros do run aprovado terminaram **SOFT_DELETED**; active residue do run = 0. Todos os resíduos produzidos durante o desenvolvimento do harness foram posteriormente eliminados por soft-delete UI controlado: **active SMOKE-WRITE residue final = 0**.
+
+Estado final observado após os cleanups e o run aprovado: **physical transactions = 11880**, **active transactions = 11869**. O valor 11880 decorre das 7 rows físicas de smoke preservadas em soft-delete (baseline físico original 11873 + 5 residues anteriores soft-deleted + 2 rows do run aprovado soft-deleted). **Não são corrupção nem resíduo ativo.**
+
+## 15. MVP CORE VALIDADO EM PRODUÇÃO
+
+**MVP CORE VALIDADO EM PRODUÇÃO.** Escopo validado: login, leitura, isolamento Pessoal/Negócio, troca de perfil, contas válidas por perfil/data, CREATE, UPDATE, SOFT-DELETE, auditoria e ausência de mutações colaterais no fluxo testado.
+
+Pendências separadas, **não bloqueadoras** (registradas, não corrigidas nesta etapa):
+
+- 29 categorias afetadas por hierarquia/direction inconsistente (ver seção 13);
+- CRUD administrativo de contas/categorias em Configurações;
+- package 015 Parcelamentos/Recorrências — reservado/não iniciado.
