@@ -13,7 +13,7 @@ export type TxMode = 'period' | 'pending';
 
 const PENDING_FILTERS: ReadonlyArray<{ id: PendingFilter; label: string }> = [
   { id: 'all', label: 'Todas' },
-  { id: 'review', label: 'Em revisão' },
+  { id: 'unpaid', label: 'Não pagos' },
   { id: 'noCategory', label: 'Sem categoria' },
 ];
 
@@ -53,7 +53,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
   const [filterNoCategory, setFilterNoCategory] = useState(false);
-  const [filterReviewOnly, setFilterReviewOnly] = useState(false);
+  const [filterUnpaidOnly, setFilterUnpaidOnly] = useState(false);
 
   // Mobile (<768px): barra compacta + painéis; tablet/desktop: composição completa.
   useEffect(() => {
@@ -136,7 +136,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           <h1>{isPending ? 'Pendências' : 'Transações'}</h1>
           <p className="tx-view-subtitle">
             {isPending
-              ? 'Transações em revisão ou sem categoria de todo o histórico'
+              ? 'Transações não pagas ou sem categoria'
               : 'Todas as transações do perfil ativo no período selecionado'}
           </p>
         </div>
@@ -187,7 +187,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             ))}
           </div>
           <span className="tx-pending-count">
-            {pendingCount.toLocaleString('pt-BR')} pendências no histórico
+            {pendingCount.toLocaleString('pt-BR')} pendências
           </span>
         </div>
       ) : mobile ? (
@@ -292,8 +292,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             onEndDateChange={() => {}}
             filterNoCategory={filterNoCategory}
             onFilterNoCategoryChange={setFilterNoCategory}
-            filterReviewOnly={filterReviewOnly}
-            onFilterReviewOnlyChange={setFilterReviewOnly}
+            filterUnpaidOnly={filterUnpaidOnly}
+            onFilterUnpaidOnlyChange={setFilterUnpaidOnly}
             mode={mode}
             pendingFilter={pendingFilter}
             onPendingCountChange={setPendingCount}

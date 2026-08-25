@@ -179,8 +179,8 @@ describe('view Transações — filtros compactos', () => {
       onEndDateChange: NOOP,
       filterNoCategory: false,
       onFilterNoCategoryChange: NOOP,
-      filterReviewOnly: false,
-      onFilterReviewOnlyChange: NOOP,
+      filterUnpaidOnly: false,
+      onFilterUnpaidOnlyChange: NOOP,
     }),
   );
 
@@ -204,7 +204,7 @@ describe('view Transações — filtros compactos', () => {
   it('9) filtros não exibem expressões técnicas', () => {
     expect(listHtml).not.toContain('status = review');
     expect(listHtml).not.toContain('category_id = null');
-    expect(listHtml).toContain('Em revisão');
+    expect(listHtml).toContain('Não pagos');
     expect(listHtml).toContain('Sem categoria');
   });
 });
@@ -303,8 +303,8 @@ describe('view Transações — paginação e overflow', () => {
         onEndDateChange: NOOP,
         filterNoCategory: false,
         onFilterNoCategoryChange: NOOP,
-        filterReviewOnly: false,
-        onFilterReviewOnlyChange: NOOP,
+        filterUnpaidOnly: false,
+        onFilterUnpaidOnlyChange: NOOP,
       }),
     );
     expect(listHtml).not.toContain('Carregar mais');
@@ -449,30 +449,31 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
       createElement(TransactionsView, { ...viewProps, mode: 'pending', pendingFilter: 'all' }),
     );
     expect(html).toContain('Pendências');
-    expect(html).toContain('Transações em revisão ou sem categoria de todo o histórico');
+    expect(html).toContain('Transações não pagas ou sem categoria');
     expect(html).not.toContain('period-month-label');
     expect(html).not.toContain('Período aplicado');
     expect(html).not.toContain('tx-period-bar');
     // filtros de 3 vias
-    for (const label of ['Todas', 'Em revisão', 'Sem categoria']) {
+    for (const label of ['Todas', 'Não pagos', 'Sem categoria']) {
       expect(html).toContain(label);
     }
     expect((html.match(/tx-pending-pills/g) ?? []).length).toBe(1);
-    expect(html).toContain('pendências no histórico');
+    expect(html).toContain('pendências');
   });
 
-  it('10) contagem global da Início independe do período', () => {
+  it('10) contagem de não pagos da Início usa o cutoff (STATUS-P0b)', () => {
     const dashboard = readSource('components/Dashboard.tsx');
-    // os contadores de pendências não usam intervalo de datas (sem gte/lte)
-    expect(dashboard).not.toMatch(/\.gte\(/);
-    expect(dashboard).not.toMatch(/\.lte\(/);
+    // "Não pagos" = status não-posted a partir do cutoff
+    expect(dashboard).toContain('.in(\'status\', NON_PAID_STATUSES)');
+    expect(dashboard).toContain(".gte('occurred_on', STATUS_EDITABLE_FROM)");
     expect(dashboard).toContain('supabaseCounters()');
+    expect(dashboard).toContain('A partir de 01/08/2026');
     expect(dashboard).toContain('Todo o histórico');
   });
 
-  it('11) card Em revisão abre a fila global filtrada', () => {
+  it('11) card Não pagos abre a fila global filtrada', () => {
     const dashboard = readSource('components/Dashboard.tsx');
-    expect(dashboard).toContain("onOpenPending?.('review')");
+    expect(dashboard).toContain("onOpenPending?.('unpaid')");
     const shell = readSource('components/AppShell.tsx');
     expect(shell).toContain("setTxPendingFilter(filter)");
     expect(shell).toContain("setTxMode('pending')");
@@ -575,8 +576,8 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
         onEndDateChange: NOOP,
         filterNoCategory: false,
         onFilterNoCategoryChange: NOOP,
-        filterReviewOnly: false,
-        onFilterReviewOnlyChange: NOOP,
+        filterUnpaidOnly: false,
+        onFilterUnpaidOnlyChange: NOOP,
       }),
     );
     expect(listHtml).not.toContain('Categ. Original');
@@ -586,7 +587,8 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
     const dashboardHtml = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
     expect(dashboardHtml).not.toContain('status = review');
     expect(dashboardHtml).not.toContain('category_id = null');
-    expect(dashboardHtml).toContain('Todo o histórico');
+    expect(dashboardHtml).toContain('Não pagos');
+    expect(dashboardHtml).toContain('Sem categoria');
   });
 
   it('20) erros técnicos são apresentados em linguagem destinada ao usuário', () => {
@@ -628,7 +630,7 @@ describe('terminologia e legibilidade (1.2A.4B.1)', () => {
   it('1) Pendências não mostra “transações no período”', () => {
     const html = renderToString(createElement(TransactionsView, { ...viewProps, mode: 'pending' }));
     expect(html).not.toContain('transações no período');
-    expect(html).toContain('pendências no histórico');
+    expect(html).toContain('pendências');
   });
 
   it('2) Do período continua mostrando “transações no período”', () => {
@@ -644,7 +646,7 @@ describe('terminologia e legibilidade (1.2A.4B.1)', () => {
 
   it('4) Início mostra contagens de pendências formatadas', () => {
     const dashboard = readSource('components/Dashboard.tsx');
-    expect(dashboard).toContain("summary.reviewCount.toLocaleString('pt-BR')");
+    expect(dashboard).toContain("summary.unpaidCount.toLocaleString('pt-BR')");
     expect(dashboard).toContain("summary.noCategoryCount.toLocaleString('pt-BR')");
   });
 

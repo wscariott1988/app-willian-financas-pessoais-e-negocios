@@ -7,6 +7,7 @@ import { Modal } from './Modal';
 import { PeriodSelector } from './PeriodSelector';
 import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
+import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM } from '../lib/status';
 import type { PeriodController } from './AppShell';
 
 interface Transaction {
@@ -29,7 +30,7 @@ interface DashboardProps {
   profileId: string;
   profileCode?: 'personal' | 'business';
   period: PeriodController;
-  onOpenPending?: (filter: 'review' | 'noCategory') => void;
+  onOpenPending?: (filter: 'unpaid' | 'noCategory') => void;
   onNavigateToTransactions?: () => void;
 }
 
@@ -42,7 +43,7 @@ interface Summary {
   income: number;
   expense: number;
   balance: number;
-  reviewCount: number;
+  unpaidCount: number;
   noCategoryCount: number;
   totalCount: number;
   loading: boolean;
@@ -55,7 +56,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const [summary, setSummary] = useState<Summary>({
-    income: 0, expense: 0, balance: 0, reviewCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
+    income: 0, expense: 0, balance: 0, unpaidCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
   });
 
   const { range } = period;
@@ -66,10 +67,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       const periodSummary = await fetchPeriodSummary(range);
 
       const counters = await supabaseCounters();
-      let reviewCount = 0;
+      let unpaidCount = 0;
       let noCategoryCount = 0;
       if (counters) {
-        reviewCount = counters.reviewCount;
+        unpaidCount = counters.unpaidCount;
         noCategoryCount = counters.noCategoryCount;
       }
 
@@ -77,7 +78,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         income: periodSummary.income,
         expense: periodSummary.expense,
         balance: periodSummary.balance,
-        reviewCount,
+        unpaidCount,
         noCategoryCount,
         totalCount: periodSummary.totalCount,
         loading: false,
@@ -205,21 +206,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         </div>
       </div>
 
-      {/* Pendências: painel único com duas linhas acionáveis (histórico global) */}
+      {/* Pendências: painel único com duas linhas acionáveis (STATUS-P0b) */}
       <div className="pending-panel">
-        <div className="pending-title">Pendências <span className="pending-title-hint">· Todo o histórico</span></div>
+        <div className="pending-title">Pendências</div>
         <button
           type="button"
           className="pending-row"
           aria-pressed={false}
-          onClick={() => onOpenPending?.('review')}
-          title="Abre Transações na fila global de pendências em revisão"
+          onClick={() => onOpenPending?.('unpaid')}
+          title="Abre Transações na fila de não pagos (a partir de 01/08/2026)"
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
             <AlertTriangle size={16} style={{ color: 'var(--color-warning)' }} />
-            Em revisão
+            Não pagos
           </span>
-          <span className="pending-row-count">{summary.reviewCount.toLocaleString('pt-BR')}</span>
+          <span className="pending-title-hint">· A partir de 01/08/2026</span>
+          <span className="pending-row-count">{summary.unpaidCount.toLocaleString('pt-BR')}</span>
         </button>
         <button
           type="button"
@@ -232,6 +234,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
             <Tag size={16} style={{ color: 'var(--color-secondary)' }} />
             Sem categoria
           </span>
+          <span className="pending-title-hint">· Todo o histórico</span>
           <span className="pending-row-count">{summary.noCategoryCount.toLocaleString('pt-BR')}</span>
         </button>
       </div>
@@ -326,22 +329,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   );
 };
 
-// Contadores de pendências GLOBAIS (todo o histórico do perfil — independentes do período).
+// Contadores de pendências (STATUS-P0b): "Não pagos" = status ativos não-posted
+// a partir do cutoff (nunca review do histórico); "Sem categoria" = todo o histórico.
 async function supabaseCounters() {
   try {
-    const [review, noCategory] = await Promise.all([
+    const [unpaid, noCategory] = await Promise.all([
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
         .is('deleted_at', null)
-        .eq('status', 'review'),
+        .in('status', NON_PAID_STATUSES)
+        .gte('occurred_on', STATUS_EDITABLE_FROM),
       supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
         .is('deleted_at', null)
         .is('category_id', null),
     ]);
-    return { reviewCount: review.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
+    return { unpaidCount: unpaid.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
   } catch (err) {
     console.error('Erro ao carregar contadores de pendências:', err);
     return null;

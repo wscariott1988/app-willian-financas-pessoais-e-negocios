@@ -25,7 +25,7 @@ function isCategoryCompatible(
 function filterTransactions(
   transactions: Array<{ status: string; category_id: string | null; account_id: string; occurred_on: string; raw_description: string }>,
   opts: {
-    filterReviewOnly?: boolean;
+    filterUnpaidOnly?: boolean;
     filterNoCategory?: boolean;
     selectedAccount?: string;
     startDate?: string;
@@ -34,7 +34,7 @@ function filterTransactions(
   }
 ) {
   return transactions.filter(tx => {
-    if (opts.filterReviewOnly && tx.status !== 'review') return false;
+    if (opts.filterUnpaidOnly && !['pending', 'review', 'scheduled', 'ignored'].includes(tx.status)) return false;
     if (opts.filterNoCategory && tx.category_id !== null) return false;
     if (opts.selectedAccount && tx.account_id !== opts.selectedAccount) return false;
     if (opts.startDate && tx.occurred_on < opts.startDate) return false;
@@ -116,10 +116,15 @@ describe('filterTransactions', () => {
     expect(filterTransactions(transactions as any, {})).toHaveLength(4);
   });
 
-  it('filters by status = review', () => {
-    const result = filterTransactions(transactions as any, { filterReviewOnly: true });
+  it('filters by status = não pago (qualquer status não-posted)', () => {
+    const result = filterTransactions(transactions as any, { filterUnpaidOnly: true });
     expect(result).toHaveLength(2);
-    expect(result.every(t => t.status === 'review')).toBe(true);
+    expect(result.every(t => ['pending', 'review', 'scheduled', 'ignored'].includes(t.status))).toBe(true);
+  });
+
+  it('filtro Não pagos exclui posted', () => {
+    const result = filterTransactions(transactions as any, { filterUnpaidOnly: true });
+    expect(result.every(t => t.status !== 'posted')).toBe(true);
   });
 
   it('filters by no category', () => {
@@ -151,7 +156,7 @@ describe('filterTransactions', () => {
 
   it('combines multiple filters correctly', () => {
     const result = filterTransactions(transactions as any, {
-      filterReviewOnly: true,
+      filterUnpaidOnly: true,
       filterNoCategory: true,
       selectedAccount: 'acc-1'
     });

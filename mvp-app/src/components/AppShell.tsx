@@ -81,7 +81,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     : monthRange;
 
   // Cards de pendências da Início: abrem Transações na fila global filtrada.
-  const handleOpenPending = (filter: 'review' | 'noCategory') => {
+  const handleOpenPending = (filter: 'unpaid' | 'noCategory') => {
     setTxMode('pending');
     setTxPendingFilter(filter);
     setView('transacoes');

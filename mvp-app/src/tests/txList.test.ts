@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   txFilterInitial,
-  toggleReviewFilter,
+  toggleUnpaidFilter,
   toggleNoCategoryFilter,
   clearTxFilters,
   hasActiveTxFilters,
@@ -10,10 +10,9 @@ import {
   createTxPageFetcher,
   fetchAllTxPages,
   TX_PAGE_SIZE,
-  STATUS_LABELS,
-  statusLabel,
   type TxListFilters,
 } from '../lib/txList';
+import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM, displayPaymentStatus } from '../lib/status';
 
 vi.mock('../supabaseClient', () => ({ supabase: {} }));
 
@@ -45,6 +44,7 @@ function makeFakeClient(rows: unknown[], total: number) {
   const query: any = {
     ilike: (c: string, v: unknown) => { log.push(['ilike', c, v]); return query; },
     eq: (c: string, v: unknown) => { log.push(['eq', c, v]); return query; },
+    in: (c: string, v: unknown) => { log.push(['in', c, v]); return query; },
     is: (c: string, v: unknown) => { log.push(['is', c, v]); return query; },
     or: (v: unknown) => { log.push(['or', v]); return query; },
     gte: (c: string, v: unknown) => { log.push(['gte', c, v]); return query; },
@@ -63,7 +63,7 @@ function makeFakeClient(rows: unknown[], total: number) {
 
 describe('filtros — estado inicial e toggles', () => {
   it('1) lista inicia sem filtro de status e sem filtro de categoria', () => {
-    expect(txFilterInitial()).toEqual({ reviewOnly: false, noCategory: false });
+    expect(txFilterInitial()).toEqual({ unpaidOnly: false, noCategory: false });
 
     const opts = buildTxListOptions(txFilterInitial(), BASE);
     expect(opts.statusFilter).toBeNull();
@@ -75,45 +75,45 @@ describe('filtros — estado inicial e toggles', () => {
     expect(opts.end).toBe('2026-08-31');
   });
 
-  it('2) “Em revisão” ativa e desativa corretamente', () => {
+  it('2) “Não pagos” ativa e desativa corretamente', () => {
     const initial: TxListFilters = txFilterInitial();
-    const on = toggleReviewFilter(initial);
-    expect(on).toEqual({ reviewOnly: true, noCategory: false });
-    expect(buildTxListOptions(on, BASE).statusFilter).toBe('review');
+    const on = toggleUnpaidFilter(initial);
+    expect(on).toEqual({ unpaidOnly: true, noCategory: false });
+    expect(buildTxListOptions(on, BASE).statusFilter).toBe('unpaid');
     expect(buildTxListOptions(on, BASE).noCategory).toBeUndefined();
 
-    const off = toggleReviewFilter(on);
-    expect(off).toEqual({ reviewOnly: false, noCategory: false });
+    const off = toggleUnpaidFilter(on);
+    expect(off).toEqual({ unpaidOnly: false, noCategory: false });
     expect(buildTxListOptions(off, BASE).statusFilter).toBeNull();
   });
 
   it('3) “Sem categoria” ativa e desativa corretamente', () => {
     const on = toggleNoCategoryFilter(txFilterInitial());
-    expect(on).toEqual({ reviewOnly: false, noCategory: true });
+    expect(on).toEqual({ unpaidOnly: false, noCategory: true });
     expect(buildTxListOptions(on, BASE).noCategory).toBe(true);
     expect(buildTxListOptions(on, BASE).statusFilter).toBeNull();
 
     const off = toggleNoCategoryFilter(on);
-    expect(off).toEqual({ reviewOnly: false, noCategory: false });
+    expect(off).toEqual({ unpaidOnly: false, noCategory: false });
     expect(buildTxListOptions(off, BASE).noCategory).toBeUndefined();
   });
 
   it('4) os dois filtros podem ser combinados', () => {
-    let f = toggleReviewFilter(txFilterInitial());
+    let f = toggleUnpaidFilter(txFilterInitial());
     f = toggleNoCategoryFilter(f);
-    expect(f).toEqual({ reviewOnly: true, noCategory: true });
+    expect(f).toEqual({ unpaidOnly: true, noCategory: true });
 
     const opts = buildTxListOptions(f, BASE);
-    expect(opts.statusFilter).toBe('review');
+    expect(opts.statusFilter).toBe('unpaid');
     expect(opts.noCategory).toBe(true);
   });
 
   it('5) limpar filtros desativa ambos mantendo o restante', () => {
-    let f = toggleReviewFilter(toggleNoCategoryFilter(txFilterInitial()));
+    let f = toggleUnpaidFilter(toggleNoCategoryFilter(txFilterInitial()));
     expect(hasActiveTxFilters(f)).toBe(true);
 
     const cleared = clearTxFilters();
-    expect(cleared).toEqual({ reviewOnly: false, noCategory: false });
+    expect(cleared).toEqual({ unpaidOnly: false, noCategory: false });
     expect(hasActiveTxFilters(cleared)).toBe(false);
 
     const opts = buildTxListOptions(cleared, { ...BASE, search: '' });
@@ -124,7 +124,7 @@ describe('filtros — estado inicial e toggles', () => {
   });
 
   it('filtros ativos não alteram mês, período, busca e conta', () => {
-    const opts = buildTxListOptions(toggleReviewFilter(toggleNoCategoryFilter(txFilterInitial())), BASE);
+    const opts = buildTxListOptions(toggleUnpaidFilter(toggleNoCategoryFilter(txFilterInitial())), BASE);
     expect(opts.start).toBe('2026-08-01');
     expect(opts.end).toBe('2026-08-31');
     expect(opts.search).toBe('mercado');
@@ -132,24 +132,30 @@ describe('filtros — estado inicial e toggles', () => {
   });
 });
 
-describe('status legíveis', () => {
-  it('6) traduz os cinco status sem alterar valores', () => {
-    expect(statusLabel('posted')).toEqual({ label: 'Confirmada', hint: expect.any(String) });
-    expect(statusLabel('pending')).toEqual({ label: 'Pendente', hint: expect.any(String) });
-    expect(statusLabel('review')).toEqual({ label: 'Em revisão', hint: expect.any(String) });
-    expect(statusLabel('scheduled')).toEqual({ label: 'Agendada', hint: expect.any(String) });
-    expect(statusLabel('ignored')).toEqual({ label: 'Ignorada', hint: expect.any(String) });
-    expect(Object.keys(STATUS_LABELS).sort()).toEqual(['ignored', 'pending', 'posted', 'review', 'scheduled']);
+describe('apresentação central de status (STATUS-P0b)', () => {
+  it('NON_PAID_STATUSES cobre exatamente os status ativos não-posted do CHECK', () => {
+    expect([...NON_PAID_STATUSES].sort()).toEqual(['ignored', 'pending', 'review', 'scheduled']);
+    expect(NON_PAID_STATUSES).not.toContain('posted');
   });
 
-  it('a explicação de “Agendada” cobre o significado', () => {
-    expect(STATUS_LABELS.scheduled.hint).toContain('prevista');
-    expect(STATUS_LABELS.scheduled.hint).toContain('ainda não confirmada');
+  it('displayPaymentStatus: >= cutoff => Pago/Não pago; < cutoff => null', () => {
+    expect(displayPaymentStatus('posted', '2026-08-01')).toBe('Pago');
+    expect(displayPaymentStatus('pending', '2026-08-01')).toBe('Não pago');
+    expect(displayPaymentStatus('review', '2026-08-01')).toBe('Não pago');
+    expect(displayPaymentStatus('scheduled', '2026-08-01')).toBe('Não pago');
+    expect(displayPaymentStatus('ignored', '2026-08-01')).toBe('Não pago');
+    expect(displayPaymentStatus('posted', '2026-07-31')).toBeNull();
+    expect(displayPaymentStatus('review', '2026-07-31')).toBeNull();
+    expect(displayPaymentStatus(null, '2026-08-01')).toBe('Não pago');
   });
 
-  it('status desconhecido/nulo cai para o próprio valor', () => {
-    expect(statusLabel('desconhecido')).toEqual({ label: 'desconhecido', hint: '' });
-    expect(statusLabel(null)).toEqual({ label: '', hint: '' });
+  it('status desconhecido não-posted também é visualmente Não pago, mas permanece audível', () => {
+    expect(displayPaymentStatus('unknown-x', '2026-08-01')).toBe('Não pago');
+    expect(NON_PAID_STATUSES).not.toContain('unknown-x');
+  });
+
+  it('STATUS_EDITABLE_FROM é o cutoff usado pela fila e pelo editor', () => {
+    expect(STATUS_EDITABLE_FROM).toBe('2026-08-01');
   });
 });
 
@@ -202,7 +208,7 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
     const rows = genRows(2500);
     const { client, log } = makeFakeClient(rows, 2500);
     const opts = buildTxListOptions(
-      { reviewOnly: true, noCategory: true },
+      { unpaidOnly: true, noCategory: true },
       { search: 'mercado', accountId: 'acc-1', start: '2026-08-01', end: '2026-08-31' },
     );
     const fetcher = createTxPageFetcher(client, opts);
@@ -222,7 +228,7 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
       expect(asStrings).toContain(JSON.stringify(['order', 'occurred_on', { ascending: false }]));
       expect(asStrings).toContain(JSON.stringify(['order', 'created_at', { ascending: false }]));
       // filtros combinados presentes em todas as páginas
-      expect(asStrings).toContain(JSON.stringify(['eq', 'status', 'review']));
+      expect(asStrings).toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
       expect(asStrings).toContain(JSON.stringify(['is', 'category_id', null]));
       expect(asStrings).toContain(JSON.stringify(['ilike', 'raw_description', '%mercado%']));
       expect(asStrings).toContain(JSON.stringify(['eq', 'account_id', 'acc-1']));
@@ -243,7 +249,7 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
     const asStrings = log.map((c) => JSON.stringify(c));
     expect(asStrings).toContain(JSON.stringify(['gte', 'occurred_on', '2026-08-01']));
     expect(asStrings).toContain(JSON.stringify(['lte', 'occurred_on', '2026-08-31']));
-    expect(asStrings).not.toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(asStrings).not.toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
     expect(asStrings).not.toContain(JSON.stringify(['is', 'category_id', null]));
     // o perfil NÃO é filtrado no cliente: o isolamento é imposto pelo RLS
     // (transactions_select_own) usando o profile_id do JWT.
@@ -257,32 +263,45 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
   });
 });
 
-describe('fila global de pendências (1.2A.4B)', () => {
-  it('5) Todas usa status=review OR category_id IS NULL (uma única condição, sem duplicação)', async () => {
+describe('fila global de pendências — Não pagos (STATUS-P0b)', () => {
+  it('5) Todas usa (status não-posted E >= cutoff) OR category_id IS NULL (uma única condição)', async () => {
     const { client, log } = makeFakeClient([], 0);
     const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'all' }));
     await fetcher(0, 29);
 
     const s = log.map((c) => JSON.stringify(c));
-    expect(s).toContain(JSON.stringify(['or', 'status.eq.review,category_id.is.null']));
+    expect(s).toContain(JSON.stringify(['or', 'and(status.in.(pending,review,scheduled,ignored),occurred_on.gte.2026-08-01),category_id.is.null']));
     expect(s.filter((x) => x.includes('"or"')).length).toBe(1);
     // a união é feita no servidor: nenhum braço é enviado separadamente
-    expect(s).not.toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(s).not.toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
     expect(s).not.toContain(JSON.stringify(['is', 'category_id', null]));
   });
 
-  it('7) Em revisão usa somente o filtro correspondente', async () => {
+  it('7) Não pagos usa somente status não-posted a partir do cutoff', async () => {
     const { client, log } = makeFakeClient([], 0);
-    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'review' }));
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'unpaid' }));
     await fetcher(0, 29);
 
     const s = log.map((c) => JSON.stringify(c));
-    expect(s).toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(s).toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
+    expect(s).toContain(JSON.stringify(['gte', 'occurred_on', '2026-08-01']));
     expect(s).not.toContain('"or"');
     expect(s).not.toContain(JSON.stringify(['is', 'category_id', null]));
   });
 
-  it('8) Sem categoria usa somente o filtro correspondente', async () => {
+  it('cutoff da fila: review em 2026-07-31 fica fora (gte), status não-posted em 2026-08-01 entra', async () => {
+    const { client, log } = makeFakeClient([], 0);
+    const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'unpaid' }));
+    await fetcher(0, 29);
+
+    const s = log.map((c) => JSON.stringify(c));
+    expect(s).toContain(JSON.stringify(['gte', 'occurred_on', '2026-08-01']));
+    expect(s).not.toContain(JSON.stringify(['lte', 'occurred_on', '2026-07-31']));
+    // posted NÃO está no conjunto não-pago
+    expect(s).toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
+  });
+
+  it('8) Sem categoria usa somente o filtro correspondente (todo o histórico)', async () => {
     const { client, log } = makeFakeClient([], 0);
     const fetcher = createTxPageFetcher(client, buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'noCategory' }));
     await fetcher(0, 29);
@@ -290,10 +309,10 @@ describe('fila global de pendências (1.2A.4B)', () => {
     const s = log.map((c) => JSON.stringify(c));
     expect(s).toContain(JSON.stringify(['is', 'category_id', null]));
     expect(s).not.toContain('"or"');
-    expect(s).not.toContain(JSON.stringify(['eq', 'status', 'review']));
+    expect(s).not.toContain(JSON.stringify(['in', 'status', ['pending', 'review', 'scheduled', 'ignored']]));
   });
 
-  it('3) Pendências não envia intervalo de datas', async () => {
+  it('3) Pendências não envia intervalo de datas (fora do cutoff da fila)', async () => {
     const opts = buildPendingTxOptions({ search: '', accountId: '', pendingFilter: 'all' });
     expect(opts.start).toBeUndefined();
     expect(opts.end).toBeUndefined();
@@ -302,8 +321,7 @@ describe('fila global de pendências (1.2A.4B)', () => {
     const fetcher = createTxPageFetcher(client, opts);
     await fetcher(0, 29);
     const s = log.map((c) => JSON.stringify(c));
-    // a ordenação por occurred_on é mantida, mas NENHUM filtro gte/lte é enviado
-    expect(s.some((x) => x.includes('gte'))).toBe(false);
+    // o cutoff da fila é um gte DENTRO do or (não um intervalo de datas)
     expect(s.some((x) => x.includes('lte'))).toBe(false);
   });
 

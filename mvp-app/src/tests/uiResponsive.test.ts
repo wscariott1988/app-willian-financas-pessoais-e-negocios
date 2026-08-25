@@ -144,7 +144,7 @@ describe('breakpoints do sistema visual', () => {
   it('pendências: painel único com duas linhas acionáveis e aria-pressed', () => {
     const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
     expect(html).toContain('Pendências');
-    expect(html).toContain('Em revisão');
+    expect(html).toContain('Não pagos');
     expect(html).toContain('Sem categoria');
     // exatamente duas linhas do painel, ambas com aria-pressed
     expect((html.match(/class="pending-row"/g) ?? []).length).toBe(2);
@@ -205,11 +205,11 @@ describe('Início — informações reais e ausência de itens falsos', () => {
     expect(html).not.toContain('Próximos Vencimentos');
   });
 
-  it('9b) resumo real presente: Receitas, Despesas, Em revisão, Sem categoria', () => {
+  it('9b) resumo real presente: Receitas, Despesas, Não pagos, Sem categoria', () => {
     const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
     expect(html).toContain('Receitas');
     expect(html).toContain('Despesas');
-    expect(html).toContain('Em revisão');
+    expect(html).toContain('Não pagos');
     expect(html).toContain('Sem categoria');
   });
 

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { RefreshCw, AlertCircle, Pencil, Trash2, ArrowRight, Layers } from 'lucide-react';
-import { statusLabel, type TxClientLike } from '../lib/txList';
+import { type TxClientLike } from '../lib/txList';
+import { displayPaymentStatus } from '../lib/status';
 import type { PeriodRange } from '../lib/period';
 
 export interface Transaction {
@@ -124,8 +125,13 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
         <div className="recent-tx-list">
           {transactions.map((tx) => {
             const catDisplay = (tx as any).categories?.display_name || tx.category_raw || 'Sem categoria';
-            const st = statusLabel(tx.status);
-            const txLabel = `${tx.raw_description} · ${formatDate(tx.occurred_on)} · ${catDisplay} · ${st.label}`;
+            const stLabel = displayPaymentStatus(tx.status, tx.occurred_on);
+            const txLabel = [
+              tx.raw_description,
+              `Data: ${formatDate(tx.occurred_on)}`,
+              catDisplay,
+              ...(stLabel ? [`Status: ${stLabel}`] : []),
+            ].join(' · ');
             return (
               <div
                 key={tx.id}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
+import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import {
   Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2,
 } from 'lucide-react';
@@ -69,14 +70,6 @@ const KIND_LABEL: Record<TxKind, string> = {
   transfer: 'Transferência',
 };
 
-const STATUS_LABEL: Record<TxStatus, string> = {
-  posted: 'Compensada (posted)',
-  pending: 'Pendente (pending)',
-  review: 'Em revisão (review)',
-  scheduled: 'Agendada (scheduled)',
-  ignored: 'Ignorada (ignored)',
-};
-
 const EMPTY_FORM: TxFormState = {
   kind: 'expense',
   description: '',
@@ -128,6 +121,26 @@ export function isAccountValidForDate(
   });
 }
 
+// Payload exato enviado aos RPCs transaction_create/transaction_update (STATUS-P0).
+// Envia SEMPRE form.status (o valor real do formulário): o status é inicializado
+// do registro carregado e só muda por ação explícita do usuário no controle
+// Pago/Não pago — assim status legados (review/scheduled/ignored) e históricos
+// são preservados em edições não relacionadas, sem normalização silenciosa.
+export function buildSavePayload(form: TxFormState): Record<string, any> {
+  const amount = parseAmount(form.amount);
+  return {
+    kind: form.kind,
+    description: form.description.trim(),
+    amount: String(amount),
+    occurred_on: form.occurred_on,
+    account_id: form.account_id,
+    to_account_id: form.to_account_id || null,
+    category_id: form.category_id || null,
+    status: form.status,
+    memo: form.memo || null,
+  };
+}
+
 export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   profileId,
   profileCode,
@@ -137,6 +150,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   onClose,
 }) => {
   const [form, setForm] = useState<TxFormState>(EMPTY_FORM);
+  const [statusEdited, setStatusEdited] = useState(false);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(null);
   const [detailTxId, setDetailTxId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<AccountPeriod[]>([]);
@@ -211,6 +225,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   useEffect(() => {
     if (!editId) {
       setForm((f) => ({ ...EMPTY_FORM, kind: f.kind, status: f.status, occurred_on: f.occurred_on || localDateISO(new Date()) }));
+      setStatusEdited(false);
       setExpectedUpdatedAt(null);
       setDetailTxId(null);
       setError(null);
@@ -251,6 +266,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           status: (t.status as TxStatus) || 'posted',
           memo: t.memo || '',
         });
+        setStatusEdited(false);
         setExpectedUpdatedAt(t.updated_at || null);
         setDetailTxId(editId);
       } catch (err: any) {
@@ -338,17 +354,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     setConflict(false);
     setSuccessMsg(null);
 
-    const payload: Record<string, any> = {
-      kind: form.kind,
-      description: form.description.trim(),
-      amount: String(amountValue),
-      occurred_on: form.occurred_on,
-      account_id: form.account_id,
-      to_account_id: form.to_account_id || null,
-      category_id: form.category_id || null,
-      status: form.status,
-      memo: form.memo || null,
-    };
+    const payload = buildSavePayload(form);
 
     try {
       let data: any;
@@ -647,27 +653,33 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
             </div>
           )}
 
-          {/* Status */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label htmlFor="te-status" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Status
-            </label>
-            <select
-              id="te-status"
-              value={form.status}
-              onChange={(e) => set({ status: e.target.value as TxStatus })}
-              style={{ width: '100%' }}
-            >
-              {Object.entries(STATUS_LABEL).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
-            {isEdit && form.status !== 'review' && (
-              <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                Sair de 'review' fecha automaticamente todos os itens abertos da fila.
-              </span>
-            )}
-          </div>
+          {/* Status (STATUS-P0): somente Pago/Não pago, e somente a partir do cutoff.
+              Antes do cutoff o controle fica oculto e o status original é preservado. */}
+          {isStatusEditable(form.occurred_on) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label htmlFor="te-status" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Status
+              </label>
+              <select
+                id="te-status"
+                value={statusEdited ? form.status : displayStatusValue(form.status)}
+                onChange={(e) => {
+                  set({ status: e.target.value as TxStatus });
+                  setStatusEdited(true);
+                }}
+                style={{ width: '100%' }}
+              >
+                {STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {isEdit && form.status !== 'posted' && form.status !== 'pending' && !statusEdited && (
+                <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  Status original preservado nesta edição. Escolha Pago ou Não pago apenas se quiser alterá-lo.
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Observação */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

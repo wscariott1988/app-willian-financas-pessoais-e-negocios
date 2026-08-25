@@ -1,9 +1,10 @@
 // txList.ts — Lógica da lista de transações (Etapa 1.1).
 // Filtros de status/categoria como estado puro, construção da consulta com
-// período sempre presente, paginação em lotes e status legíveis em português
-// (sem alterar os valores gravados).
+// período sempre presente, paginação em lotes. A apresentação dos status é
+// centralizada em lib/status.ts (Pago/Não pago a partir do cutoff — STATUS-P0b).
 
 import { fetchAllPages, type PageFetcher } from './pagination';
+import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM } from './status';
 
 export const TX_PAGE_SIZE = 1000;
 
@@ -13,16 +14,16 @@ export type TxPageFetcher = PageFetcher;
 // ---------- Filtros (estado puro) ----------
 
 export interface TxListFilters {
-  reviewOnly: boolean;
+  unpaidOnly: boolean;
   noCategory: boolean;
 }
 
 export function txFilterInitial(): TxListFilters {
-  return { reviewOnly: false, noCategory: false };
+  return { unpaidOnly: false, noCategory: false };
 }
 
-export function toggleReviewFilter(f: TxListFilters): TxListFilters {
-  return { ...f, reviewOnly: !f.reviewOnly };
+export function toggleUnpaidFilter(f: TxListFilters): TxListFilters {
+  return { ...f, unpaidOnly: !f.unpaidOnly };
 }
 
 export function toggleNoCategoryFilter(f: TxListFilters): TxListFilters {
@@ -34,7 +35,7 @@ export function clearTxFilters(): TxListFilters {
 }
 
 export function hasActiveTxFilters(f: TxListFilters): boolean {
-  return f.reviewOnly || f.noCategory;
+  return f.unpaidOnly || f.noCategory;
 }
 
 // ---------- Opções da consulta ----------
@@ -44,7 +45,7 @@ export interface TxQueryOptions {
   end?: string;
   search?: string;
   accountId?: string;
-  statusFilter?: 'review' | null;
+  statusFilter?: 'unpaid' | null;
   noCategory?: boolean;
   pendingFilter?: PendingFilter | null;
 }
@@ -58,14 +59,14 @@ export function buildTxListOptions(
     end: base.end,
     search: base.search.trim() ? base.search.trim() : undefined,
     accountId: base.accountId || undefined,
-    statusFilter: filters.reviewOnly ? 'review' : null,
+    statusFilter: filters.unpaidOnly ? 'unpaid' : null,
     noCategory: filters.noCategory || undefined,
   };
 }
 
-// ---------- Fila global de pendências (todo o histórico, sem intervalo) ----------
+// ---------- Fila global de pendências (a partir do cutoff) ----------
 
-export type PendingFilter = 'all' | 'review' | 'noCategory';
+export type PendingFilter = 'all' | 'unpaid' | 'noCategory';
 
 export interface PendingTxBase {
   search: string;
@@ -99,14 +100,16 @@ export function createTxPageFetcher(client: TxClientLike, opts: TxQueryOptions):
     if (opts.accountId) q = q.eq('account_id', opts.accountId);
 
     // Fila global de pendências: OR no servidor (cada transação uma única vez).
+    // "Não pagos" = status ativos não-posted a partir do cutoff (STATUS-P0b);
+    // "Sem categoria" permanece sobre todo o histórico.
     if (opts.pendingFilter === 'all') {
-      q = q.or('status.eq.review,category_id.is.null');
-    } else if (opts.pendingFilter === 'review') {
-      q = q.eq('status', 'review');
+      q = q.or(`and(status.in.(${NON_PAID_STATUSES.join(',')}),occurred_on.gte.${STATUS_EDITABLE_FROM}),category_id.is.null`);
+    } else if (opts.pendingFilter === 'unpaid') {
+      q = q.in('status', NON_PAID_STATUSES).gte('occurred_on', STATUS_EDITABLE_FROM);
     } else if (opts.pendingFilter === 'noCategory') {
       q = q.is('category_id', null);
     } else {
-      if (opts.statusFilter) q = q.eq('status', opts.statusFilter);
+      if (opts.statusFilter === 'unpaid') q = q.in('status', NON_PAID_STATUSES);
       if (opts.noCategory) q = q.is('category_id', null);
     }
 
@@ -130,27 +133,4 @@ export async function fetchAllTxPages(
   pageSize: number = TX_PAGE_SIZE,
 ): Promise<{ rows: TxRow[]; totalCount: number }> {
   return fetchAllPages<TxRow>(fetcher, pageSize);
-}
-
-// ---------- Status legíveis (sem alterar valores gravados) ----------
-
-export interface StatusLabel {
-  label: string;
-  hint: string;
-}
-
-export const STATUS_LABELS: Readonly<Record<string, StatusLabel>> = {
-  posted: { label: 'Confirmada', hint: 'Confirmada: lançada e registrada.' },
-  pending: { label: 'Pendente', hint: 'Pendente: aguardando confirmação.' },
-  review: { label: 'Em revisão', hint: 'Em revisão: aguardando categoria.' },
-  scheduled: {
-    label: 'Agendada',
-    hint: 'Agendada: transação prevista, ainda não confirmada como lançada.',
-  },
-  ignored: { label: 'Ignorada', hint: 'Ignorada: desconsiderada.' },
-};
-
-export function statusLabel(status: string | null | undefined): StatusLabel {
-  if (status && STATUS_LABELS[status]) return STATUS_LABELS[status];
-  return { label: status ?? '', hint: '' };
 }

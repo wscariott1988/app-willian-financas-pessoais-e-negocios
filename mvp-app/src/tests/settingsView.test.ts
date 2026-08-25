@@ -4,7 +4,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { createElement } from 'react';
-import { SettingsView, buildCategoryTree, groupCategoriesByDirection, type SettingsCategory } from '../views/SettingsView';
+import { SettingsView, buildCategoryTree, groupCategoriesByDirection, categoryStatusLabel, type SettingsCategory } from '../views/SettingsView';
 import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
 
 vi.mock('../supabaseClient', () => ({ supabase: {} }));
@@ -124,6 +124,35 @@ describe('SettingsView — Categorias (CFG-P0b)', () => {
     const src = readView();
     expect(src).toContain('Nenhuma categoria encontrada para este perfil.');
     expect(src).toContain('Não foi possível carregar as categorias.');
+  });
+});
+
+describe('SettingsView — STATUS-P0: sem códigos técnicos de categoria (CFG)', () => {
+  it('categoryStatusLabel: ativo sem badge; códigos viram labels amigáveis', () => {
+    expect(categoryStatusLabel('active')).toBeNull();
+    expect(categoryStatusLabel('archived')).toBe('Arquivada');
+    expect(categoryStatusLabel('review')).toBe('Em revisão');
+    expect(categoryStatusLabel('desconhecido')).toBeNull();
+  });
+
+  it('JSX de Configurações não renderiza (review), (archive) nem códigos crus', () => {
+    const src = readView();
+    expect(src).not.toContain('(review)');
+    expect(src).not.toContain('(archive)');
+    expect(src).not.toContain('(archived)');
+    const jsx = src.slice(src.lastIndexOf('return ('));
+    expect(jsx).not.toContain('{node.cat.status}');
+    expect(jsx).not.toContain("'review'");
+    expect(jsx).not.toContain("'archived'");
+    expect(src).toContain('Arquivada');
+    expect(src).toContain('Em revisão');
+  });
+
+  it('não altera consulta de categorias (status/direction/hierarchy intocados no dado)', () => {
+    const src = readView();
+    expect(src).toContain(".from('categories')");
+    expect(src).toContain(".eq('profile_id', profileId)");
+    expect(src).toContain('select(');
   });
 });
 

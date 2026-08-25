@@ -31,6 +31,18 @@ export const DIRECTION_LABELS: Record<string, string> = {
   transfer: 'Transferências',
 };
 
+// STATUS-P0: códigos técnicos de categoria nunca aparecem na UI; somente labels
+// amigáveis em português. Valores de dados (status/direction/hierarchy) inalterados.
+export const CATEGORY_STATUS_LABELS: Record<string, string> = {
+  archived: 'Arquivada',
+  review: 'Em revisão',
+};
+
+export function categoryStatusLabel(status: string): string | null {
+  if (status === 'active') return null;
+  return CATEGORY_STATUS_LABELS[status] ?? null;
+}
+
 export function buildCategoryTree(cats: SettingsCategory[]): CategoryNode[] {
   const byParent = new Map<string | null, SettingsCategory[]>();
   for (const c of cats) {
@@ -115,8 +127,8 @@ function CategoryTreeView({ roots }: { roots: CategoryNode[] }) {
         <li key={node.cat.id} className="settings-tree-item">
           <span className="settings-tree-label">
             {node.cat.display_name}
-            {node.cat.status !== 'active' && (
-              <span className="settings-status-badge">{node.cat.status}</span>
+            {categoryStatusLabel(node.cat.status) && (
+              <span className="settings-status-badge">{categoryStatusLabel(node.cat.status)}</span>
             )}
           </span>
           {node.children.length > 0 && <CategoryTreeView roots={node.children} />}

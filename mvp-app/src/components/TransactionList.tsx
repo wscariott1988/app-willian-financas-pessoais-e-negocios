@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
+import { displayPaymentStatus } from '../lib/status';
+import { StatusBadge } from './StatusBadge';
 import {
   TX_PAGE_SIZE,
   buildPendingTxOptions,
@@ -10,7 +12,6 @@ import {
   createTxPageFetcher,
   fetchAllTxPages,
   hasActiveTxFilters,
-  statusLabel,
   type PendingFilter,
   type TxListFilters,
 } from '../lib/txList';
@@ -55,8 +56,8 @@ interface TransactionListProps {
   onEndDateChange: (v: string) => void;
   filterNoCategory: boolean;
   onFilterNoCategoryChange: (v: boolean) => void;
-  filterReviewOnly: boolean;
-  onFilterReviewOnlyChange: (v: boolean) => void;
+  filterUnpaidOnly: boolean;
+  onFilterUnpaidOnlyChange: (v: boolean) => void;
   mode?: 'period' | 'pending';
   pendingFilter?: PendingFilter;
   onPendingCountChange?: (count: number) => void;
@@ -88,8 +89,8 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   onEndDateChange,
   filterNoCategory,
   onFilterNoCategoryChange,
-  filterReviewOnly,
-  onFilterReviewOnlyChange,
+  filterUnpaidOnly,
+  onFilterUnpaidOnlyChange,
   mode = 'period',
   pendingFilter = 'all',
   onPendingCountChange,
@@ -135,7 +136,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     setLoading(true);
     setError(null);
     const opts = buildTxListOptions(
-      { reviewOnly: filterReviewOnly, noCategory: filterNoCategory } satisfies TxListFilters,
+      { unpaidOnly: filterUnpaidOnly, noCategory: filterNoCategory } satisfies TxListFilters,
       { search, accountId: selectedAccount, start: startDate, end: endDate },
     );
     const fetcher = createTxPageFetcher(supabase as any, opts);
@@ -151,7 +152,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterReviewOnly, profileId, refreshTrigger]);
+  }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterUnpaidOnly, profileId, refreshTrigger]);
 
   // Modo Pendências: carrega um lote por vez (offset), substituindo ou anexando.
   const loadPendingPage = useCallback(async (offset: number, replace: boolean) => {
@@ -205,13 +206,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
     return () => observer.disconnect();
   }, [isPending, hasMore, loading, loadingMore, pendingOffset, loadPendingPage]);
 
-  const filters: TxListFilters = { reviewOnly: filterReviewOnly, noCategory: filterNoCategory };
+  const filters: TxListFilters = { unpaidOnly: filterUnpaidOnly, noCategory: filterNoCategory };
   const filtersActive = hasActiveTxFilters(filters);
-  const activeFilterCount = (filterReviewOnly ? 1 : 0) + (filterNoCategory ? 1 : 0);
+  const activeFilterCount = (filterUnpaidOnly ? 1 : 0) + (filterNoCategory ? 1 : 0);
 
   const handleClearFilters = () => {
     const cleared = clearTxFilters();
-    onFilterReviewOnlyChange(cleared.reviewOnly);
+    onFilterUnpaidOnlyChange(cleared.unpaidOnly);
     onFilterNoCategoryChange(cleared.noCategory);
   };
 
@@ -321,11 +322,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
-                checked={filterReviewOnly}
-                onChange={(e) => onFilterReviewOnlyChange(e.target.checked)}
+                checked={filterUnpaidOnly}
+                onChange={(e) => onFilterUnpaidOnlyChange(e.target.checked)}
                 style={{ width: '16px', height: '16px', cursor: 'pointer' }}
               />
-              <span>Em revisão</span>
+              <span>Não pagos</span>
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -394,14 +395,14 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 </tr>
               ) : (
                 (isPending ? pendingTxns : transactions).map((tx) => {
-                  const st = statusLabel(tx.status);
+                  const stLabel = displayPaymentStatus(tx.status, tx.occurred_on);
                   const catDisplay = (tx as any).categories?.display_name || tx.category_raw || 'Não informada';
                   const txLabel = [
                     tx.raw_description,
                     `Data: ${formatDate(tx.occurred_on)}`,
                     `Categoria: ${catDisplay}`,
                     `Conta: ${tx.accounts?.display_name || tx.account_id.slice(0, 8)}`,
-                    `Status: ${st.label}`,
+                    ...(stLabel ? [`Status: ${stLabel}`] : []),
                   ].join(' · ');
                   return (
                     <tr
@@ -424,9 +425,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                         {catDisplay}
                       </td>
                       <td data-label="Status" className="tx-status">
-                        <span className={`badge badge-${tx.status}`} title={st.hint}>
-                          {st.label}
-                        </span>
+                        <StatusBadge status={tx.status} occurredOn={tx.occurred_on} />
                       </td>
                       <td data-label="Ações" className="tx-edit-cell" style={{ display: 'flex', gap: '2px', justifyContent: 'center', alignItems: 'center' }}>
                         <button
