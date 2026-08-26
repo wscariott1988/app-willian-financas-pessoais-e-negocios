@@ -177,7 +177,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         onPendingCountChange?.(page.totalCount);
       }
     } catch (err) {
-      if (err?.name === 'AbortError') return;
+      if ((err as any)?.name === 'AbortError') return;
       setError(friendlyListError(err));
     } finally {
       if (!replace) setLoadingMore(false);

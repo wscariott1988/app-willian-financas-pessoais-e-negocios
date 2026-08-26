@@ -93,7 +93,7 @@ async function fetchPeriodPage(
     .is('deleted_at', null)
     .gte('occurred_on', range.start)
     .lte('occurred_on', range.end);
-  if (signal) q.abort(signal);
+  if (signal) (q as any).abort(signal);
   const { data, error, count } = await q.range(from, to);
 
   return { rows: (data ?? []) as SummaryRow[], totalCount: count, error };

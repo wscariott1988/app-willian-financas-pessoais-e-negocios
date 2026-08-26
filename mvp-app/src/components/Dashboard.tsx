@@ -347,7 +347,7 @@ async function supabaseCounters(signal?: AbortSignal) {
       .select('id', { count: 'exact', head: true })
       .is('deleted_at', null)
       .is('category_id', null);
-    if (signal) { unpaidQ.abort(signal); noCategoryQ.abort(signal); }
+    if (signal) { (unpaidQ as any).abort(signal); (noCategoryQ as any).abort(signal); }
     const [unpaid, noCategory] = await Promise.all([unpaidQ, noCategoryQ]);
     return { unpaidCount: unpaid.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
   } catch (err) {
