@@ -30,7 +30,7 @@ export function buildAccountQuery(client: AccountClientLike, profileId: string, 
     .from('account_profile_periods')
     .select('account_id, starts_on, ends_on, accounts(display_name, source_name)')
     .eq('profile_id', profileId);
-  if (signal) q.abort(signal);
+  if (signal) q.abortSignal(signal);
   return q;
 }
 

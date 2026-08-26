@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
-import { displayPaymentStatus } from '../lib/status';
+import { displayPaymentStatus, isAbortError } from '../lib/status';
 import { StatusBadge } from './StatusBadge';
 import {
   TX_PAGE_SIZE,
@@ -177,7 +177,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         onPendingCountChange?.(page.totalCount);
       }
     } catch (err) {
-      if ((err as any)?.name === 'AbortError') return;
+      if (isAbortError(err)) return;
       setError(friendlyListError(err));
     } finally {
       if (!replace) setLoadingMore(false);

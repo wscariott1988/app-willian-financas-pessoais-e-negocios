@@ -58,3 +58,7 @@ export function displayPaymentStatus(status: string | null | undefined, occurred
 export function displayStatusValue(status: string | null | undefined): EditableStatus {
   return status === 'posted' ? 'posted' : 'pending';
 }
+
+export function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError';
+}

@@ -7,7 +7,7 @@ import { Modal } from './Modal';
 import { PeriodSelector } from './PeriodSelector';
 import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
-import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM } from '../lib/status';
+import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM, isAbortError } from '../lib/status';
 import type { PeriodController } from './AppShell';
 
 interface Transaction {
@@ -347,11 +347,11 @@ async function supabaseCounters(signal?: AbortSignal) {
       .select('id', { count: 'exact', head: true })
       .is('deleted_at', null)
       .is('category_id', null);
-    if (signal) { (unpaidQ as any).abort(signal); (noCategoryQ as any).abort(signal); }
+    if (signal) { unpaidQ.abortSignal(signal); noCategoryQ.abortSignal(signal); }
     const [unpaid, noCategory] = await Promise.all([unpaidQ, noCategoryQ]);
     return { unpaidCount: unpaid.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
   } catch (err) {
-    if ((err as any)?.name === 'AbortError') return null;
+    if (isAbortError(err)) return null;
     console.error('Erro ao carregar contadores de pendências:', err);
     return null;
   }

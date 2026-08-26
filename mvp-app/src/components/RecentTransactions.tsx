@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { RefreshCw, AlertCircle, Pencil, Trash2, ArrowRight, Layers } from 'lucide-react';
 import { type TxClientLike } from '../lib/txList';
-import { displayPaymentStatus } from '../lib/status';
+import { displayPaymentStatus, isAbortError } from '../lib/status';
 import { StatusBadge } from './StatusBadge';
 import type { PeriodRange } from '../lib/period';
 
@@ -57,13 +57,13 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
         .lte('occurred_on', range.end)
         .order('occurred_on', { ascending: false })
         .order('created_at', { ascending: false });
-      if (signal) q.abort(signal);
+      if (signal) q.abortSignal(signal);
       const { data, error: fetchError } = await q.range(0, MAX_RECENT - 1);
 
       if (fetchError) throw fetchError;
       setTransactions((data ?? []) as Transaction[]);
     } catch (err: unknown) {
-      if ((err as any)?.name === 'AbortError') return;
+      if (isAbortError(err)) return;
       if (import.meta.env.DEV) console.error('[Erro técnico transações recentes]', err);
       setError('Não foi possível carregar as transações recentes.');
       setTransactions([]);

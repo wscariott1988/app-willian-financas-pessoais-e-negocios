@@ -39,7 +39,7 @@ function makeFakeClient() {
     order: () => query,
     range: () => query,
     select: () => query,
-    abort: (_s?: unknown) => { log.push(['abort']); return query; },
+    abortSignal: (_s?: unknown) => { log.push(['abortSignal']); return query; },
     then: (resolve: (r: any) => void) => resolve({ data: [], count: 0, error: null }),
   };
   return { client: { from: () => query }, log };
@@ -345,13 +345,13 @@ describe('STATUS-P0c — AbortController em fetches (eliminação da race 401)',
     const src = readSource('lib/txList.ts');
     expect(src).toContain('signal?: AbortSignal');
     expect(src).toContain('opts.signal');
-    expect(src).toContain('q.abort(');
+    expect(src).toContain('q.abortSignal(');
   });
 
   it('accountQuery.ts buildAccountQuery aceita signal', () => {
     const src = readSource('lib/accountQuery.ts');
     expect(src).toContain('signal?: AbortSignal');
-    expect(src).toContain('q.abort(signal)');
+    expect(src).toContain('q.abortSignal(signal)');
   });
 
   it('summary.ts fetchPeriodSummary aceita signal', () => {

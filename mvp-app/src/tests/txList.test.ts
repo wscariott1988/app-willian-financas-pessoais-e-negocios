@@ -52,7 +52,7 @@ function makeFakeClient(rows: unknown[], total: number) {
     order: (c: string, v: unknown) => { log.push(['order', c, v]); return query; },
     range: (a: number, b: number) => { log.push(['range', a, b]); lastRange = [a, b]; return query; },
     select: (s: unknown, o: unknown) => { log.push(['select', s, o]); return query; },
-    abort: (_s?: unknown) => { log.push(['abort']); return query; },
+    abortSignal: (_s?: unknown) => { log.push(['abortSignal']); return query; },
     then: (resolve: (r: any) => void) =>
       resolve({ data: rows.slice(lastRange[0], lastRange[1] + 1), count: total, error: null }),
   };
@@ -272,7 +272,7 @@ describe('consultas — período e perfil presentes em todas as páginas', () =>
     const fetcher = createTxPageFetcher(client, opts);
     await fetcher(0, 9);
     const s = log.map((c) => JSON.stringify(c));
-    expect(s).toContain(JSON.stringify(['abort']));
+    expect(s).toContain(JSON.stringify(['abortSignal']));
   });
 });
 
