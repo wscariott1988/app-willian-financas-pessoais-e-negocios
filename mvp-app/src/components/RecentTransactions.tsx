@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { RefreshCw, AlertCircle, Pencil, Trash2, ArrowRight, Layers } from 'lucide-react';
 import { type TxClientLike } from '../lib/txList';
 import { displayPaymentStatus } from '../lib/status';
+import { StatusBadge } from './StatusBadge';
 import type { PeriodRange } from '../lib/period';
 
 export interface Transaction {
@@ -44,23 +45,25 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchRecent = useCallback(async () => {
+  const fetchRecent = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: fetchError } = await (supabase as TxClientLike)
+      const q = (supabase as TxClientLike)
         .from('transactions')
         .select('*, categories(display_name), accounts(display_name)', { count: 'exact' })
         .is('deleted_at', null)
         .gte('occurred_on', range.start)
         .lte('occurred_on', range.end)
         .order('occurred_on', { ascending: false })
-        .order('created_at', { ascending: false })
-        .range(0, MAX_RECENT - 1);
+        .order('created_at', { ascending: false });
+      if (signal) q.abort(signal);
+      const { data, error: fetchError } = await q.range(0, MAX_RECENT - 1);
 
       if (fetchError) throw fetchError;
       setTransactions((data ?? []) as Transaction[]);
     } catch (err: unknown) {
+      if ((err as any)?.name === 'AbortError') return;
       if (import.meta.env.DEV) console.error('[Erro técnico transações recentes]', err);
       setError('Não foi possível carregar as transações recentes.');
       setTransactions([]);
@@ -70,7 +73,9 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
   }, [range.start, range.end, profileId, refreshTrigger]);
 
   useEffect(() => {
-    fetchRecent();
+    const ac = new AbortController();
+    fetchRecent(ac.signal);
+    return () => ac.abort();
   }, [fetchRecent]);
 
   const formatCurrency = (val: string, kind: string) => {
@@ -148,6 +153,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 <span className="recent-tx-value">
                   {formatCurrency(tx.amount, tx.transaction_kind)}
                 </span>
+                <StatusBadge status={tx.status} occurredOn={tx.occurred_on} />
                 <div className="recent-tx-actions">
                   <button
                     type="button"

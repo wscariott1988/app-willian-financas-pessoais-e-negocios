@@ -77,22 +77,24 @@ export async function buildPeriodSummary(
 }
 
 // Consulta real no Supabase com filtro de data, contagem exata e paginação.
-export async function fetchPeriodSummary(range: PeriodRange): Promise<PeriodSummary> {
-  return buildPeriodSummary((from, to) => fetchPeriodPage(range, from, to));
+export async function fetchPeriodSummary(range: PeriodRange, signal?: AbortSignal): Promise<PeriodSummary> {
+  return buildPeriodSummary((from, to) => fetchPeriodPage(range, from, to, signal));
 }
 
 async function fetchPeriodPage(
   range: PeriodRange,
   from: number,
   to: number,
+  signal?: AbortSignal,
 ): Promise<PeriodPage> {
-  const { data, error, count } = await supabase
+  const q = supabase
     .from('transactions')
     .select('amount, transaction_kind', { count: 'exact' })
     .is('deleted_at', null)
     .gte('occurred_on', range.start)
-    .lte('occurred_on', range.end)
-    .range(from, to);
+    .lte('occurred_on', range.end);
+  if (signal) q.abort(signal);
+  const { data, error, count } = await q.range(from, to);
 
   return { rows: (data ?? []) as SummaryRow[], totalCount: count, error };
 }

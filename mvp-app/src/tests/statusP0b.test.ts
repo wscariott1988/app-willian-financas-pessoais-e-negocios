@@ -39,6 +39,7 @@ function makeFakeClient() {
     order: () => query,
     range: () => query,
     select: () => query,
+    abort: (_s?: unknown) => { log.push(['abort']); return query; },
     then: (resolve: (r: any) => void) => resolve({ data: [], count: 0, error: null }),
   };
   return { client: { from: () => query }, log };
@@ -133,6 +134,12 @@ describe('STATUS-P0b — pontos visíveis nunca usam vocábulos antigos', () => 
     expect(src).not.toContain('Em revisão');
     expect(src).not.toContain('Agendada');
     expect(src).not.toContain('Ignorada');
+  });
+
+  it('RecentTransactions importa e renderiza StatusBadge (badge visual na Home)', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain("import { StatusBadge } from './StatusBadge'");
+    expect(src).toContain('<StatusBadge status={tx.status} occurredOn={tx.occurred_on} />');
   });
 
   it('Dashboard/TransactionsView/AppShell: fila renomeada para Não pagos, sem review operacional', () => {
@@ -233,5 +240,122 @@ describe('STATUS-P0b — vocabulário global (regra de produto final)', () => {
     }
     expect(VISIBLE_PAID_OR_UNPAID.join('|')).toContain('Pago');
     expect(VISIBLE_PAID_OR_UNPAID.join('|')).toContain('Não pago');
+  });
+});
+
+describe('STATUS-P0c — RecentTransactions renderiza badge visual de status', () => {
+  it('StatusBadge renderiza "Pago" para posted >= cutoff', () => {
+    const html = renderToString(createElement(StatusBadge, { status: 'posted', occurredOn: '2026-08-01' }));
+    expect(html).toContain('badge-posted');
+    expect(html).toContain('>Pago</span>');
+  });
+
+  it('StatusBadge renderiza "Não pago" para cada status não-posted >= cutoff', () => {
+    for (const s of NON_PAID_STATUSES) {
+      const html = renderToString(createElement(StatusBadge, { status: s, occurredOn: '2026-08-01' }));
+      expect(html).toContain('badge-pending');
+      expect(html).toContain('>Não pago</span>');
+    }
+  });
+
+  it('StatusBadge renderiza nada para posted < cutoff', () => {
+    const html = renderToString(createElement(StatusBadge, { status: 'posted', occurredOn: '2026-07-31' }));
+    expect(html).toBe('');
+  });
+
+  it('StatusBadge renderiza nada para review < cutoff', () => {
+    const html = renderToString(createElement(StatusBadge, { status: 'review', occurredOn: '2026-07-31' }));
+    expect(html).toBe('');
+  });
+
+  it('nenhuma string técnica aparece como badge visual', () => {
+    for (const s of ['posted', 'pending', 'review', 'scheduled', 'ignored']) {
+      const html = renderToString(createElement(StatusBadge, { status: s, occurredOn: '2026-08-01' }));
+      for (const forbidden of ['posted', 'pending', 'review', 'scheduled', 'ignored']) {
+        expect(html).not.toContain(`>${forbidden}<`);
+      }
+    }
+  });
+});
+
+describe('STATUS-P0c — harness/proteção contra 401 na troca de perfil', () => {
+  it('smoke-prod.mjs não fecha browser/page antes do fluxo completar', () => {
+    const src = readSource('../smoke-prod.mjs');
+    const closeIdx = src.indexOf('browser.close()');
+    const mainEnd = src.lastIndexOf('await browser.close()');
+    expect(closeIdx).toBeGreaterThan(-1);
+    expect(mainEnd).toBeGreaterThan(-1);
+    const afterClose = src.slice(mainEnd);
+    expect(afterClose).not.toContain('process.exit(0)');
+    expect(afterClose).not.toMatch(/page\.close\(\)/);
+    expect(afterClose).not.toMatch(/context\.close\(\)/);
+  });
+
+  it('smoke-prod.mjs aguarda estabilização após troca de perfil (polling)', () => {
+    const src = readSource('../smoke-prod.mjs');
+    expect(src).toContain('aguardando troca de perfil');
+    expect(src).toContain('sleep(5000)');
+  });
+
+  it('smoke-prod.mjs registra HTTP errors como array, não como exceção', () => {
+    const src = readSource('../smoke-prod.mjs');
+    expect(src).toContain('HTTP_ERRORS.push');
+    expect(src).toContain('status >= 400');
+  });
+
+  it('smoke-prod.mjs não intercepta requests de auth', () => {
+    const src = readSource('../smoke-prod.mjs');
+    expect(src).toContain("url.includes('/auth/')");
+    expect(src).toContain('return;');
+  });
+
+  it('smoke-prod.mjs instrumenta REQUEST_TRACE com profile/phase/auth', () => {
+    const src = readSource('../smoke-prod.mjs');
+    expect(src).toContain('REQUEST_TRACE');
+    expect(src).toContain('BEFORE_SWITCH');
+    expect(src).toContain('AFTER_SWITCH');
+    expect(src).toContain('authPresent');
+    expect(src).toContain('currentProfile');
+  });
+});
+
+describe('STATUS-P0c — AbortController em fetches (eliminação da race 401)', () => {
+  it('RecentTransactions useEffect retorna cleanup que aborta', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain('new AbortController()');
+    expect(src).toContain('ac.abort()');
+    expect(src).toContain('AbortError');
+  });
+
+  it('TransactionList useEffect principal retorna cleanup que aborta', () => {
+    const src = readSource('components/TransactionList.tsx');
+    expect(src).toContain('new AbortController()');
+    expect(src).toContain('ac.abort()');
+    expect(src).toContain("err?.name === 'AbortError'");
+  });
+
+  it('Dashboard useEffect de resumo retorna cleanup que aborta', () => {
+    const src = readSource('components/Dashboard.tsx');
+    expect(src).toContain('new AbortController()');
+    expect(src).toContain('ac.abort()');
+    expect(src).toContain("err?.name === 'AbortError'");
+  });
+
+  it('txList.ts createTxPageFetcher aceita signal e aplica no query', () => {
+    const src = readSource('lib/txList.ts');
+    expect(src).toContain('signal?: AbortSignal');
+    expect(src).toContain('opts.signal');
+    expect(src).toContain('q.abort(');
+  });
+
+  it('accountQuery.ts buildAccountQuery aceita signal', () => {
+    const src = readSource('lib/accountQuery.ts');
+    expect(src).toContain('signal?: AbortSignal');
+    expect(src).toContain('q.abort(signal)');
+  });
+
+  it('summary.ts fetchPeriodSummary aceita signal', () => {
+    const src = readSource('lib/summary.ts');
+    expect(src).toContain('signal?: AbortSignal');
   });
 });

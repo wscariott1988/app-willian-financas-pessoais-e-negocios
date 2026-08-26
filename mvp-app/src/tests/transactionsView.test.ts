@@ -466,7 +466,7 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
     // "Não pagos" = status não-posted a partir do cutoff
     expect(dashboard).toContain('.in(\'status\', NON_PAID_STATUSES)');
     expect(dashboard).toContain(".gte('occurred_on', STATUS_EDITABLE_FROM)");
-    expect(dashboard).toContain('supabaseCounters()');
+    expect(dashboard).toContain('supabaseCounters(signal)');
     expect(dashboard).toContain('A partir de 01/08/2026');
     expect(dashboard).toContain('Todo o histórico');
   });
@@ -512,7 +512,7 @@ describe('modos Do período e Pendências (1.2A.4B)', () => {
   it('16) carregamento inicial do Pendências é paginado (primeiro lote)', () => {
     const list = readSource('components/TransactionList.tsx');
     expect(list).toContain('PENDING_PAGE_SIZE');
-    expect(list).toContain('loadPendingPage(0, true)');
+    expect(list).toMatch(/loadPendingPage\(0,\s*true/);
     expect(list).toContain('fetcher(offset, offset + PENDING_PAGE_SIZE - 1)');
   });
 
@@ -1147,6 +1147,12 @@ describe('Diferenciação Início ↔ Transações', () => {
     expect(src).toContain("is('deleted_at', null)");
   });
 
+  it('30b) RecentTransactions renderiza StatusBadge para exibir Pago/Não pago na Home', () => {
+    const src = readSource('components/RecentTransactions.tsx');
+    expect(src).toContain("import { StatusBadge } from './StatusBadge'");
+    expect(src).toContain('<StatusBadge status={tx.status} occurredOn={tx.occurred_on} />');
+  });
+
   it('31) Dashboard não possui state de busca, conta ou filtros de status', () => {
     const src = readSource('components/Dashboard.tsx');
     expect(src).not.toMatch(/useState.*search/);
@@ -1315,7 +1321,7 @@ describe('filtro de contas — isolamento por perfil (CFG-P0a)', () => {
 
   it('troca de perfil refaz a consulta de contas (TransactionList usa buildAccountQuery com profileId e depende de [profileId])', () => {
     const src = readSource('components/TransactionList.tsx');
-    expect(src).toContain('buildAccountQuery(supabase as any, profileId)');
+    expect(src).toMatch(/buildAccountQuery\(supabase as any, profileId/);
     expect(src).toContain('}, [profileId]);');
     expect(src).not.toContain(".from('accounts')");
   });

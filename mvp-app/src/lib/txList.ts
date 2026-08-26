@@ -48,6 +48,7 @@ export interface TxQueryOptions {
   statusFilter?: 'unpaid' | null;
   noCategory?: boolean;
   pendingFilter?: PendingFilter | null;
+  signal?: AbortSignal;
 }
 
 export function buildTxListOptions(
@@ -119,6 +120,8 @@ export function createTxPageFetcher(client: TxClientLike, opts: TxQueryOptions):
 
     // Ordenação estável: ocorrência desc, depois criação desc.
     q = q.order('occurred_on', { ascending: false }).order('created_at', { ascending: false });
+
+    if (opts.signal) q.abort(opts.signal);
 
     return q.range(from, to).then((r: any) => ({
       rows: (r.data ?? []) as unknown[],

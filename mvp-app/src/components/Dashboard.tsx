@@ -61,12 +61,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
 
   const { range } = period;
 
-  const fetchSummary = useCallback(async () => {
+  const fetchSummary = useCallback(async (signal?: AbortSignal) => {
     setSummary((s) => ({ ...s, loading: true, error: null }));
     try {
-      const periodSummary = await fetchPeriodSummary(range);
+      const periodSummary = await fetchPeriodSummary(range, signal);
 
-      const counters = await supabaseCounters();
+      const counters = await supabaseCounters(signal);
       let unpaidCount = 0;
       let noCategoryCount = 0;
       if (counters) {
@@ -85,13 +85,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         error: null,
       });
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       console.error('Erro ao carregar resumo financeiro:', err);
       setSummary((s) => ({ ...s, loading: false, error: err.message || 'Erro ao consultar o resumo do período.' }));
     }
   }, [range]);
 
   useEffect(() => {
-    fetchSummary();
+    const ac = new AbortController();
+    fetchSummary(ac.signal);
+    return () => ac.abort();
   }, [fetchSummary, refreshTrigger]);
 
   const handleEditorSuccess = () => {
@@ -331,23 +334,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
 
 // Contadores de pendências (STATUS-P0b): "Não pagos" = status ativos não-posted
 // a partir do cutoff (nunca review do histórico); "Sem categoria" = todo o histórico.
-async function supabaseCounters() {
+async function supabaseCounters(signal?: AbortSignal) {
   try {
-    const [unpaid, noCategory] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .is('deleted_at', null)
-        .in('status', NON_PAID_STATUSES)
-        .gte('occurred_on', STATUS_EDITABLE_FROM),
-      supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .is('deleted_at', null)
-        .is('category_id', null),
-    ]);
+    const unpaidQ = supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null)
+      .in('status', NON_PAID_STATUSES)
+      .gte('occurred_on', STATUS_EDITABLE_FROM);
+    const noCategoryQ = supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null)
+      .is('category_id', null);
+    if (signal) { unpaidQ.abort(signal); noCategoryQ.abort(signal); }
+    const [unpaid, noCategory] = await Promise.all([unpaidQ, noCategoryQ]);
     return { unpaidCount: unpaid.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
   } catch (err) {
+    if ((err as any)?.name === 'AbortError') return null;
     console.error('Erro ao carregar contadores de pendências:', err);
     return null;
   }

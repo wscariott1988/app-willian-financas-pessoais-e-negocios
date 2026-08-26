@@ -118,33 +118,38 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   useEffect(() => {
+    const ac = new AbortController();
     const fetchAccounts = async () => {
       try {
-        const { data, error: accError } = await buildAccountQuery(supabase as any, profileId);
+        const { data, error: accError } = await buildAccountQuery(supabase as any, profileId, ac.signal);
         if (accError) throw accError;
         setAccounts(mapAccountPeriods((data ?? []) as AccountPeriodRow[]));
       } catch (err: any) {
+        if (err?.name === 'AbortError') return;
         console.error('Erro ao buscar contas:', err);
       }
     };
     fetchAccounts();
+    return () => ac.abort();
   }, [profileId]);
 
   // Lista contínua do período: busca todas as páginas do recorte (perfil via RLS,
   // período, busca, conta e filtros atuais), sem paginação visível.
-  const fetchTransactions = useCallback(async () => {
+  const fetchTransactions = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     const opts = buildTxListOptions(
       { unpaidOnly: filterUnpaidOnly, noCategory: filterNoCategory } satisfies TxListFilters,
       { search, accountId: selectedAccount, start: startDate, end: endDate },
     );
+    if (signal) opts.signal = signal;
     const fetcher = createTxPageFetcher(supabase as any, opts);
     try {
       const { rows, totalCount } = await fetchAllTxPages(fetcher, TX_PAGE_SIZE);
       setTransactions(rows as unknown as Transaction[]);
       setTotalLoaded(totalCount);
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       // Lote falhou: nunca apresentar parcial como completo.
       setError(friendlyListError(err));
       setTransactions([]);
@@ -155,10 +160,11 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   }, [search, selectedAccount, startDate, endDate, filterNoCategory, filterUnpaidOnly, profileId, refreshTrigger]);
 
   // Modo Pendências: carrega um lote por vez (offset), substituindo ou anexando.
-  const loadPendingPage = useCallback(async (offset: number, replace: boolean) => {
+  const loadPendingPage = useCallback(async (offset: number, replace: boolean, signal?: AbortSignal) => {
     if (!replace) setLoadingMore(true);
     try {
       const opts = buildPendingTxOptions({ search, accountId: selectedAccount, pendingFilter });
+      if (signal) opts.signal = signal;
       const fetcher = createTxPageFetcher(supabase as any, opts);
       const page = await fetcher(offset, offset + PENDING_PAGE_SIZE - 1);
       if (page.error) throw page.error;
@@ -171,6 +177,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         onPendingCountChange?.(page.totalCount);
       }
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       setError(friendlyListError(err));
     } finally {
       if (!replace) setLoadingMore(false);
@@ -179,14 +186,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   }, [search, selectedAccount, pendingFilter, profileId, onPendingCountChange, refreshTrigger]);
 
   useEffect(() => {
+    const ac = new AbortController();
     if (isPending) {
       setError(null);
       setLoading(true);
       setPendingTxns([]);
-      loadPendingPage(0, true);
+      loadPendingPage(0, true, ac.signal);
     } else {
-      fetchTransactions();
+      fetchTransactions(ac.signal);
     }
+    return () => ac.abort();
   }, [isPending, loadPendingPage, fetchTransactions, refreshTrigger]);
 
   // Próximo lote progressivo quando o sentinel entra na área visível.
