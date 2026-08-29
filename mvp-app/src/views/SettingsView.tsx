@@ -1,6 +1,7 @@
 import React from 'react';
 import { AccountsSection } from '../settings/AccountsSection';
 import { CategoriesSection } from '../settings/CategoriesSection';
+import { HistorySection } from '../settings/HistorySection';
 
 // Re-export de helpers/tipos (testes e consumidores externos importam da view).
 export {
@@ -30,6 +31,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ profileId }) => {
       </div>
       <AccountsSection profileId={profileId} />
       <CategoriesSection profileId={profileId} />
+      <HistorySection profileId={profileId} />
     </div>
   );
 };

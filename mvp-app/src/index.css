@@ -2538,3 +2538,53 @@ button.period-range-custom {
     justify-content: flex-end;
   }
 }
+/* ============ CFG-P4A: Histórico (Configurações, read-only) ============ */
+.settings-history-filters {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-history-list {
+  gap: var(--space-1);
+}
+
+.settings-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  flex-wrap: wrap;
+}
+
+.settings-history-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.settings-history-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.settings-history-detail {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-history-date {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .settings-history-row {
+    align-items: flex-start;
+  }
+}
