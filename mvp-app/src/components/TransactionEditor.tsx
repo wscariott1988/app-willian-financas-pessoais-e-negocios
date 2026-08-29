@@ -3,8 +3,21 @@ import { supabase } from '../supabaseClient';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import { isAccountOpenOn } from '../lib/accountCrud';
 import {
-  Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2,
+  Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2, Repeat, CalendarRange,
 } from 'lucide-react';
+import {
+  buildSeriesPreview,
+  previewLine,
+  previewSummary,
+  seriesOccurrenceStatus,
+  SERIES_FREQUENCY_LABELS,
+  SERIES_KIND_LABELS,
+  type PreviewRow,
+  type SeriesFrequency,
+  type SeriesKind,
+  type SeriesScope,
+  SERIES_SCOPE_LABELS,
+} from '../lib/series';
 
 interface Transaction {
   id: string;
@@ -55,6 +68,13 @@ export interface TxFormState {
   status: TxStatus;
   memo: string;
 }
+
+export type EntryType = 'single' | 'installment' | 'recurring';
+export const ENTRY_TYPE_LABELS: Record<EntryType, string> = {
+  single: 'Única',
+  installment: 'Parcelada',
+  recurring: 'Recorrente',
+};
 
 interface TransactionEditorProps {
   profileId: string;
@@ -164,6 +184,17 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // ---- Package 015: série (somente criação) e escopo de série (edição/exclusão)
+  const [entryType, setEntryType] = useState<EntryType>('single');
+  const [seriesTotal, setSeriesTotal] = useState<string>('12');
+  const [seriesFrequency, setSeriesFrequency] = useState<SeriesFrequency>('monthly');
+  const [seriesScope, setSeriesScope] = useState<SeriesScope | null>(null);
+  const [preview, setPreview] = useState<PreviewRow[] | null>(null);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [seriesInfo, setSeriesInfo] = useState<{ series_id: string; occurrence_index: number; total: number | null; kind: string } | null>(null);
+  const [extending, setExtending] = useState(false);
+  const [extendMsg, setExtendMsg] = useState<string | null>(null);
+  const [confirmPast, setConfirmPast] = useState(false);
   const mounted = useRef(true);
   const savingRef = useRef(false);
 
@@ -244,6 +275,8 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       setDetailTxId(null);
       setError(null);
       setConflict(false);
+      setSeriesInfo(null);
+      setSeriesScope(null);
       return;
     }
     if (detailTxId === editId) return;
@@ -283,6 +316,23 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         setStatusEdited(false);
         setExpectedUpdatedAt(t.updated_at || null);
         setDetailTxId(editId);
+        // Package 015: se a transação pertence a uma série, descobre o escopo
+        try {
+          const { data: occ, error: occErr } = await supabase
+            .from('transaction_series_occurrences')
+            .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences)')
+            .eq('transaction_id', editId)
+            .maybeSingle();
+          if (occErr) throw occErr;
+          if (occ?.series_id) {
+            const ser = occ.transaction_series as unknown as { total_occurrences: number | null; kind: string | null } | null;
+            setSeriesInfo({ series_id: occ.series_id, occurrence_index: occ.occurrence_index, total: ser?.total_occurrences ?? null, kind: ser?.kind ?? 'recurring' });
+          } else {
+            setSeriesInfo(null);
+          }
+        } catch {
+          setSeriesInfo(null);
+        }
       } catch (err: any) {
         console.error('Erro ao carregar detalhe da transação:', err);
         if (!cancelled) setError(err.message || 'Falha ao carregar a transação.');
@@ -360,6 +410,39 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     (form.kind === 'transfer' ? transferReady : true) &&
     !!form.status;
 
+  // ---- Package 015: preview local (nenhum write) ----
+  const seriesValid = entryType === 'single' || (form.kind !== 'transfer' && !!form.account_id && !!form.occurred_on && amountValue !== null && (entryType === 'installment' ? (Number(seriesTotal) >= 1 && Number(seriesTotal) <= 120) : true));
+
+  useEffect(() => {
+    if (entryType === 'single' || !seriesValid || !form.account_id) {
+      setPreview(null);
+      setSeriesError(null);
+      return;
+    }
+    const total = entryType === 'installment' ? Math.max(1, Number(seriesTotal) || 1) : null;
+    const catOk = form.kind === 'transfer' || form.category_id === '' || categories.some((c) => c.id === form.category_id);
+    const p = buildSeriesPreview(
+      form.kind === 'income' ? 'income' : 'expense',
+      entryType === 'installment' ? 'installment' : 'recurring',
+      seriesFrequency,
+      amountValue as number,
+      total,
+      form.occurred_on,
+      (date) => isAccountValidForDate(form.account_id, date, periods),
+      catOk,
+    );
+    const badAccount = p.rows.filter((r) => !r.account_valid);
+    const badCategory = p.rows.filter((r) => !r.category_valid);
+    if (badAccount.length > 0) {
+      setSeriesError(`A conta escolhida não é válida para o perfil em ${badAccount.length} ocorrência(s) (ex.: ${previewLine(badAccount[0])}). Ajuste a conta ou a data inicial.`);
+    } else if (badCategory.length > 0) {
+      setSeriesError('A categoria escolhida não é válida (inativa, arquivada ou de outro perfil) para todas as ocorrências.');
+    } else {
+      setSeriesError(null);
+    }
+    setPreview(p.rows);
+  }, [entryType, seriesValid, seriesTotal, seriesFrequency, form.account_id, form.occurred_on, amountValue, form.kind, form.category_id, categories, periods]);
+
   const doSave = async () => {
     if (!canSave || savingRef.current) return;
     savingRef.current = true;
@@ -374,10 +457,46 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       let data: any;
       let rpcError: any;
       if (isEdit && editId) {
-        const res = await supabase.rpc('transaction_update', {
-          ...payload,
-          transaction_id: editId,
-          expected_updated_at: expectedUpdatedAt,
+        if (seriesInfo) {
+          // Package 015: edição com escopo de série (this | this_and_next | whole)
+          const scope = seriesScope ?? 'this';
+          const res = await supabase.rpc('transaction_series_edit', {
+            p_series_id: seriesInfo.series_id,
+            p_from_occurrence: seriesInfo.occurrence_index,
+            p_scope: scope,
+            p_expected_updated_at: expectedUpdatedAt,
+            p_display_name: payload.description || null,
+            p_account_id: payload.account_id || null,
+            p_category_id: payload.category_id || null,
+            p_status: payload.status || null,
+            p_memo: payload.memo || null,
+            p_confirm_past: scope === 'whole' ? confirmPast : false,
+          });
+          data = res.data;
+          rpcError = res.error;
+        } else {
+          const res = await supabase.rpc('transaction_update', {
+            ...payload,
+            transaction_id: editId,
+            expected_updated_at: expectedUpdatedAt,
+          });
+          data = res.data;
+          rpcError = res.error;
+        }
+      } else if (entryType !== 'single') {
+        // Package 015: criação em série (parcelada/recorrente) — RPC atômico
+        const res = await supabase.rpc('transaction_series_create', {
+          p_idempotency_key: crypto.randomUUID(),
+          p_direction: form.kind === 'income' ? 'income' : 'expense',
+          p_kind: entryType === 'installment' ? 'installment' : 'recurring',
+          p_frequency: seriesFrequency,
+          p_display_name: payload.description,
+          p_amount: payload.amount,
+          p_total_occurrences: entryType === 'installment' ? Number(seriesTotal) : null,
+          p_starts_on: payload.occurred_on,
+          p_account_id: payload.account_id,
+          p_category_id: payload.category_id || null,
+          p_status: payload.status || 'posted',
         });
         data = res.data;
         rpcError = res.error;
@@ -398,7 +517,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         return;
       }
 
-      const actionLabel = isEdit ? 'atualizada' : 'criada';
+      const actionLabel = isEdit ? 'atualizada' : entryType === 'single' ? 'criada' : 'criada em série';
       setSuccessMsg(`Transação ${actionLabel} com sucesso!`);
       if (!mounted.current) return;
       setTimeout(() => {
@@ -419,15 +538,54 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     }
   };
 
+  const doExtendSeries = async () => {
+    if (!seriesInfo || extending) return;
+    setExtending(true);
+    setExtendMsg(null);
+    setError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('transaction_series_materialize', {
+        p_series_id: seriesInfo.series_id,
+      });
+      if (rpcError) {
+        setError(String(rpcError.message || rpcError));
+        return;
+      }
+      const n = data?.created ?? 0;
+      setExtendMsg(n > 0 ? `Mais ${n} ocorrências geradas.` : 'Todas as ocorrências já foram geradas até agora.');
+    } catch (err: any) {
+      setError(String(err.message || 'Erro ao gerar próximas ocorrências.'));
+    } finally {
+      if (mounted.current) setExtending(false);
+    }
+  };
+
   const doDelete = async () => {
     if (!isEdit || !editId || !expectedUpdatedAt) return;
     setDeleting(true);
     setError(null);
     try {
-      const { data, error: rpcError } = await supabase.rpc('transaction_delete', {
-        p_transaction_id: editId,
-        p_expected_updated_at: expectedUpdatedAt,
-      });
+      let data: any;
+      let rpcError: any;
+      if (seriesInfo) {
+        // Package 015: exclusão com escopo de série (this | this_and_next | whole)
+        const res = await supabase.rpc('transaction_series_delete', {
+          p_series_id: seriesInfo.series_id,
+          p_from_occurrence: seriesInfo.occurrence_index,
+          p_scope: seriesScope ?? 'this',
+          p_expected_updated_at: expectedUpdatedAt,
+          p_confirm_past: (seriesScope ?? 'this') === 'whole' ? confirmPast : false,
+        });
+        data = res.data;
+        rpcError = res.error;
+      } else {
+        const res = await supabase.rpc('transaction_delete', {
+          p_transaction_id: editId,
+          p_expected_updated_at: expectedUpdatedAt,
+        });
+        data = res.data;
+        rpcError = res.error;
+      }
       if (rpcError) {
         const msg = String(rpcError.message || rpcError);
         if (msg.includes('CONFLITO')) {
@@ -527,6 +685,160 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               <option value="transfer">Transferência</option>
             </select>
           </div>
+
+          {/* Package 015: tipo de entrada (somente criação; transferências nunca em série) */}
+          {!isEdit && form.kind !== 'transfer' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label htmlFor="te-entry-type" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Entrada
+              </label>
+              <div id="te-entry-type" role="group" aria-label="Tipo de entrada" style={{ display: 'flex', gap: '8px' }}>
+                {(['single', 'installment', 'recurring'] as EntryType[]).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-pressed={entryType === t}
+                    onClick={() => setEntryType(t)}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: '8px', border: entryType === t ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
+                      backgroundColor: entryType === t ? 'rgba(14, 165, 233, 0.1)' : 'rgba(13, 18, 34, 0.6)',
+                      color: entryType === t ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                      fontWeight: entryType === t ? 700 : 500, fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                    }}
+                  >
+                    {t === 'recurring' ? <Repeat size={14} /> : t === 'installment' ? <CalendarRange size={14} /> : <Plus size={14} />}
+                    {ENTRY_TYPE_LABELS[t]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Package 015: campos de série (criação) */}
+          {!isEdit && entryType !== 'single' && form.kind !== 'transfer' && (
+            <div style={{
+              backgroundColor: 'rgba(13, 18, 34, 0.6)', border: '1px solid var(--border-card)',
+              borderRadius: '8px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px',
+            }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {entryType === 'installment' ? 'Parcelamento' : 'Recorrência'}
+              </span>
+              {entryType === 'installment' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label htmlFor="te-series-total" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                    Quantidade de parcelas
+                  </label>
+                  <input
+                    id="te-series-total"
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={seriesTotal}
+                    onChange={(e) => setSeriesTotal(e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                    O valor informado acima é o <strong>total</strong>; cada parcela recebe a divisão exata (a última ajusta os centavos).
+                  </span>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label htmlFor="te-series-freq" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                    Frequência
+                  </label>
+                  <select
+                    id="te-series-freq"
+                    value={seriesFrequency}
+                    onChange={(e) => setSeriesFrequency(e.target.value as SeriesFrequency)}
+                    style={{ width: '100%' }}
+                  >
+                    {Object.entries(SERIES_FREQUENCY_LABELS).map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                    Recorrência aberta: cria até 24 ocorrências à frente (horizonte controlado, nunca infinito). Ocorrências futuras nascem como "Não pago (agendado)".
+                  </span>
+                </div>
+              )}
+
+              {preview && preview.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '160px', overflowY: 'auto' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>{previewSummary(preview)}</span>
+                  {preview.slice(0, entryType === 'recurring' ? 8 : 12).map((r) => (
+                    <span key={r.index} style={{ fontSize: '12px', color: r.account_valid && r.category_valid ? 'var(--color-text)' : 'var(--color-danger)', fontVariantNumeric: 'tabular-nums' }}>
+                      {previewLine(r)}
+                    </span>
+                  ))}
+                  {entryType === 'recurring' && preview.length > 8 && (
+                    <span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>
+                      … e mais {preview.length - 8} ocorrências futuras
+                    </span>
+                  )}
+                </div>
+              )}
+              {seriesError && (
+                <span style={{ fontSize: '12px', color: 'var(--color-danger)', display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                  <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
+                  {seriesError}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Package 015: escopo de série (edição/exclusão) */}
+          {isEdit && seriesInfo && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label htmlFor="te-series-scope" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Aplicar a
+              </label>
+              <select
+                id="te-series-scope"
+                value={seriesScope ?? 'this'}
+                onChange={(e) => { setSeriesScope(e.target.value as SeriesScope); setConfirmPast(false); }}
+                style={{ width: '100%' }}
+              >
+                {Object.entries(SERIES_SCOPE_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>{l}</option>
+                ))}
+              </select>
+              {seriesScope === 'whole' && (
+                <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={confirmPast}
+                    onChange={(e) => setConfirmPast(e.target.checked)}
+                    style={{ marginTop: '1px' }}
+                  />
+                  <span>
+                    Confirmo que desejo alterar também ocorrências passadas. Ocorrências editadas individualmente são preservadas.
+                  </span>
+                </label>
+              )}
+              {seriesScope !== 'whole' && (
+                <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  "Esta e as próximas" nunca altera ocorrências anteriores.
+                </span>
+              )}
+
+              {/* Recorrência aberta: extensão explícita (nunca automática) */}
+              {seriesInfo.kind === 'recurring' && seriesInfo.total === null && !confirmDelete && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={doExtendSeries}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    disabled={extending || saving || deleting}
+                  >
+                    {extending ? <RefreshCw size={14} className="spin-animation" /> : <CalendarRange size={14} />}
+                    Gerar próximas ocorrências
+                  </button>
+                  {extendMsg && <span style={{ fontSize: '12px', color: 'var(--color-success)' }}>{extendMsg}</span>}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Descrição */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -734,6 +1046,17 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                 <>
                   <span><strong>Transferência:</strong> ambas as pontas (saída e entrada) e o vínculo serão excluídos.</span>
                   <span>Tem certeza que deseja excluir esta transferência? Esta ação não pode ser desfeita.</span>
+                </>
+              ) : seriesInfo ? (
+                <>
+                  <span><strong>Este lançamento pertence a uma série.</strong> A exclusão será aplicada a: <strong>{SERIES_SCOPE_LABELS[seriesScope ?? 'this'].toLowerCase()}</strong>.</span>
+                  {seriesScope === 'whole' && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={confirmPast} onChange={(e) => setConfirmPast(e.target.checked)} style={{ marginTop: '1px' }} />
+                      <span>Confirmo que desejo excluir também ocorrências passadas.</span>
+                    </label>
+                  )}
+                  <span>Tem certeza que deseja excluir? Esta ação não pode ser desfeita.</span>
                 </>
               ) : (
                 <span>Tem certeza que deseja excluir esta transação? Esta ação não pode ser desfeita.</span>
