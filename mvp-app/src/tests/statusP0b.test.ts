@@ -207,7 +207,7 @@ describe('STATUS-P0b — editor preserva regras do STATUS-P0', () => {
 
 describe('STATUS-P0b — Configurações sem códigos (herdado do STATUS-P0)', () => {
   it('não renderiza (review)/(archive) nem códigos crus', () => {
-    const src = readSource('views/SettingsView.tsx');
+    const src = readSource('views/SettingsView.tsx') + readSource('settings/CategoriesSection.tsx');
     expect(src).not.toContain('(review)');
     expect(src).not.toContain('(archive)');
     const jsx = src.slice(src.lastIndexOf('return ('));

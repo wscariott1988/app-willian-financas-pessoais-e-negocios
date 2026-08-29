@@ -229,7 +229,7 @@ describe('CFG-P2C — regras preservadas no backend (migration 017)', () => {
 });
 
 describe('CFG-P2C — UI (SettingsView)', () => {
-  const view = readView();
+  const view = readFileSync(resolve(here, '..', 'settings', 'AccountsSection.tsx'), 'utf8');
 
   it('13. erro do backend é exibido na interface ({actionError})', () => {
     expect(view).toContain('{actionError}');

@@ -16,6 +16,12 @@ function readSource(rel: string): string {
 function readView(): string {
   return readFileSync(resolve(here, '..', 'views', 'SettingsView.tsx'), 'utf8');
 }
+function readAccountsSection(): string {
+  return readFileSync(resolve(here, '..', 'settings', 'AccountsSection.tsx'), 'utf8');
+}
+function readCategoriesSection(): string {
+  return readFileSync(resolve(here, '..', 'settings', 'CategoriesSection.tsx'), 'utf8');
+}
 
 function mockChain() {
   const calls: string[] = [];
@@ -41,9 +47,16 @@ describe('SettingsView — estrutura (CFG-P0b)', () => {
     expect(src).not.toContain('Histórico de alterações');
     expect(src).not.toContain('AuditLogs');
   });
+
+  it('a view principal delega às seções extraídas (sem duplicação)', () => {
+    const src = readView();
+    expect(src).toContain("<AccountsSection profileId={profileId} />");
+    expect(src).toContain("<CategoriesSection profileId={profileId} />");
+    expect(src).not.toContain("from('categories')");
+  });
 });
 
-describe('SettingsView — Contas (CFG-P0b)', () => {
+describe('SettingsView — Contas (CFG-P0b/CFG-P2C)', () => {
   it('consulta contas pela relação de perfil (account_profile_periods + profile_id)', () => {
     const { q, calls } = mockChain();
     buildAccountQuery(q as any, 'PERFIL_PESSOAL');
@@ -79,15 +92,29 @@ describe('SettingsView — Contas (CFG-P0b)', () => {
   });
 
   it('estado vazio e erro amigáveis presentes', () => {
-    const src = readView();
+    const src = readAccountsSection();
     expect(src).toContain('Nenhuma conta encontrada para este perfil.');
     expect(src).toContain('Não foi possível carregar as contas.');
   });
+
+  it('ações de contas presentes (Nova conta / Ativar / Desativar / Reativar / Editar)', () => {
+    const src = readAccountsSection();
+    expect(src).toContain('Nova conta');
+    expect(src).toContain('Ativar conta existente neste perfil');
+    expect(src).toContain('Desativar');
+    expect(src).toContain('Reativar');
+    expect(src).toContain('Editar');
+  });
+
+  it('mensagem de desativação preserva histórico', () => {
+    const src = readAccountsSection();
+    expect(src).toContain('Desativar esta conta impede novos lançamentos nela neste perfil. Os lançamentos anteriores continuam no histórico.');
+  });
 });
 
-describe('SettingsView — Categorias (CFG-P0b)', () => {
+describe('SettingsView — Categorias (CFG-P0b/CFG-P3A)', () => {
   it('consulta categorias filtradas pelo perfil ativo', () => {
-    const src = readView();
+    const src = readCategoriesSection();
     expect(src).toContain(".from('categories')");
     expect(src).toContain(".eq('profile_id', profileId)");
     expect(src).toContain('.select(');
@@ -121,9 +148,18 @@ describe('SettingsView — Categorias (CFG-P0b)', () => {
   });
 
   it('estado vazio e erro amigáveis presentes', () => {
-    const src = readView();
+    const src = readCategoriesSection();
     expect(src).toContain('Nenhuma categoria encontrada para este perfil.');
     expect(src).toContain('Não foi possível carregar as categorias.');
+  });
+
+  it('ações de categorias presentes (Nova categoria / Nova subcategoria / Editar / Arquivar / Reativar)', () => {
+    const src = readCategoriesSection();
+    expect(src).toContain('Nova categoria');
+    expect(src).toContain('Nova subcategoria');
+    expect(src).toContain('Arquivar');
+    expect(src).toContain('Reativar');
+    expect(src).toContain('Editar');
   });
 });
 
@@ -135,21 +171,21 @@ describe('SettingsView — STATUS-P0: sem códigos técnicos de categoria (CFG)'
     expect(categoryStatusLabel('desconhecido')).toBeNull();
   });
 
-  it('JSX de Configurações não renderiza (review), (archive) nem códigos crus', () => {
-    const src = readView();
-    expect(src).not.toContain('(review)');
-    expect(src).not.toContain('(archive)');
-    expect(src).not.toContain('(archived)');
-    const jsx = src.slice(src.lastIndexOf('return ('));
+  it('seções de Configurações não renderizam (review), (archive) nem códigos crus', () => {
+    const cats = readCategoriesSection();
+    expect(cats).not.toContain('(review)');
+    expect(cats).not.toContain('(archive)');
+    expect(cats).not.toContain('(archived)');
+    const jsx = cats.slice(cats.lastIndexOf('return ('));
     expect(jsx).not.toContain('{node.cat.status}');
     expect(jsx).not.toContain("'review'");
     expect(jsx).not.toContain("'archived'");
-    expect(src).toContain('Arquivada');
-    expect(src).toContain('Em revisão');
+    expect(cats).toContain('Arquivada');
+    expect(cats).toContain('Em revisão');
   });
 
   it('não altera consulta de categorias (status/direction/hierarchy intocados no dado)', () => {
-    const src = readView();
+    const src = readCategoriesSection();
     expect(src).toContain(".from('categories')");
     expect(src).toContain(".eq('profile_id', profileId)");
     expect(src).toContain('select(');
@@ -158,18 +194,15 @@ describe('SettingsView — STATUS-P0: sem códigos técnicos de categoria (CFG)'
 
 describe('SettingsView — troca de perfil e higiene de UI (CFG-P0b)', () => {
   it('ambas as seções recarregam quando profileId muda (useEffect [profileId] + limpeza)', () => {
-    const src = readView();
-    expect(src).toContain('}, [profileId]);');
-    expect(src).toContain('setAccounts([])');
-    expect(src).toContain('setCategories([])');
+    expect(readAccountsSection()).toContain('}, [profileId]);');
+    expect(readCategoriesSection()).toContain('}, [profileId]);');
+    expect(readAccountsSection()).toContain('setAccounts([])');
+    expect(readCategoriesSection()).toContain('setCategories([])');
   });
 
   it('não mantém dados do perfil anterior (lista limpa ao iniciar o load)', () => {
-    const src = readView();
-    const accountsIdx = src.indexOf('setAccounts([])');
-    const catsIdx = src.indexOf('setCategories([])');
-    expect(accountsIdx).toBeGreaterThan(-1);
-    expect(catsIdx).toBeGreaterThan(-1);
+    expect(readAccountsSection()).toContain('setAccounts([])');
+    expect(readCategoriesSection()).toContain('setCategories([])');
   });
 
   it('não expõe SQL/RLS/RPC/UUID/JSON no JSX renderizado', () => {
@@ -180,9 +213,14 @@ describe('SettingsView — troca de perfil e higiene de UI (CFG-P0b)', () => {
     expect(jsx).not.toContain('.from(');
     expect(jsx).not.toContain('profile_id =');
     expect(jsx).not.toContain('RPC');
+    for (const section of [readAccountsSection(), readCategoriesSection()]) {
+      const sectionJsx = section.slice(section.lastIndexOf('return ('));
+      expect(sectionJsx).not.toContain('.from(');
+      expect(sectionJsx).not.toContain('profile_id =');
+    }
   });
 });
 
 function c(id: string, direction: 'income' | 'expense' | 'transfer', parent_id: string | null, display_name: string): SettingsCategory {
-  return { id, profile_id: 'P', direction, parent_id, display_name, source_name: null, canonical_path: null, status: 'active' };
+  return { id, profile_id: 'P', direction, parent_id, display_name, source_name: null, normalized_name: id, canonical_path: null, status: 'active' };
 }

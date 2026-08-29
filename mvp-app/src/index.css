@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+﻿@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 
 /* ============================================================
    Sistema visual consolidado (auditoria Stitch)
@@ -2370,4 +2370,171 @@ button.period-range-custom {
   border-radius: var(--radius-full);
   background: rgba(234, 179, 8, 0.15);
   color: var(--color-warning);
+}
+
+/* ============ CFG-P3A: Contas e Categorias compactas (Configurações) ============ */
+.settings-accounts-list {
+  gap: var(--space-1);
+}
+
+.settings-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  flex-wrap: wrap;
+}
+
+.settings-account-info {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settings-account-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-account-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.settings-status-active {
+  background: rgba(16, 185, 129, 0.16);
+  color: var(--color-success);
+}
+
+.settings-status-inactive {
+  background: rgba(143, 143, 160, 0.14);
+  color: var(--color-text-faint);
+}
+
+.settings-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-card);
+  background: var(--bg-high);
+  color: var(--color-text);
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.settings-btn:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+
+.settings-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.settings-btn-danger {
+  border-color: rgba(244, 63, 94, 0.55);
+  color: var(--color-danger);
+  background: rgba(244, 63, 94, 0.1);
+}
+
+.settings-input {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-card);
+  background: var(--bg-container);
+  color: var(--color-text);
+  max-width: 240px;
+}
+
+.settings-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border-card);
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-faint);
+}
+
+.settings-dir-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.settings-dir-head .settings-dir-title {
+  margin: 0;
+}
+
+.settings-cat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.settings-cat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.settings-cat-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: 2px;
+  padding-bottom: 6px;
+}
+
+.settings-tree {
+  gap: var(--space-1);
+}
+
+.settings-tree .settings-tree {
+  margin-top: 0;
+  padding-left: var(--space-3);
+}
+
+.settings-tree-item {
+  gap: var(--space-1);
+}
+
+.settings-tree-label {
+  padding: 2px var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .settings-account-row {
+    align-items: flex-start;
+  }
+  .settings-account-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }

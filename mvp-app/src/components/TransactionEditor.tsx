@@ -228,6 +228,13 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const originAccounts = accounts.filter((a) => a.id !== form.to_account_id);
   const destAccounts = accounts.filter((a) => a.id !== form.account_id);
 
+  // Edição histórica: se a categoria atribuída não está na lista de ativas
+  // (arquivada), mantê-la representável no seletor — sem alterar category_id.
+  const historicCategory =
+    isEdit && form.category_id && !categories.some((c) => c.id === form.category_id)
+      ? { id: form.category_id, label: transaction?.categories?.display_name || 'Categoria arquivada' }
+      : null;
+
   // ---- Load detail on edit ----
   useEffect(() => {
     if (!editId) {
@@ -637,6 +644,11 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                       {c.canonical_path || c.display_name}
                     </option>
                   ))}
+                  {historicCategory && (
+                    <option key={historicCategory.id} value={historicCategory.id}>
+                      {historicCategory.label} (arquivada)
+                    </option>
+                  )}
                 </select>
               )}
               <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
