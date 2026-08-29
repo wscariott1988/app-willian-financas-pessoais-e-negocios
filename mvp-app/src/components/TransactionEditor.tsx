@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
+import { isAccountOpenOn } from '../lib/accountCrud';
 import {
   Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2,
 } from 'lucide-react';
@@ -200,10 +201,16 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     };
   }, [profileId]);
 
-  const accountsForDate = useCallback((): Account[] => {
+  const accountsForDate = useCallback((requireOpen: boolean): Account[] => {
     const seen = new Map<string, Account>();
     for (const p of periods) {
-      if (!isAccountValidForDate(p.account_id, form.occurred_on, periods)) continue;
+      // Novo lançamento: conta precisa estar ABERTA no perfil (desativada não
+      // recebe lançamento novo, nem no dia do fechamento). Edição histórica:
+      // intervalo inclusivo — a conta continua representável na data histórica.
+      const ok = requireOpen
+        ? isAccountOpenOn(periods, p.account_id, form.occurred_on)
+        : isAccountValidForDate(p.account_id, form.occurred_on, periods);
+      if (!ok) continue;
       const embedded = Array.isArray(p.accounts) ? p.accounts[0] : p.accounts;
       const name = embedded?.display_name || '';
       if (!seen.has(p.account_id)) {
@@ -217,7 +224,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     return [...seen.values()].sort((a, b) => a.display_name.localeCompare(b.display_name));
   }, [periods, form.occurred_on]);
 
-  const accounts = accountsForDate();
+  const accounts = accountsForDate(isEdit ? false : true);
   const originAccounts = accounts.filter((a) => a.id !== form.to_account_id);
   const destAccounts = accounts.filter((a) => a.id !== form.account_id);
 
