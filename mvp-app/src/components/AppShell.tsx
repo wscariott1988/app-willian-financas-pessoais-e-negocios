@@ -5,6 +5,7 @@ import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { ComingSoonView } from '../views/ComingSoonView';
 import { SettingsView } from '../views/SettingsView';
+import { AnalyticsView } from '../views/AnalyticsView';
 import { useMemo, useState } from 'react';
 import { type PeriodMode, type PeriodRange, type PeriodSelection, computePeriodRange, selectionFromDate } from '../lib/period';
 import { PeriodPicker } from './PeriodPicker';
@@ -41,18 +42,10 @@ interface AppShellProps {
   initialView?: ViewId;
 }
 
-const COMING_SOON: Record<Exclude<ViewId, 'inicio' | 'transacoes'>, { title: string; description: string }> = {
+const COMING_SOON: Record<'contas', { title: string; description: string }> = {
   contas: {
     title: 'Contas',
     description: 'Gestão de contas, cartões e saldos está programada para a próxima etapa.',
-  },
-  analises: {
-    title: 'Análises',
-    description: 'Gráficos, comparações e insights estão programados para a próxima etapa.',
-  },
-  configuracoes: {
-    title: 'Configurações',
-    description: 'Preferências, categorias e importações estão programadas para a próxima etapa.',
   },
 };
 
@@ -185,7 +178,14 @@ export const AppShell: React.FC<AppShellProps> = ({
             />
           )}
           {view === 'contas' && <ComingSoonView {...COMING_SOON.contas} icon={Landmark} />}
-          {view === 'analises' && <ComingSoonView {...COMING_SOON.analises} icon={BarChart3} />}
+          {view === 'analises' && (
+            <AnalyticsView
+              key={profileId}
+              profileId={profileId}
+              profileCode={profileCode}
+              period={period}
+            />
+          )}
           {view === 'configuracoes' && <SettingsView profileId={profileId} />}
         </main>
       </div>
