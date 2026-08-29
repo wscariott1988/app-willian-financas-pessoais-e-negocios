@@ -8,7 +8,9 @@ import {
   setAccountActive,
   isAccountActiveOn,
   isAccountOpenOn,
+  classifyAccountInProfile,
   mapAccountsWithStatus,
+  accountsNeverLinkedToProfile,
   filterAvailableAccounts,
   accountErrorMessage,
   localDateISO,
@@ -179,6 +181,90 @@ describe('CFG-P2C — rename de conta compartilhada', () => {
     expect(parsed.p_account_id).toBe('ACC-1');
     expect(parsed.p_display_name).toBe('Carteira Renomeada');
     expect(Object.keys(parsed)).toHaveLength(2);
+  });
+});
+
+describe('CFG-P3E — classificação de contas entre perfis', () => {
+  const C6 = 'C6-UUID';
+  const A1 = 'A1-UUID';
+  const pessC6Active = [{ account_id: C6, starts_on: '2020-01-01', ends_on: null }];
+  const negC6Active = [{ account_id: C6, starts_on: '2020-01-01', ends_on: null }];
+  const pessC6Closed = [{ account_id: C6, starts_on: '2020-01-01', ends_on: '2026-07-31' }];
+  const pessA1Active = [{ account_id: A1, starts_on: '2020-01-01', ends_on: null }];
+
+  it('1. conta ativa apenas no Negócio NÃO é classificada como inativa do Pessoal (é other)', () => {
+    expect(classifyAccountInProfile(pessC6Closed, C6, TODAY)).toBe('inactive');
+    const pessRows = [{ account_id: A1, starts_on: '2020-01-01', ends_on: null }];
+    expect(classifyAccountInProfile(pessRows, C6, TODAY)).toBe('other');
+    const names = new Map([[A1, { display_name: 'A1', source_name: '' }]]);
+    const list = mapAccountsWithStatus(pessRows, TODAY, names);
+    expect(list.map((a) => a.id)).not.toContain(C6);
+  });
+
+  it('2. conta ativa apenas no Pessoal não aparece como inativa no Negócio', () => {
+    const negRows = [{ account_id: 'OUTRA', starts_on: '2020-01-01', ends_on: null }];
+    expect(classifyAccountInProfile(negRows, A1, TODAY)).toBe('other');
+  });
+
+  it('3. conta com histórico fechado no Pessoal é reativável (inactive) e aparece na lista com Inativa', () => {
+    expect(classifyAccountInProfile(pessC6Closed, C6, TODAY)).toBe('inactive');
+    const names = new Map([[C6, { display_name: 'C6', source_name: '' }]]);
+    const list = mapAccountsWithStatus(pessC6Closed, TODAY, names);
+    expect(list.map((a) => a.id)).toContain(C6);
+    expect(list.find((a) => a.id === C6)?.active).toBe(false);
+  });
+
+  it('4. mesma regra no Negócio (histórico fechado -> inactive)', () => {
+    expect(classifyAccountInProfile(negC6Active, C6, TODAY)).toBe('active');
+    const negClosed = [{ account_id: C6, starts_on: '2020-01-01', ends_on: '2026-07-31' }];
+    expect(classifyAccountInProfile(negClosed, C6, TODAY)).toBe('inactive');
+  });
+
+  it('5. conta ativa continua ativa normalmente', () => {
+    expect(classifyAccountInProfile(pessC6Active, C6, TODAY)).toBe('active');
+    expect(classifyAccountInProfile(pessA1Active, A1, TODAY)).toBe('active');
+  });
+
+  it('6. conta com períodos nos dois perfis é classificada independentemente em cada um', () => {
+    expect(classifyAccountInProfile(pessC6Active, C6, TODAY)).toBe('active');
+    expect(classifyAccountInProfile(negC6Active, C6, TODAY)).toBe('active');
+    const negClosed = [{ account_id: C6, starts_on: '2020-01-01', ends_on: '2026-07-31' }];
+    expect(classifyAccountInProfile(negClosed, C6, TODAY)).toBe('inactive');
+  });
+
+  it('7. C6 (só do Negócio) pode aparecer em "Vincular conta de outro perfil" no Pessoal, NÃO na lista de inativas', () => {
+    const globals = [{ id: C6, display_name: 'C6', source_name: 'X' }];
+    const pessRows = [{ account_id: A1, starts_on: '2020-01-01', ends_on: null }];
+    const linkable = accountsNeverLinkedToProfile(globals, pessRows);
+    expect(linkable.map((a) => a.id)).toContain(C6);
+    const names = new Map([[A1, { display_name: 'A1', source_name: '' }]]);
+    const list = mapAccountsWithStatus(pessRows, TODAY, names);
+    expect(list.map((a) => a.id)).not.toContain(C6);
+    expect(linkable.map((a) => a.id)).not.toContain(A1);
+  });
+
+  it('8. vincular reutiliza a MESMA account_id (sem duplicar account)', async () => {
+    const { client, calls } = mockRpc();
+    await setAccountActive(client, C6, true, TODAY);
+    const parsed = callOf(calls[0]).args;
+    expect(parsed.p_account_id).toBe(C6);
+    expect(Object.keys(parsed)).not.toContain('p_new_account');
+  });
+
+  it('9. nenhum período é criado pelo carregamento da tela (helpers puros + só SELECTs)', () => {
+    const src = readFileSync(resolve(here, '..', 'settings', 'AccountsSection.tsx'), 'utf8');
+    expect(src).toContain("from('accounts')");
+    expect(src).toContain('buildAccountQuery');
+    expect(src).not.toMatch(/\.insert\(/);
+    expect(src).not.toMatch(/\.upsert\(/);
+  });
+
+  it('10. helpers de classificação não alteram dados (sem side effects)', () => {
+    const rows = [{ account_id: C6, starts_on: '2020-01-01', ends_on: '2026-07-31' }];
+    const before = JSON.stringify(rows);
+    classifyAccountInProfile(rows, C6, TODAY);
+    mapAccountsWithStatus(rows, TODAY, new Map());
+    expect(JSON.stringify(rows)).toBe(before);
   });
 });
 

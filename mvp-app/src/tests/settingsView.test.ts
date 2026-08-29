@@ -97,10 +97,11 @@ describe('SettingsView — Contas (CFG-P0b/CFG-P2C)', () => {
     expect(src).toContain('Não foi possível carregar as contas.');
   });
 
-  it('ações de contas presentes (Nova conta / Ativar / Desativar / Reativar / Editar)', () => {
+  it('ações de contas presentes (Nova conta / Vincular / Desativar / Reativar / Editar)', () => {
     const src = readAccountsSection();
     expect(src).toContain('Nova conta');
-    expect(src).toContain('Ativar conta existente neste perfil');
+    expect(src).toContain('Vincular conta de outro perfil');
+    expect(src).toContain('Vincular');
     expect(src).toContain('Desativar');
     expect(src).toContain('Reativar');
     expect(src).toContain('Editar');

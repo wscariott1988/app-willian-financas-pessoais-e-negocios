@@ -3,8 +3,8 @@ import { supabase } from '../supabaseClient';
 import { buildAccountQuery, type AccountPeriodRow } from '../lib/accountQuery';
 import {
   ACCOUNT_TYPE_OPTIONS,
+  accountsNeverLinkedToProfile,
   createAccount,
-  filterAvailableAccounts,
   localDateISO,
   mapAccountsWithStatus,
   setAccountActive,
@@ -55,7 +55,7 @@ export function AccountsSection({ profileId }: { profileId: string }) {
     if (globalError) throw globalError;
     if (isCancelled?.()) return;
     setAccounts(mapAccountsWithStatus(rows, today, names));
-    setAvailable(filterAvailableAccounts((globalRows ?? []) as AvailableAccount[], rows));
+    setAvailable(accountsNeverLinkedToProfile((globalRows ?? []) as AvailableAccount[], rows));
   };
 
   useEffect(() => {
@@ -250,8 +250,11 @@ export function AccountsSection({ profileId }: { profileId: string }) {
 
           {available.length > 0 && (
             <div className="settings-block">
-              <h3 className="settings-dir-title">Ativar conta existente neste perfil</h3>
-              <p className="settings-hint">A conta permanece disponível nos outros perfis em que já está ativa.</p>
+              <h3 className="settings-dir-title">Vincular conta de outro perfil</h3>
+              <p className="settings-hint">
+                Contas que existem em outro perfil e ainda não têm vínculo com este. Vincular não duplica a conta e
+                não afeta o histórico do outro perfil.
+              </p>
               <div className="settings-account-actions">
                 <select
                   className="settings-input"
@@ -268,7 +271,7 @@ export function AccountsSection({ profileId }: { profileId: string }) {
                   disabled={busyId !== null || !activatingId}
                   onClick={() => activatingId && handleActivateAvailable(activatingId)}
                 >
-                  Ativar neste perfil
+                  Vincular
                 </button>
               </div>
             </div>

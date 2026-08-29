@@ -65,6 +65,24 @@ export function isAccountOpenOn(periods: AccountPeriodLike[], accountId: string,
   );
 }
 
+/**
+ * Classifica uma conta em relação ao perfil cujos períodos são fornecidos.
+ *   - 'active'   : existe período cobrindo a data (regra inclusiva).
+ *   - 'inactive' : existe histórico do par (conta, perfil) mas nenhum período
+ *                  aberto cobrindo a data — REATIVÁVEL.
+ *   - 'other'    : NÃO existe nenhum período do par (conta, perfil) — conta de
+ *                  outro perfil; NÃO é "inativa neste perfil".
+ */
+export function classifyAccountInProfile(
+  periods: AccountPeriodLike[],
+  accountId: string,
+  dateISO: string,
+): 'active' | 'inactive' | 'other' {
+  const hasAny = periods.some((p) => p.account_id === accountId);
+  if (!hasAny) return 'other';
+  return isAccountActiveOn(periods, accountId, dateISO) ? 'active' : 'inactive';
+}
+
 /** Agrupa períodos por conta e deriva o estado Ativa/Inativa hoje. */
 export function mapAccountsWithStatus(
   rows: AccountPeriodLike[],
@@ -74,7 +92,7 @@ export function mapAccountsWithStatus(
   const seen = new Map<string, { display_name: string; source_name: string; active: boolean }>();
   for (const p of rows) {
     const cur = seen.get(p.account_id);
-    const active = isAccountActiveOn(rows, p.account_id, todayISO);
+    const active = classifyAccountInProfile(rows, p.account_id, todayISO) === 'active';
     if (!cur) {
       const n = names.get(p.account_id) ?? { display_name: '', source_name: '' };
       seen.set(p.account_id, {
@@ -89,8 +107,11 @@ export function mapAccountsWithStatus(
   return [...seen.entries()].map(([id, v]) => ({ id, ...v })).sort((a, b) => a.display_name.localeCompare(b.display_name));
 }
 
-/** Contas globais que ainda não têm período no perfil (candidatas a ativar). */
-export function filterAvailableAccounts(
+/**
+ * Contas GLOBAIS que NUNCA tiveram período no perfil (candidatas a "Vincular
+ * conta de outro perfil"). Não são "inativas deste perfil".
+ */
+export function accountsNeverLinkedToProfile(
   globalAccounts: { id: string; display_name: string; source_name: string }[],
   profilePeriods: AccountPeriodLike[],
 ): { id: string; display_name: string; source_name: string }[] {
@@ -99,6 +120,9 @@ export function filterAvailableAccounts(
     .filter((a) => !present.has(a.id))
     .sort((a, b) => a.display_name.localeCompare(b.display_name));
 }
+
+/** Alias de compatibilidade: mesma regra, nome legado. */
+export const filterAvailableAccounts = accountsNeverLinkedToProfile;
 
 export function accountErrorMessage(error: { message: string } | null): string | null {
   if (!error) return null;
