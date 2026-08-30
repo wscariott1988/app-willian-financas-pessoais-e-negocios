@@ -228,10 +228,10 @@ describe('CFG-P6B — view (read-only; rota integrada)', () => {
     expect(shell).not.toContain("COMING_SOON.analises");
   });
 
-  it('23. rota Contas continua inalterada (ComingSoonView preservada)', () => {
-    expect(shell).toContain("COMING_SOON.contas");
-    expect(shell).toContain("<ComingSoonView {...COMING_SOON.contas} icon={Landmark} />");
-    expect(readSource('views/ComingSoonView.tsx')).toContain('ComingSoonView');
+  it('23. rota Análises permanece funcional (Contas agora abre a gestão existente — P7A)', () => {
+    expect(shell).toContain('<AnalyticsView');
+    expect(shell).toContain("view === 'contas' && <SettingsView profileId={profileId} focusSection=\"accounts\" />");
+    expect(shell).not.toContain('ComingSoonView');
   });
 
   it('sem UUID/category_raw técnico na UI', () => {

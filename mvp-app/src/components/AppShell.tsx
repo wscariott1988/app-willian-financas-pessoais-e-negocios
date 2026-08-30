@@ -3,7 +3,6 @@ import { Home, ArrowLeftRight, Landmark, BarChart3, Settings, Wallet } from 'luc
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
-import { ComingSoonView } from '../views/ComingSoonView';
 import { SettingsView } from '../views/SettingsView';
 import { AnalyticsView } from '../views/AnalyticsView';
 import { useMemo, useState } from 'react';
@@ -41,13 +40,6 @@ interface AppShellProps {
   onProfileSwitchRequest: (notice: string) => void;
   initialView?: ViewId;
 }
-
-const COMING_SOON: Record<'contas', { title: string; description: string }> = {
-  contas: {
-    title: 'Contas',
-    description: 'Gestão de contas, cartões e saldos está programada para a próxima etapa.',
-  },
-};
 
 export const AppShell: React.FC<AppShellProps> = ({
   profileId,
@@ -177,7 +169,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               onPendingFilterChange={setTxPendingFilter}
             />
           )}
-          {view === 'contas' && <ComingSoonView {...COMING_SOON.contas} icon={Landmark} />}
+          {view === 'contas' && <SettingsView profileId={profileId} focusSection="accounts" />}
           {view === 'analises' && (
             <AnalyticsView
               key={profileId}

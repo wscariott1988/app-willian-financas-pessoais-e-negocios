@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AccountsSection } from '../settings/AccountsSection';
 import { CategoriesSection } from '../settings/CategoriesSection';
 import { HistorySection } from '../settings/HistorySection';
@@ -16,20 +16,34 @@ export type { SettingsCategory, CategoryNode } from '../settings/CategoriesSecti
 interface SettingsViewProps {
   profileId: string;
   refreshTrigger?: number;
+  /** Quando informado, destaca/rola a seção correspondente (ex.: navegação "Contas"). */
+  focusSection?: 'accounts';
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ profileId }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ profileId, focusSection }) => {
+  const accountsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (focusSection === 'accounts' && accountsRef.current) {
+      accountsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [focusSection, profileId]);
+
   return (
     <div className="settings-view">
       <div className="settings-view-header">
         <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
-          Configurações
+          {focusSection === 'accounts' ? 'Contas' : 'Configurações'}
         </h1>
         <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
-          Contas, categorias e preferências do perfil ativo
+          {focusSection === 'accounts'
+            ? 'Gestão de contas, cartões e vínculos por perfil'
+            : 'Contas, categorias e preferências do perfil ativo'}
         </p>
       </div>
-      <AccountsSection profileId={profileId} />
+      <div ref={accountsRef} id="settings-accounts" className={focusSection === 'accounts' ? 'settings-section-focus' : undefined}>
+        <AccountsSection profileId={profileId} />
+      </div>
       <CategoriesSection profileId={profileId} />
       <HistorySection profileId={profileId} />
     </div>
