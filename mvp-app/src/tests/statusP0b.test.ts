@@ -297,10 +297,11 @@ describe('STATUS-P0c — harness/proteção contra 401 na troca de perfil', () =
     expect(src).toContain('sleep(5000)');
   });
 
-  it('smoke-prod.mjs registra HTTP errors como array, não como exceção', () => {
+  it('smoke-prod.mjs registra HTTP errors como arrays por fase (STARTUP/OFFICIAL), não como exceção', () => {
     const src = readSource('../smoke-prod.mjs');
-    expect(src).toContain('HTTP_ERRORS.push');
-    expect(src).toContain('status >= 400');
+    expect(src).toContain('STARTUP_HTTP_ERRORS.push');
+    expect(src).toContain('OFFICIAL_HTTP_ERRORS.push');
+    expect(src).toContain('status < 400');
   });
 
   it('smoke-prod.mjs não intercepta requests de auth', () => {
@@ -309,11 +310,12 @@ describe('STATUS-P0c — harness/proteção contra 401 na troca de perfil', () =
     expect(src).toContain('return;');
   });
 
-  it('smoke-prod.mjs instrumenta REQUEST_TRACE com profile/phase/auth', () => {
+  it('smoke-prod.mjs instrumenta request trace por fase com profile/phase/auth', () => {
     const src = readSource('../smoke-prod.mjs');
-    expect(src).toContain('REQUEST_TRACE');
-    expect(src).toContain('BEFORE_SWITCH');
-    expect(src).toContain('AFTER_SWITCH');
+    expect(src).toContain('STARTUP_TRACE');
+    expect(src).toContain('OFFICIAL_TRACE');
+    expect(src).toContain('OFFICIAL_PERSONAL');
+    expect(src).toContain('OFFICIAL_BUSINESS');
     expect(src).toContain('authPresent');
     expect(src).toContain('currentProfile');
   });
