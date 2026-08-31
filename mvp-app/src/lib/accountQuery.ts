@@ -8,6 +8,7 @@
 
 export interface AccountClientLike {
   from(table: string): any;
+  rpc(name: string, params?: Record<string, unknown>): any;
 }
 
 export interface AccountPeriodRow {
@@ -23,6 +24,46 @@ export interface ProfileAccount {
   id: string;
   display_name: string;
   source_name: string;
+}
+
+/** Preferência de favorito por perfil (uma verdade atual por account+profile). */
+export interface ProfileFavorite {
+  account_id: string;
+  is_favorite: boolean;
+}
+
+/** Nome do RPC read-only de uso por perfil (recência + frequência). */
+export const USAGE_RPC_NAME = 'account_usage_stats';
+
+/**
+ * Recência e frequência por conta no perfil, em UMA chamada (N+1=0):
+ *   RECENCY  = MAX(occurred_on)
+ *   FREQUENCY= COUNT(transactions)
+ * sem transações deletadas. O perfil é derivado do JWT no backend
+ * (app.jwt_profile_id()); este endpoint NÃO aceita profile_id do cliente.
+ * Agregados PostgREST estão desabilitados no Cloud (PGRST123, CFG-P8C0) —
+ * por isso a metadata vem de um RPC read-only e não de .max()/.count()/.group().
+ */
+export function buildUsageQuery(client: AccountClientLike) {
+  return client.rpc(USAGE_RPC_NAME);
+}
+
+export interface AccountUsageRow {
+  account_id: string;
+  last_activity: string | null;
+  usage_count: number | string;
+}
+
+export function mapUsage(rows: AccountUsageRow[]): Map<string, { last_activity: string | null; usage_count: number }> {
+  const out = new Map<string, { last_activity: string | null; usage_count: number }>();
+  for (const r of rows) {
+    const n = Number(r.usage_count ?? 0);
+    out.set(r.account_id, {
+      last_activity: r.last_activity ?? null,
+      usage_count: Number.isFinite(n) ? n : 0,
+    });
+  }
+  return out;
 }
 
 export function buildAccountQuery(client: AccountClientLike, profileId: string, signal?: AbortSignal) {

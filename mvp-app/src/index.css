@@ -2597,6 +2597,35 @@ button.period-range-custom {
   outline-offset: 4px;
 }
 
+/* ============ CFG-P8A: favoritar contas ============ */
+.settings-fav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.2s ease;
+}
+
+.settings-fav-btn:hover {
+  color: var(--color-warning);
+}
+
+.settings-fav-btn.settings-fav-active {
+  color: var(--color-warning);
+}
+
+.settings-fav-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ============ CFG-P6B: Análises (somente leitura) ============ */
 .analytics-root {
   display: flex;

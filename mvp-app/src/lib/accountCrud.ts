@@ -32,11 +32,49 @@ export interface AccountWithStatus {
   display_name: string;
   source_name: string;
   active: boolean;
+  is_favorite?: boolean;
+  last_activity?: string | null;
+  usage_count?: number;
 }
 
 export interface AccountActionResult {
   data: unknown;
   error: string | null;
+}
+
+export interface FavoriteResult {
+  data: unknown;
+  error: string | null;
+}
+
+/**
+ * Ordena contas pela preferência canônica do profile atual (CFG-P8A/P8B):
+ *   1) favoritas primeiro;
+ *   2) dentro do grupo, recência DESC (last_activity);
+ *   3) mesma recência, frequência DESC (usage_count);
+ *   4) sem uso depois das com uso (dentro do grupo);
+ *   5) empate: nome A→Z (pt-BR);
+ *   6) empate final: id (interno, nunca exibido).
+ * RECENCY  = MAX(occurred_on)  — perfil atual
+ * FREQUENCY= COUNT(transactions) — perfil atual
+ */
+export function sortAccountsByPreference(
+  accounts: AccountWithStatus[],
+): AccountWithStatus[] {
+  return [...accounts].sort((a, b) => {
+    const fa = a.is_favorite ? 1 : 0;
+    const fb = b.is_favorite ? 1 : 0;
+    if (fa !== fb) return fb - fa;
+    const la = a.last_activity ?? '';
+    const lb = b.last_activity ?? '';
+    if (la !== lb) return la < lb ? 1 : -1;
+    const ua = a.usage_count ?? 0;
+    const ub = b.usage_count ?? 0;
+    if (ua !== ub) return ub - ua;
+    const nameCmp = a.display_name.localeCompare(b.display_name, 'pt-BR');
+    if (nameCmp !== 0) return nameCmp;
+    return a.id < b.id ? -1 : 1;
+  });
 }
 
 // ---------- Helpers puros (testáveis) ----------

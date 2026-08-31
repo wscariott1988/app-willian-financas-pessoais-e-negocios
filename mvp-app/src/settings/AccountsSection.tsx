@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { Star, RefreshCw } from 'lucide-react';
 import { supabase } from '../supabaseClient';
-import { buildAccountQuery, type AccountPeriodRow } from '../lib/accountQuery';
+import { buildAccountQuery, buildUsageQuery, mapUsage, type AccountPeriodRow } from '../lib/accountQuery';
 import {
   ACCOUNT_TYPE_OPTIONS,
   accountsNeverLinkedToProfile,
@@ -8,6 +9,7 @@ import {
   localDateISO,
   mapAccountsWithStatus,
   setAccountActive,
+  sortAccountsByPreference,
   updateAccountName,
   type AccountType,
   type AccountWithStatus,
@@ -29,6 +31,7 @@ export function AccountsSection({ profileId }: { profileId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [favoriteBusyId, setFavoriteBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<AccountType>('bank');
@@ -53,8 +56,41 @@ export function AccountsSection({ profileId }: { profileId: string }) {
       .from('accounts')
       .select('id, display_name, source_name');
     if (globalError) throw globalError;
+    // favoritos por perfil (tabela 022; ausente no Cloud => lista vazia, sem quebrar)
+    const favorites = new Map<string, boolean>();
+    try {
+      const { data: favRows, error: favError } = await supabase
+        .from('account_profile_favorites')
+        .select('account_id, is_favorite')
+        .eq('profile_id', profileId);
+      if (!favError && favRows) {
+        for (const f of favRows as { account_id: string; is_favorite: boolean }[]) {
+          if (f.is_favorite) favorites.set(f.account_id, true);
+        }
+      }
+    } catch {
+      // tabela ainda não existe no ambiente => sem favoritos, sem erro de tela
+    }
+    // recência + frequência: MAX(occurred_on) e COUNT por conta no perfil (read-only, N+1=0)
+    const usage = new Map<string, { last_activity: string | null; usage_count: number }>();
+    try {
+      const { data: usageRows, error: usageError } = await buildUsageQuery(supabase as any);
+      if (!usageError && usageRows) {
+        for (const [k, v] of mapUsage(usageRows as { account_id: string; last_activity: string | null; usage_count: number }[])) {
+          usage.set(k, v);
+        }
+      }
+    } catch {
+      // sem uso disponível => contas sem atividade (ordenação por nome no grupo)
+    }
     if (isCancelled?.()) return;
-    setAccounts(mapAccountsWithStatus(rows, today, names));
+    const mapped = mapAccountsWithStatus(rows, today, names).map((a) => ({
+      ...a,
+      is_favorite: favorites.get(a.id) ?? false,
+      last_activity: usage.get(a.id)?.last_activity ?? null,
+      usage_count: usage.get(a.id)?.usage_count ?? 0,
+    }));
+    setAccounts(sortAccountsByPreference(mapped));
     setAvailable(accountsNeverLinkedToProfile((globalRows ?? []) as AvailableAccount[], rows));
   };
 
@@ -147,6 +183,33 @@ export function AccountsSection({ profileId }: { profileId: string }) {
     await refresh();
   };
 
+  const handleToggleFavorite = async (accountId: string) => {
+    if (favoriteBusyId) return;
+    const target = accounts.find((a) => a.id === accountId);
+    if (!target) return;
+    const next = !target.is_favorite;
+    setFavoriteBusyId(accountId);
+    setActionError(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('account_set_favorite', {
+        p_account_id: accountId,
+        p_favorite: next,
+      });
+      if (rpcError) {
+        setActionError(String(rpcError.message || rpcError));
+        return;
+      }
+      // atualiza localmente após sucesso (sem estado falso) e reordena
+      setAccounts((prev) => sortAccountsByPreference(
+        prev.map((a) => (a.id === accountId ? { ...a, is_favorite: next } : a)),
+      ));
+    } catch (err: any) {
+      setActionError(String(err.message || 'Não foi possível atualizar a preferência.'));
+    } finally {
+      setFavoriteBusyId(null);
+    }
+  };
+
   return (
     <section className="settings-section">
       <h2 className="settings-section-title">Contas</h2>
@@ -168,6 +231,23 @@ export function AccountsSection({ profileId }: { profileId: string }) {
                       {a.active ? 'Ativa' : 'Inativa'}
                     </span>
                   </div>
+                  <button
+                    type="button"
+                    className={`settings-fav-btn ${a.is_favorite ? 'settings-fav-active' : ''}`}
+                    onClick={() => handleToggleFavorite(a.id)}
+                    disabled={favoriteBusyId !== null}
+                    aria-label={a.is_favorite ? `Desfavoritar ${a.display_name}` : `Favoritar ${a.display_name}`}
+                    aria-pressed={a.is_favorite}
+                    title={a.is_favorite ? 'Favorita' : 'Favoritar'}
+                  >
+                    {favoriteBusyId === a.id ? (
+                      <RefreshCw size={14} className="spin-animation" />
+                    ) : a.is_favorite ? (
+                      <Star size={14} fill="currentColor" aria-hidden="true" />
+                    ) : (
+                      <Star size={14} aria-hidden="true" />
+                    )}
+                  </button>
                   {editingId === a.id ? (
                     <div className="settings-account-actions">
                       <input

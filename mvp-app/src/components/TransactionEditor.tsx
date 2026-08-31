@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import { isAccountOpenOn } from '../lib/accountCrud';
+import { sortAccountsByPreference } from '../lib/accountCrud';
+import { buildUsageQuery, mapUsage } from '../lib/accountQuery';
 import {
   Check, AlertCircle, RefreshCw, Pencil, Plus, X, ArrowLeftRight, Info, Trash2, Repeat, CalendarRange,
 } from 'lucide-react';
@@ -42,6 +44,10 @@ interface Account {
   id: string;
   display_name: string;
   source_name: string;
+  active: boolean;
+  is_favorite?: boolean;
+  last_activity?: string | null;
+  usage_count?: number;
 }
 
 interface Category {
@@ -195,6 +201,10 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [extending, setExtending] = useState(false);
   const [extendMsg, setExtendMsg] = useState<string | null>(null);
   const [confirmPast, setConfirmPast] = useState(false);
+  const [prefs, setPrefs] = useState<{
+    favorites: Map<string, boolean>;
+    usage: Map<string, { last_activity: string | null; usage_count: number }>;
+  }>({ favorites: new Map(), usage: new Map() });
   const mounted = useRef(true);
   const savingRef = useRef(false);
 
@@ -208,19 +218,36 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     };
   }, []);
 
-  // ---- Load accounts (valid for the chosen date) ----
+  // ---- Load accounts (valid for the chosen date) + preferência por perfil ----
   useEffect(() => {
     let cancelled = false;
     const loadAccounts = async () => {
       try {
-        const { data, error: accError } = await supabase
-          .from('account_profile_periods')
-          .select('account_id, starts_on, ends_on, accounts(display_name, source_name)')
-          .eq('profile_id', profileId);
-        if (accError) throw accError;
+        const [periodsRes, favRes, usageRes] = await Promise.all([
+          supabase
+            .from('account_profile_periods')
+            .select('account_id, starts_on, ends_on, accounts(display_name, source_name)')
+            .eq('profile_id', profileId),
+          supabase
+            .from('account_profile_favorites')
+            .select('account_id, is_favorite')
+            .eq('profile_id', profileId),
+          buildUsageQuery(supabase as any),
+        ]);
+        if (periodsRes.error) throw periodsRes.error;
         if (cancelled) return;
-        const rows = (data || []) as unknown as AccountPeriod[];
+        const rows = (periodsRes.data || []) as unknown as AccountPeriod[];
         setPeriods(rows);
+        const favs = new Map<string, boolean>();
+        if (!favRes.error && favRes.data) {
+          for (const f of (favRes.data ?? []) as { account_id: string; is_favorite: boolean }[]) {
+            if (f.is_favorite) favs.set(f.account_id, true);
+          }
+        }
+        const usage = usageRes.error
+          ? new Map<string, { last_activity: string | null; usage_count: number }>()
+          : mapUsage((usageRes.data ?? []) as { account_id: string; last_activity: string | null; usage_count: number | string }[]);
+        setPrefs({ favorites: favs, usage });
       } catch (err: any) {
         console.error('Erro ao carregar contas do editor:', err);
         if (!cancelled) setError(err.message || 'Falha ao carregar contas.');
@@ -245,15 +272,20 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       const embedded = Array.isArray(p.accounts) ? p.accounts[0] : p.accounts;
       const name = embedded?.display_name || '';
       if (!seen.has(p.account_id)) {
+        const pref = prefs.usage.get(p.account_id);
         seen.set(p.account_id, {
           id: p.account_id,
           display_name: name || p.account_id.slice(0, 8),
           source_name: embedded?.source_name || '',
+          active: true,
+          is_favorite: prefs.favorites.get(p.account_id) ?? false,
+          last_activity: pref?.last_activity ?? null,
+          usage_count: pref?.usage_count ?? 0,
         });
       }
     }
-    return [...seen.values()].sort((a, b) => a.display_name.localeCompare(b.display_name));
-  }, [periods, form.occurred_on]);
+    return sortAccountsByPreference([...seen.values()]);
+  }, [periods, form.occurred_on, prefs]);
 
   const accounts = accountsForDate(isEdit ? false : true);
   const originAccounts = accounts.filter((a) => a.id !== form.to_account_id);
