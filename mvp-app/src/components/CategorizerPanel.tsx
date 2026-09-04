@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { Check, Info, AlertCircle, Tag, RefreshCw, X, ShieldAlert } from 'lucide-react';
 import { buildCategoryQuery } from '../lib/categoryQuery';
@@ -36,6 +36,34 @@ interface CategorizerPanelProps {
   activeProfileId?: string | null;
 }
 
+// A-01 — teclado do seletor de categorias. Reducer puro e testável:
+// as setas só PREVIEW (destacam) a opção; Enter/Space CONFIRMA a opção ativa;
+// Escape fecha o seletor sem confirmar seleção indevida. O elemento nunca
+// intercepta teclado globalmente — só quando está focado no próprio listbox.
+export type CategorizerKeyAction =
+  | { type: 'move'; index: number }
+  | { type: 'commit'; index: number }
+  | { type: 'close' }
+  | { type: 'none' };
+
+export function categorizerKeyAction(key: string, activeIndex: number, count: number): CategorizerKeyAction {
+  if (count <= 0) return { type: 'none' };
+  const last = count - 1;
+  switch (key) {
+    case 'ArrowDown':
+      return { type: 'move', index: activeIndex < 0 ? 0 : Math.min(activeIndex + 1, last) };
+    case 'ArrowUp':
+      return { type: 'move', index: activeIndex < 0 ? last : Math.max(activeIndex - 1, 0) };
+    case 'Enter':
+    case ' ':
+      return { type: 'commit', index: activeIndex };
+    case 'Escape':
+      return { type: 'close' };
+    default:
+      return { type: 'none' };
+  }
+}
+
 export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   transaction,
   onSuccess,
@@ -48,6 +76,8 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
   const [loadingCats, setLoadingCats] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   // Isolamento: perfil ativo autorizado da sessão precisa existir e ser o
   // mesmo da transação selecionada. Caso contrário, falha fechado (sem consulta).
@@ -60,6 +90,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
     setError(null);
     setSuccessMsg(null);
     setSelectedCategoryId('');
+    setActiveIndex(-1);
     // descarta categorias anteriores imediatamente (nunca exibir resultados velhos)
     setCategories([]);
 
@@ -110,6 +141,33 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
 
     fetchCategories();
   }, [transaction, activeProfileId]);
+
+  const commitCategory = (id: string, index: number) => {
+    setSelectedCategoryId(id);
+    setActiveIndex(index);
+    setError(null);
+    setSuccessMsg(null);
+  };
+
+  const handleCategoryKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (categories.length === 0) return;
+    const action = categorizerKeyAction(e.key, activeIndex, categories.length);
+    if (action.type === 'move') {
+      e.preventDefault();
+      setActiveIndex(action.index);
+      const el = listRef.current?.querySelector(`[data-cat-index="${action.index}"]`);
+      el?.scrollIntoView({ block: 'nearest' });
+    } else if (action.type === 'commit') {
+      if (action.index >= 0 && categories[action.index]) {
+        e.preventDefault();
+        commitCategory(categories[action.index].id, action.index);
+      }
+    } else if (action.type === 'close') {
+      e.preventDefault();
+      setActiveIndex(-1);
+      (e.currentTarget as HTMLDivElement).blur();
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -342,9 +400,9 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
       ) : (
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <label style={{ fontSize: '13px', fontWeight: 700 }}>
+            <span id="categorizer-label" style={{ fontSize: '13px', fontWeight: 700 }}>
               Selecione a categoria
-            </label>
+            </span>
             
             {loadingCats ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
@@ -352,32 +410,53 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
                 Carregando categorias compatíveis...
               </div>
             ) : (
-              <div style={{ maxHeight: '260px', overflowY: 'auto', border: '1px solid var(--border-card)', borderRadius: '8px' }}>
+              <div
+                ref={listRef}
+                id="categorizer-category-list"
+                className="categorizer-listbox"
+                role="listbox"
+                aria-labelledby="categorizer-label"
+                tabIndex={0}
+                aria-activedescendant={
+                  activeIndex >= 0 && categories[activeIndex]
+                    ? `categorizer-option-${categories[activeIndex].id}`
+                    : undefined
+                }
+                onKeyDown={handleCategoryKeyDown}
+                style={{ maxHeight: '260px', overflowY: 'auto', border: '1px solid var(--border-card)', borderRadius: '8px' }}
+              >
                 {categories.length === 0 ? (
                   <div style={{ padding: '14px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
                     Nenhuma categoria ativa compatível com este tipo de transação.
                   </div>
                 ) : (
-                  categories.map((cat) => {
+                  categories.map((cat, index) => {
                     const path = cat.canonical_path || cat.display_name;
                     const depth = path.split(' / ').length - 1;
+                    const isSelected = selectedCategoryId === cat.id;
+                    const isActive = activeIndex === index;
                     return (
                       <div
                         key={cat.id}
-                        onClick={() => { setSelectedCategoryId(cat.id); setError(null); setSuccessMsg(null); }}
+                        id={`categorizer-option-${cat.id}`}
+                        role="option"
+                        aria-selected={isSelected}
+                        data-cat-index={index}
+                        onClick={() => commitCategory(cat.id, index)}
                         style={{
                           padding: '9px 12px',
                           paddingLeft: `${12 + depth * 18}px`,
                           cursor: 'pointer',
                           fontSize: '13px',
-                          fontWeight: selectedCategoryId === cat.id ? 700 : 500,
-                          color: selectedCategoryId === cat.id ? 'var(--color-primary)' : '#f8fafc',
-                          backgroundColor: selectedCategoryId === cat.id ? 'rgba(99, 102, 241, 0.12)' : 'transparent',
-                          borderLeft: selectedCategoryId === cat.id ? `3px solid var(--color-primary)` : '3px solid transparent',
+                          fontWeight: isSelected ? 700 : 500,
+                          color: isSelected ? 'var(--color-primary)' : '#f8fafc',
+                          backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.12)' : 'transparent',
+                          borderLeft: isSelected ? `3px solid var(--color-primary)` : '3px solid transparent',
+                          ...(isActive && !isSelected ? { boxShadow: 'inset 0 0 0 1px var(--color-primary)' } : {}),
                           transition: 'all 0.15s ease',
                         }}
-                        onMouseEnter={(e) => { if (selectedCategoryId !== cat.id) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'rgba(255,255,255,0.04)'; }}
-                        onMouseLeave={(e) => { if (selectedCategoryId !== cat.id) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                        onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'rgba(255,255,255,0.04)'; }}
+                        onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
                       >
                         {path}
                       </div>

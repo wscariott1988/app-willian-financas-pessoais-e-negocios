@@ -2789,3 +2789,9 @@ button.period-range-custom {
     font-size: 12px;
   }
 }
+
+/* A-01 — foco visível do seletor de categorias (listbox) do categorizador */
+.categorizer-listbox:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
