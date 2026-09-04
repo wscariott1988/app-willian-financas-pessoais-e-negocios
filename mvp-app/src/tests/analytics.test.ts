@@ -10,6 +10,7 @@ import {
   categoryLabel,
   type AnalyticsTxRow,
 } from '../lib/analytics';
+import { createLatestRequestGuard } from '../lib/latestRequest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 function readSource(rel: string): string {
@@ -271,6 +272,50 @@ describe('CFG-P6B — estados e acessibilidade', () => {
 
   it('formatação BRL com pt-BR (reutiliza toLocaleString)', () => {
     expect(view).toContain("toLocaleString('pt-BR'");
+  });
+});
+
+describe('CFG-P6B — F-01: não mostrar período antigo ao trocar período', () => {
+  const view = readSource('views/AnalyticsView.tsx');
+
+  it('usa o guard de última requisição (isCurrent) no load', () => {
+    expect(view).toContain('createLatestRequestGuard');
+    expect(view).toContain('latestRef.current.next()');
+    expect(view).toContain('latestRef.current.isCurrent(myRequest)');
+  });
+
+  it('A) limpa o resultado anterior no início do load (não exibe números velhos como atuais)', () => {
+    const loadStart = view.slice(view.indexOf('const load ='), view.indexOf('const load =') + 400);
+    expect(loadStart).toContain('setResult(null)');
+    // com result null e loading true, o render mostra o estado de loading,
+    // nunca o resultado anterior (ver condição {loading && !result})
+    expect(view).toContain('{loading && !result ?');
+  });
+
+  it('B) response de A chegando depois de B não sobrescreve B (guarda de corrida)', () => {
+    const guard = createLatestRequestGuard();
+    const seqA = guard.next(); // período A inicia
+    const seqB = guard.next(); // usuário troca para o período B antes de A responder
+    // A chega atrasado => defasado, NÃO pode gravar
+    expect(guard.isCurrent(seqA)).toBe(false);
+    // B é a consulta corrente => pode gravar
+    expect(guard.isCurrent(seqB)).toBe(true);
+  });
+
+  it('B) sem troca de período, a resposta corrente é aceita', () => {
+    const guard = createLatestRequestGuard();
+    const seq = guard.next();
+    expect(guard.isCurrent(seq)).toBe(true);
+  });
+
+  it('B) múltiplas trocas: apenas a última requisição permanece corrente', () => {
+    const guard = createLatestRequestGuard();
+    const a = guard.next();
+    const b = guard.next();
+    const c = guard.next();
+    expect(guard.isCurrent(a)).toBe(false);
+    expect(guard.isCurrent(b)).toBe(false);
+    expect(guard.isCurrent(c)).toBe(true);
   });
 });
 

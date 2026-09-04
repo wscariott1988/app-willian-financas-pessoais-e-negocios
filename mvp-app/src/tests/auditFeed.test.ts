@@ -250,27 +250,34 @@ describe('CFG-P4B — merge das três fontes, ordenação e tie-breaker', () => 
 
 describe('CFG-P4B — filtros finais (Todos / Transações / Contas / Categorias)', () => {
   const src = readSection();
+  // A semântica de filtragem vive em auditFeed.ts (filterHistoryEntries,
+  // função pura testável) e é consumida pela HistorySection.
+  const feedSrc = readSource('lib/auditFeed.ts');
 
-  it('quatro opções de filtro presentes', () => {
+  it('quatro opções de filtro presentes e a seção delega a filterHistoryEntries', () => {
     expect(src).toContain('Todos');
     expect(src).toContain('Transações');
     expect(src).toContain('Contas');
     expect(src).toContain('Categorias');
+    expect(src).toContain('filterHistoryEntries(');
   });
 
   it('Transações filtra somente fonte transaction', () => {
-    expect(src).toContain("e.source === 'transaction'");
+    expect(feedSrc).toContain("filter === 'transactions'");
+    expect(feedSrc).toContain("e.source === 'transaction'");
   });
 
   it('Contas filtra somente eventos de conta (settings)', () => {
-    expect(src).toContain("'Conta'");
+    expect(feedSrc).toContain("filter === 'accounts'");
+    expect(feedSrc).toContain("'Conta'");
   });
 
   it('Categorias inclui atribuição de categoria E CRUD de categorias (sem filtro técnico separado)', () => {
-    expect(src).toContain("e.source === 'category'");
-    expect(src).toMatch(/settings.*'Categoria'/);
+    expect(feedSrc).toContain("filter === 'categories'");
+    expect(feedSrc).toContain("e.source === 'category'");
+    expect(feedSrc).toMatch(/settings.*'Categoria'/);
+    expect(feedSrc).not.toContain("filter === 'category_assignment'");
     expect(src).not.toMatch(/<option[^>]*>.*Atribui/);
-    expect(src).not.toContain("filter === 'category_assignment'");
   });
 });
 

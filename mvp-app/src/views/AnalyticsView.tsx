@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { PeriodSelector } from '../components/PeriodSelector';
 import { RefreshCw, TrendingUp, TrendingDown, Wallet, AlertCircle, Tag, Landmark, PieChart } from 'lucide-react';
@@ -9,6 +9,7 @@ import {
   type AnalyticsTxRow,
 } from '../lib/analytics';
 import { isAbortError } from '../lib/status';
+import { createLatestRequestGuard } from '../lib/latestRequest';
 import type { PageFetcher } from '../lib/pagination';
 import type { PeriodController } from '../components/AppShell';
 
@@ -34,10 +35,18 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ profileId, profile
   const [result, setResult] = useState<AnalyticsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // requestId: identifica a consulta corrente. Uma resposta defasada (de um
+  // período anterior que terminou depois da atual) nunca pode sobrescrever a
+  // atual — evita mostrar dados do período errado (F-01).
+  const latestRef = useRef(createLatestRequestGuard());
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    const myRequest = latestRef.current.next();
     setLoading(true);
     setError(null);
+    // Limpa o resultado anterior imediatamente: enquanto o novo período
+    // carrega, NÃO exibimos os números do período antigo como se fossem atuais.
+    setResult(null);
     try {
       const fetcher: PageFetcher = async (from, to) => {
         let q = supabase
@@ -57,13 +66,15 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ profileId, profile
         };
       };
       const { rows } = await fetchAllPages<AnalyticsTxRow>(fetcher, ANALYTICS_PAGE_SIZE);
+      if (!latestRef.current.isCurrent(myRequest)) return;
       setResult(buildAnalytics(rows));
     } catch (err: any) {
       if (isAbortError(err)) return;
+      if (!latestRef.current.isCurrent(myRequest)) return;
       console.error('Erro ao carregar análises:', err);
       setError(err.message || 'Não foi possível carregar as análises.');
     } finally {
-      setLoading(false);
+      if (latestRef.current.isCurrent(myRequest)) setLoading(false);
     }
   }, [range]);
 

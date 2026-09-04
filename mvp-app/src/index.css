@@ -726,6 +726,13 @@ button {
   color: var(--color-primary);
 }
 
+.pending-error {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-card);
+  color: var(--color-error);
+  font-size: 12px;
+}
+
 /* ============ Seletor de período (mobile: seção direta, sem card) ============ */
 
 .period-selector {

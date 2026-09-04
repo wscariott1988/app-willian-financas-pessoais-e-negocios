@@ -82,7 +82,7 @@ export function mapAccountPeriods(rows: AccountPeriodRow[]): ProfileAccount[] {
     const embedded = Array.isArray(p.accounts) ? p.accounts[0] : p.accounts;
     seen.set(p.account_id, {
       id: p.account_id,
-      display_name: embedded?.display_name || embedded?.source_name || 'Conta',
+      display_name: embedded?.display_name || embedded?.source_name || 'Conta indisponível',
       source_name: embedded?.source_name || '',
     });
   }

@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp, ArrowDown, FilterX, SlidersHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
 import { displayPaymentStatus, isAbortError } from '../lib/status';
+import { accountDisplayLabel } from '../lib/accountCrud';
 import { StatusBadge } from './StatusBadge';
 import {
   TX_PAGE_SIZE,
@@ -410,7 +411,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     tx.raw_description,
                     `Data: ${formatDate(tx.occurred_on)}`,
                     `Categoria: ${catDisplay}`,
-                    `Conta: ${tx.accounts?.display_name || tx.account_id.slice(0, 8)}`,
+                    `Conta: ${accountDisplayLabel(tx.accounts)}`,
                     ...(stLabel ? [`Status: ${stLabel}`] : []),
                   ].join(' · ');
                   return (
@@ -429,7 +430,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                         {tx.raw_description}
                       </td>
                       <td data-label="Valor" className="tx-value">{formatCurrency(tx.amount, tx.transaction_kind)}</td>
-                      <td data-label="Conta" className="tx-account">{tx.accounts?.display_name || tx.account_id.slice(0, 8)}</td>
+                      <td data-label="Conta" className="tx-account">{accountDisplayLabel(tx.accounts)}</td>
                       <td data-label="Categoria" className="tx-cat">
                         {catDisplay}
                       </td>

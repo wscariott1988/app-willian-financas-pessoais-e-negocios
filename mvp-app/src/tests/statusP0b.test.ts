@@ -165,6 +165,32 @@ describe('STATUS-P0b — pontos visíveis nunca usam vocábulos antigos', () => 
   });
 });
 
+describe('STATUS-P0c — F-03: contadores de pendência não viram zero em erro', () => {
+  const dash = readSource('components/Dashboard.tsx');
+
+  it('resolveCounterState devolve discriminated union com estado "error" (não converte falha em zero)', () => {
+    const counters = readSource('lib/pendingCounters.ts');
+    expect(counters).toContain("type CounterState");
+    expect(counters).toContain("{ kind: 'ok'; unpaidCount: number; noCategoryCount: number }");
+    expect(counters).toContain("{ kind: 'error' }");
+    expect(counters).toContain("return { kind: 'error' }");
+    expect(dash).toContain('resolveCounterState(unpaid, noCategory)');
+    expect(dash).not.toContain('if (isAbortError(err)) return null');
+  });
+
+  it('when counters falham, sets countersError (não grava 0 como sucesso)', () => {
+    expect(dash).toContain("countersError = true");
+    expect(dash).toContain("counters.kind === 'error'");
+    expect(dash).toContain("counters.kind === 'ok'");
+  });
+
+  it('render exibe estado indisponível ("—") em vez de 0 quando a consulta falha', () => {
+    expect(dash).toContain("summary.countersError ? '—' : summary.unpaidCount.toLocaleString('pt-BR')");
+    expect(dash).toContain("summary.countersError ? '—' : summary.noCategoryCount.toLocaleString('pt-BR')");
+    expect(dash).toContain('Não foi possível carregar as pendências agora.');
+  });
+});
+
 describe('STATUS-P0b — fila "Não pagos" (query + cutoff)', () => {
   it('fila unpaid: somente status não-posted E occurred_on >= cutoff', async () => {
     const { client, log } = makeFakeClient();

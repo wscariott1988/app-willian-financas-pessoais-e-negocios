@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import { isAccountOpenOn } from '../lib/accountCrud';
+import { accountDisplayLabel } from '../lib/accountCrud';
 import { sortAccountsByPreference } from '../lib/accountCrud';
 import { buildUsageQuery, mapUsage } from '../lib/accountQuery';
 import {
@@ -269,13 +270,12 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         ? isAccountOpenOn(periods, p.account_id, form.occurred_on)
         : isAccountValidForDate(p.account_id, form.occurred_on, periods);
       if (!ok) continue;
-      const embedded = Array.isArray(p.accounts) ? p.accounts[0] : p.accounts;
-      const name = embedded?.display_name || '';
-      if (!seen.has(p.account_id)) {
-        const pref = prefs.usage.get(p.account_id);
-        seen.set(p.account_id, {
-          id: p.account_id,
-          display_name: name || p.account_id.slice(0, 8),
+        const embedded = Array.isArray(p.accounts) ? p.accounts[0] : p.accounts;
+        if (!seen.has(p.account_id)) {
+          const pref = prefs.usage.get(p.account_id);
+          seen.set(p.account_id, {
+            id: p.account_id,
+            display_name: accountDisplayLabel(embedded),
           source_name: embedded?.source_name || '',
           active: true,
           is_favorite: prefs.favorites.get(p.account_id) ?? false,

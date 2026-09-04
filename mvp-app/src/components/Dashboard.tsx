@@ -8,6 +8,7 @@ import { PeriodSelector } from './PeriodSelector';
 import { TrendingUp, TrendingDown, Wallet, AlertTriangle, Tag, RefreshCw, Landmark, Server, AlertCircle, Plus } from 'lucide-react';
 import { fetchPeriodSummary } from '../lib/summary';
 import { NON_PAID_STATUSES, STATUS_EDITABLE_FROM, isAbortError } from '../lib/status';
+import { resolveCounterState, type CounterState } from '../lib/pendingCounters';
 import type { PeriodController } from './AppShell';
 
 interface Transaction {
@@ -48,6 +49,9 @@ interface Summary {
   totalCount: number;
   loading: boolean;
   error: string | null;
+  // F-03: quando a consulta de contadores falha, os contadores não devem ser
+  // exibidos como zero de sucesso — sinalizamos indisponibilidade ("—").
+  countersError: boolean;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending, onNavigateToTransactions }) => {
@@ -56,7 +60,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const [summary, setSummary] = useState<Summary>({
-    income: 0, expense: 0, balance: 0, unpaidCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null,
+    income: 0, expense: 0, balance: 0, unpaidCount: 0, noCategoryCount: 0, totalCount: 0, loading: true, error: null, countersError: false,
   });
 
   const { range } = period;
@@ -69,10 +73,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       const counters = await supabaseCounters(signal);
       let unpaidCount = 0;
       let noCategoryCount = 0;
-      if (counters) {
+      let countersError = false;
+      if (counters.kind === 'ok') {
         unpaidCount = counters.unpaidCount;
         noCategoryCount = counters.noCategoryCount;
+      } else if (counters.kind === 'error') {
+        // F-03: não vira "0 de sucesso" — a UI mostra estado indisponível.
+        countersError = true;
       }
+      // counter.kind === 'aborted' => ignora (não atualiza nada).
 
       setSummary({
         income: periodSummary.income,
@@ -83,6 +92,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
         totalCount: periodSummary.totalCount,
         loading: false,
         error: null,
+        countersError,
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
@@ -224,7 +234,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
             Não pagos
           </span>
           <span className="pending-title-hint">· A partir de 01/08/2026</span>
-          <span className="pending-row-count">{summary.unpaidCount.toLocaleString('pt-BR')}</span>
+          <span className="pending-row-count">{summary.countersError ? '—' : summary.unpaidCount.toLocaleString('pt-BR')}</span>
         </button>
         <button
           type="button"
@@ -238,9 +248,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
             Sem categoria
           </span>
           <span className="pending-title-hint">· Todo o histórico</span>
-          <span className="pending-row-count">{summary.noCategoryCount.toLocaleString('pt-BR')}</span>
+          <span className="pending-row-count">{summary.countersError ? '—' : summary.noCategoryCount.toLocaleString('pt-BR')}</span>
         </button>
       </div>
+      {summary.countersError && (
+        <div className="pending-error">
+          Não foi possível carregar as pendências agora.
+        </div>
+      )}
 
       {/* Limpar filtros, erro de consulta e ambiente (compactos) */}
       <div className="dash-env">
@@ -334,7 +349,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
 
 // Contadores de pendências (STATUS-P0b): "Não pagos" = status ativos não-posted
 // a partir do cutoff (nunca review do histórico); "Sem categoria" = todo o histórico.
-async function supabaseCounters(signal?: AbortSignal) {
+// A interpretação (ok/error/aborted) fica em lib/pendingCounters.ts (F-03).
+async function supabaseCounters(signal?: AbortSignal): Promise<CounterState> {
   try {
     const unpaidQ = supabase
       .from('transactions')
@@ -349,10 +365,10 @@ async function supabaseCounters(signal?: AbortSignal) {
       .is('category_id', null);
     if (signal) { unpaidQ.abortSignal(signal); noCategoryQ.abortSignal(signal); }
     const [unpaid, noCategory] = await Promise.all([unpaidQ, noCategoryQ]);
-    return { unpaidCount: unpaid.count ?? 0, noCategoryCount: noCategory.count ?? 0 };
+    return resolveCounterState(unpaid, noCategory);
   } catch (err) {
-    if (isAbortError(err)) return null;
+    if (isAbortError(err)) return { kind: 'aborted' };
     console.error('Erro ao carregar contadores de pendências:', err);
-    return null;
+    return { kind: 'error' };
   }
 }

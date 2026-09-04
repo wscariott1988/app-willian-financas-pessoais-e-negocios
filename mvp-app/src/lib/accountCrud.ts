@@ -17,6 +17,22 @@ export const ACCOUNT_TYPE_OPTIONS: { value: AccountType; label: string }[] = [
   { value: 'other', label: 'Outra' },
 ];
 
+export interface AccountDisplayLike {
+  display_name?: string | null;
+}
+
+// Rótulo amigável de conta para a UI. Nunca expõe o UUID/ID técnico: quando a
+// resolução/join da conta falhar (display_name ausente), usa um placeholder
+// claro em vez de um fragmento de identificador.
+export function accountDisplayLabel(
+  account: AccountDisplayLike | null | undefined,
+  fallback = 'Conta indisponível',
+): string {
+  const name = account?.display_name;
+  if (typeof name === 'string' && name.trim() !== '') return name;
+  return fallback;
+}
+
 export interface AccountPeriodLike {
   account_id: string;
   starts_on: string | null;
@@ -134,7 +150,7 @@ export function mapAccountsWithStatus(
     if (!cur) {
       const n = names.get(p.account_id) ?? { display_name: '', source_name: '' };
       seen.set(p.account_id, {
-        display_name: n.display_name || n.source_name || 'Conta',
+        display_name: n.display_name || n.source_name || 'Conta indisponível',
         source_name: n.source_name || '',
         active,
       });

@@ -137,7 +137,7 @@ export function breakdownByAccount(rows: AnalyticsTxRow[]): AccountBreakdownRow[
   const byAcc = new Map<string, { income: number; expense: number; transfer: number; label: string }>();
   for (const r of rows) {
     const amount = number(r.amount);
-    const cur = byAcc.get(r.account_id) ?? { income: 0, expense: 0, transfer: 0, label: embeddedName(r.accounts) || 'Conta' };
+    const cur = byAcc.get(r.account_id) ?? { income: 0, expense: 0, transfer: 0, label: embeddedName(r.accounts) || 'Conta indisponível' };
     if (r.transaction_kind === 'income') cur.income += amount;
     else if (r.transaction_kind === 'expense') cur.expense += amount;
     else if (r.transaction_kind === 'transfer') cur.transfer += amount;

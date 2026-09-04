@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { RefreshCw, AlertCircle, Pencil, Trash2, ArrowRight, Layers } from 'lucide-react';
 import { type TxClientLike } from '../lib/txList';
 import { displayPaymentStatus, isAbortError } from '../lib/status';
+import { accountDisplayLabel } from '../lib/accountCrud';
 import { StatusBadge } from './StatusBadge';
 import type { PeriodRange } from '../lib/period';
 
@@ -147,7 +148,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 <div className="recent-tx-info">
                   <span className="recent-tx-desc">{tx.raw_description}</span>
                   <span className="recent-tx-meta">
-                    {formatDate(tx.occurred_on)} · {tx.accounts?.display_name || tx.account_id.slice(0, 8)} · {catDisplay}
+                    {formatDate(tx.occurred_on)} · {accountDisplayLabel(tx.accounts)} · {catDisplay}
                   </span>
                 </div>
                 <span className="recent-tx-value">

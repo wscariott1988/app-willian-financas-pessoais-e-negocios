@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { Trash2, AlertCircle, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { formatAmountForInput } from './TransactionEditor';
+import { accountDisplayLabel } from '../lib/accountCrud';
 
 export interface DeleteTarget {
   id: string;
@@ -100,7 +101,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
     }
   };
 
-  const accountName = tx.accounts?.display_name || tx.account_id.slice(0, 8);
+  const accountName = accountDisplayLabel(tx.accounts);
 
   return (
     <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '480px', width: '100%' }}>

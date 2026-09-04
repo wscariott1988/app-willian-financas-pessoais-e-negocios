@@ -238,3 +238,24 @@ export function computeFeed(sources: FeedSources, catNames: CatNameMap, pageSize
     sources.cat.length > catSlice.length;
   return { entries: entries.slice(0, pageSize), hasMore };
 }
+
+export type HistoryFilter = 'all' | 'transactions' | 'accounts' | 'categories';
+
+/** Filtra o feed de histórico pela visão selecionada (lógica pura/testável). */
+export function filterHistoryEntries(entries: AuditEntry[], filter: HistoryFilter): AuditEntry[] {
+  if (filter === 'transactions') return entries.filter((e) => e.source === 'transaction');
+  if (filter === 'accounts') return entries.filter((e) => e.source === 'settings' && e.title.includes('Conta'));
+  if (filter === 'categories') return entries.filter((e) => e.source === 'category' || (e.source === 'settings' && e.title.includes('Categoria')));
+  return entries;
+}
+
+/**
+ * hasMore deriva do conjunto JÁ filtrado (entradas efetivamente exibíveis),
+ * nunca de contagens cruas por fonte nem de uma página anterior. Assim, com o
+ * filtro "Contas", o "Carregar mais" só aparece quando há mais entradas de
+ * contas do que as exibidas — não por haver categorias/transações carregadas
+ * por baixo dos panos (U-02).
+ */
+export function hasFilteredHistoryMore(filteredEntries: AuditEntry[], loaded: number): boolean {
+  return filteredEntries.length > loaded;
+}
