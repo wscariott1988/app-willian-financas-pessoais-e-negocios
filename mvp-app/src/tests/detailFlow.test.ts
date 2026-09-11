@@ -136,9 +136,10 @@ describe('PESSOAL-07 — erro do RPC encerra loading e oferece retry', () => {
     expect(detailHook).toContain('if (!disposed && mountedRef.current)');
   });
 
-  it('TransactionEditor error block is visible only in edit mode', () => {
-    expect(editorSrc).toContain('error && isEdit && !detailTxId');
+  it('TransactionEditor shows error + retry when the shared detail load fails', () => {
+    expect(editorSrc).toContain('detailError && !detailData');
     expect(editorSrc).toContain('Tentar novamente');
+    expect(editorSrc).toContain('onClick={retryDetail}');
   });
 
   it('DeleteConfirmation shows retry button when loadFailed', () => {
@@ -157,9 +158,9 @@ describe('PESSOAL-07 — timeout encerra loading', () => {
     expect(detailHook).toContain("reject(new Error('Tempo limite ao carregar detalhes da transação.'))");
   });
 
-  it('TransactionEditor has 15s timeout', () => {
-    expect(editorSrc).toContain('15000');
-    expect(editorSrc).toContain("reject(new Error('Tempo limite ao carregar detalhes da transação.'))");
+  it('TransactionEditor delegates detail loading to the shared hook', () => {
+    expect(editorSrc).toContain('useTransactionDetail');
+    expect(editorSrc).not.toContain("rpc('transaction_get_detail'");
   });
 
   it('DeleteConfirmation has timeout', () => {
@@ -167,9 +168,9 @@ describe('PESSOAL-07 — timeout encerra loading', () => {
     expect(deleteSrc).toContain("reject(new Error('Tempo limite ao carregar detalhes da transação.'))");
   });
 
-  it('TransactionEditor clears timeout in finally', () => {
-    expect(editorSrc).toContain('clearTimeout(timeoutId)');
-    expect(editorSrc).toContain('if (timeoutId !== undefined) clearTimeout(timeoutId)');
+  it('TransactionEditor cleans up the series sub-query timeout', () => {
+    expect(editorSrc).toContain('clearTimeout(occTimeout)');
+    expect(editorSrc).toContain('occAc.abort()');
   });
 
   it('DeleteConfirmation clears timeout in finally', () => {
@@ -185,9 +186,10 @@ describe('PESSOAL-07 — retry realiza nova tentativa', () => {
     expect(detailHook).toMatch(/setRetryKey\(\(?k\)?\s*=>\s*k\s*\+\s*1\)/);
   });
 
-  it('TransactionEditor has detailRetryKey', () => {
-    expect(editorSrc).toContain('detailRetryKey');
-    expect(editorSrc).toMatch(/setDetailRetryKey\(\(?k\)?\s*=>\s*k\s*\+\s*1\)/);
+  it('TransactionEditor reuses the hook retry instead of its own loader', () => {
+    expect(editorSrc).toContain('retry: retryDetail');
+    expect(editorSrc).not.toContain('detailRetryKey');
+    expect(editorSrc).not.toContain('detailTxId');
   });
 
   it('DeleteConfirmation has retryKey', () => {
@@ -206,7 +208,7 @@ describe('PESSOAL-07 — success popula editor', () => {
     expect(editorSrc).toContain('category_id');
     expect(editorSrc).toContain('status');
     expect(editorSrc).toContain('memo');
-    expect(editorSrc).toContain('setDetailTxId(editId)');
+    expect(editorSrc).toContain('detailData?.transaction');
   });
 });
 

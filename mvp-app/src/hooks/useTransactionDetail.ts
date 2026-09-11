@@ -23,15 +23,37 @@ interface UseTransactionDetailResult {
   retry: () => void;
 }
 
+export interface DetailLoaderClient {
+  rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: any; error: any }>;
+  from: (table: string) => any;
+}
+
+interface DetailLoadOptions {
+  rpcTimeoutMs?: number;
+  seriesTimeoutMs?: number;
+  client?: DetailLoaderClient;
+  signal?: AbortSignal | null;
+}
+
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
 }
 
-async function fetchSeriesInfo(transactionId: string): Promise<TransactionDetailData['series']> {
+async function fetchSeriesInfo(
+  transactionId: string,
+  client: DetailLoaderClient,
+  seriesTimeoutMs: number,
+  cancelSignal?: AbortSignal | null,
+): Promise<TransactionDetailData['series']> {
   const ac = new AbortController();
-  const timeoutId = setTimeout(() => ac.abort(), SERIES_TIMEOUT_MS);
+  const onCancel = () => ac.abort();
+  if (cancelSignal) {
+    if (cancelSignal.aborted) ac.abort();
+    else cancelSignal.addEventListener('abort', onCancel, { once: true });
+  }
+  const timeoutId = setTimeout(() => ac.abort(), seriesTimeoutMs);
   try {
-    const { data: occ, error } = await supabase
+    const { data: occ, error } = await client
       .from('transaction_series_occurrences')
       .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences, kind)')
       .eq('transaction_id', transactionId)
@@ -50,6 +72,65 @@ async function fetchSeriesInfo(transactionId: string): Promise<TransactionDetail
     return null;
   } finally {
     clearTimeout(timeoutId);
+    if (cancelSignal) cancelSignal.removeEventListener('abort', onCancel);
+  }
+}
+
+// Única implementação confiável de carregamento do detalhe da transação.
+// Usada pelo useTransactionDetail (modal de detalhes e editor). Falha séria
+// não fatal: série ausente/pendente nunca impede o retorno do detalhe básico.
+export async function loadTransactionDetail(
+  transactionId: string,
+  includeSeries: boolean,
+  options: DetailLoadOptions = {},
+): Promise<TransactionDetailData> {
+  const {
+    rpcTimeoutMs = RPC_TIMEOUT_MS,
+    seriesTimeoutMs = SERIES_TIMEOUT_MS,
+    client = supabase as unknown as DetailLoaderClient,
+    signal,
+  } = options;
+
+  const ac = new AbortController();
+  const onAbort = () => ac.abort();
+  if (signal) {
+    if (signal.aborted) ac.abort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const rpcPromise = client.rpc('transaction_get_detail', {
+      transaction_id: transactionId,
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        ac.abort();
+        reject(new Error('Tempo limite ao carregar detalhes da transação.'));
+      }, rpcTimeoutMs);
+    });
+
+    const result = await Promise.race([rpcPromise, timeoutPromise]);
+    const { data: rpcData, error: rpcError } = result as {
+      data: TransactionDetailData | null;
+      error: { message?: string } | null;
+    };
+
+    if (rpcError) throw rpcError;
+    if (!rpcData?.transaction) {
+      throw new Error('Transação não encontrada.');
+    }
+
+    let resolved: TransactionDetailData = rpcData;
+    if (includeSeries) {
+      const series = await fetchSeriesInfo(transactionId, client, seriesTimeoutMs, ac.signal);
+      resolved = { ...rpcData, series };
+    }
+    return resolved;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -78,7 +159,6 @@ export function useTransactionDetail(
 
     const ac = new AbortController();
     let disposed = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const load = async () => {
       if (mountedRef.current) {
@@ -87,36 +167,10 @@ export function useTransactionDetail(
       }
 
       try {
-        const rpcPromise = supabase.rpc('transaction_get_detail', {
-          transaction_id: transactionId,
+        const resolved = await loadTransactionDetail(transactionId, includeSeries, {
+          signal: ac.signal,
         });
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            ac.abort();
-            reject(new Error('Tempo limite ao carregar detalhes da transação.'));
-          }, RPC_TIMEOUT_MS);
-        });
-
-        const result = await Promise.race([rpcPromise, timeoutPromise]);
-        const { data: rpcData, error: rpcError } = result as {
-          data: TransactionDetailData | null;
-          error: { message?: string } | null;
-        };
-
-        if (rpcError) throw rpcError;
         if (disposed) return;
-        if (!rpcData?.transaction) {
-          throw new Error('Transação não encontrada.');
-        }
-
-        let resolved: TransactionDetailData = rpcData;
-        if (includeSeries && mountedRef.current) {
-          const series = await fetchSeriesInfo(transactionId);
-          resolved = { ...rpcData, series };
-        }
-        if (disposed) return;
-
         if (mountedRef.current) {
           setData(resolved);
         }
@@ -129,7 +183,6 @@ export function useTransactionDetail(
           );
         }
       } finally {
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
         if (!disposed && mountedRef.current) setLoading(false);
       }
     };
@@ -139,7 +192,6 @@ export function useTransactionDetail(
     return () => {
       disposed = true;
       ac.abort();
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
   }, [transactionId, retryKey, includeSeries]);
 

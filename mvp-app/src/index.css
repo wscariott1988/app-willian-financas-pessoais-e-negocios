@@ -1254,9 +1254,11 @@ button.period-range-custom {
 
 .modal-content {
   position: relative;
-  width: 92vw;
+  width: calc(100vw - 24px);
   max-width: 560px;
   max-height: min(90vh, 720px);
+  max-height: min(90dvh, 720px);
+  min-width: 0;
   background: var(--bg-container);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-xl);
@@ -1275,7 +1277,26 @@ button.period-range-custom {
   overscroll-behavior: contain;
   padding: var(--space-4);
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
   min-height: 0;
+}
+
+/* Grid de campos do editor: 1 coluna no mobile, 2 apenas com espaço (mobile-first).
+   minmax(0, 1fr) + min-width: 0 impedem que inputs empurrem a largura. */
+.tx-field-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+.tx-field-grid > * {
+  min-width: 0;
+}
+@media (min-width: 460px) {
+  .tx-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Barra de filtros compacta */
@@ -1560,16 +1581,18 @@ button.period-range-custom {
     flex-shrink: 1;
   }
 
-  /* Modal global: bottom sheet full width no mobile */
+  /* Modal global: bottom sheet com respiro nas bordas no mobile (nunca colado) */
   .modal-overlay {
     align-items: flex-end;
+    padding: 12px;
   }
   .modal-content {
-    width: 100vw;
-    max-width: none;
+    width: 100%;
+    max-width: 100%;
     max-height: 92vh;
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    border-bottom: none;
+    max-height: 92dvh;
+    border-radius: var(--radius-xl);
+    border-bottom: 1px solid var(--border-card);
   }
   .modal-content::after {
     content: '';

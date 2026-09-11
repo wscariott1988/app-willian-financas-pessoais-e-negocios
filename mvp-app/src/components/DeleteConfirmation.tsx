@@ -146,7 +146,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   const accountName = accountDisplayLabel(tx.accounts);
 
   return (
-    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '480px', width: '100%' }}>
+    <div className="glass" style={{ padding: 'clamp(16px, 4vw, 24px)', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '480px', width: '100%', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <div style={{ width: '40px', height: '40px', borderRadius: '10px', backgroundColor: 'rgba(239, 68, 68, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Trash2 size={20} style={{ color: 'var(--color-danger)' }} />
@@ -207,21 +207,21 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
           borderRadius: '8px', padding: '14px',
           fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '8px',
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>Descricao</span>
-            <span style={{ fontWeight: 600, textAlign: 'right', maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.raw_description}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', minWidth: 0 }}>
+            <span style={{ color: 'var(--color-text-muted)', flexShrink: 0 }}>Descricao</span>
+            <span style={{ fontWeight: 600, textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere' }}>{tx.raw_description}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>Data</span>
-            <span style={{ fontWeight: 600 }}>{formatTxDate(tx.occurred_on)}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', minWidth: 0 }}>
+            <span style={{ color: 'var(--color-text-muted)', flexShrink: 0 }}>Data</span>
+            <span style={{ fontWeight: 600, textAlign: 'right', minWidth: 0 }}>{formatTxDate(tx.occurred_on)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>Valor</span>
-            <span style={{ fontWeight: 700 }}>{formatTxCurrency(tx.amount, tx.transaction_kind)}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', minWidth: 0 }}>
+            <span style={{ color: 'var(--color-text-muted)', flexShrink: 0 }}>Valor</span>
+            <span style={{ fontWeight: 700, textAlign: 'right', minWidth: 0 }}>{formatTxCurrency(tx.amount, tx.transaction_kind)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--color-text-muted)' }}>Conta</span>
-            <span style={{ fontWeight: 600 }}>{accountName}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', minWidth: 0 }}>
+            <span style={{ color: 'var(--color-text-muted)', flexShrink: 0 }}>Conta</span>
+            <span style={{ fontWeight: 600, textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere' }}>{accountName}</span>
           </div>
         </div>
       ) : null}
@@ -239,12 +239,12 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '4px' }}>
         <button
           type="button"
           className="btn-secondary"
           onClick={onClose}
-          style={{ flex: 1, padding: '12px' }}
+          style={{ flex: '1 1 140px', minWidth: 0, padding: '12px' }}
           disabled={deleting}
         >
           Cancelar
@@ -253,7 +253,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
           type="button"
           className="btn-primary"
           onClick={handleConfirm}
-          style={{ flex: 1, padding: '12px', backgroundColor: 'var(--color-danger)', border: 'none' }}
+          style={{ flex: '1 1 140px', minWidth: 0, padding: '12px', backgroundColor: 'var(--color-danger)', border: 'none' }}
           disabled={loadingDetail || deleting || !expectedUpdatedAt}
         >
           {deleting ? (

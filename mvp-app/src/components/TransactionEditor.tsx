@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
+import { useTransactionDetail } from '../hooks/useTransactionDetail';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import { isAccountOpenOn } from '../lib/accountCrud';
 import { accountDisplayLabel } from '../lib/accountCrud';
@@ -180,10 +181,8 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [form, setForm] = useState<TxFormState>(EMPTY_FORM);
   const [statusEdited, setStatusEdited] = useState(false);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(null);
-  const [detailTxId, setDetailTxId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<AccountPeriod[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingCats, setLoadingCats] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -298,111 +297,82 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       ? { id: form.category_id, label: transaction?.categories?.display_name || 'Categoria arquivada' }
       : null;
 
-  // ---- Load detail on edit (with AbortController + timeout) ----
-  const [detailRetryKey, setDetailRetryKey] = useState(0);
+  // ---- Load detail on edit (hook compartilhado, mesma implementação do modal de detalhes) ----
+  const {
+    data: detailData,
+    loading: loadingDetail,
+    error: detailError,
+    retry: retryDetail,
+  } = useTransactionDetail(editId, false);
 
+  // Preenche o formulário assim que o detalhe chega. A liberação do formulário
+  // NUNCA depende da consulta de série (que roda em efeito separado abaixo).
   useEffect(() => {
     if (!editId) {
       setForm((f) => ({ ...EMPTY_FORM, kind: f.kind, status: f.status, occurred_on: f.occurred_on || localDateISO(new Date()) }));
       setStatusEdited(false);
       setExpectedUpdatedAt(null);
-      setDetailTxId(null);
-      setError(null);
-      setConflict(false);
       setSeriesInfo(null);
       setSeriesScope(null);
       return;
     }
-    if (detailTxId === editId) return;
+    const t = detailData?.transaction as (Record<string, any> & { transaction_kind?: string; id?: string }) | undefined;
+    if (!t) return;
+    let toAccountId = '';
+    if (t.transaction_kind === 'transfer' && detailData?.transfer) {
+      const transfer = detailData.transfer as { out_transaction_id?: string; in_account_id?: string; out_account_id?: string };
+      const isOut = t.id === transfer.out_transaction_id;
+      toAccountId = (isOut ? transfer.in_account_id : transfer.out_account_id) || '';
+    }
+    setForm({
+      kind: t.transaction_kind as TxKind,
+      description: t.raw_description || '',
+      amount: formatAmountForInput(t.amount),
+      occurred_on: (t.occurred_on || '').split('T')[0],
+      account_id: t.account_id || '',
+      to_account_id: toAccountId || '',
+      category_id: t.category_id || '',
+      status: (t.status as TxStatus) || 'posted',
+      memo: t.memo || '',
+    });
+    setStatusEdited(false);
+    setExpectedUpdatedAt(t.updated_at || null);
+  }, [editId, detailData]);
 
-    const ac = new AbortController();
-    let disposed = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    setLoadingDetail(true);
-    setError(null);
-    setConflict(false);
-    setSuccessMsg(null);
-
-    const loadDetail = async () => {
-      try {
-        const rpcPromise = supabase.rpc('transaction_get_detail', {
-          transaction_id: editId,
-        });
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            ac.abort();
-            reject(new Error('Tempo limite ao carregar detalhes da transação.'));
-          }, 15000);
-        });
-
-        const result = await Promise.race([rpcPromise, timeoutPromise]);
-        const { data, error: rpcError } = result as { data: any; error: any };
-
-        if (rpcError) throw rpcError;
-        if (disposed) return;
-        if (!data?.transaction) return;
-
-        const t = data.transaction;
-        let toAccountId = '';
-        if (t.transaction_kind === 'transfer' && data.transfer) {
-          const isOut = t.id === data.transfer.out_transaction_id;
-          toAccountId = isOut ? data.transfer.in_account_id : data.transfer.out_account_id;
-        }
-
-        setForm({
-          kind: t.transaction_kind as TxKind,
-          description: t.raw_description || '',
-          amount: formatAmountForInput(t.amount),
-          occurred_on: (t.occurred_on || '').split('T')[0],
-          account_id: t.account_id || '',
-          to_account_id: toAccountId,
-          category_id: t.category_id || '',
-          status: (t.status as TxStatus) || 'posted',
-          memo: t.memo || '',
-        });
-        setStatusEdited(false);
-        setExpectedUpdatedAt(t.updated_at || null);
-        setDetailTxId(editId);
-        // Package 015: se a transação pertence a uma série, descobre o escopo
-        // (AbortSignal encaminhado; não bloqueia carregamento principal se falhar)
-        try {
-          const occAc = new AbortController();
-          const occTimeout = setTimeout(() => occAc.abort(), 10000);
-          const { data: occ, error: occErr } = await supabase
-            .from('transaction_series_occurrences')
-            .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences)')
-            .eq('transaction_id', editId)
-            .abortSignal(occAc.signal)
-            .maybeSingle();
-          clearTimeout(occTimeout);
-          if (occErr) throw occErr;
-          if (disposed) return;
-          if (occ?.series_id) {
-            const ser = occ.transaction_series as unknown as { total_occurrences: number | null; kind: string | null } | null;
-            setSeriesInfo({ series_id: occ.series_id, occurrence_index: occ.occurrence_index, total: ser?.total_occurrences ?? null, kind: ser?.kind ?? 'recurring' });
-          } else {
-            setSeriesInfo(null);
-          }
-        } catch {
+  // Package 015: escopo de série para edição/exclusão. Consulta SEPARADA e
+  // não-bloqueante: se falhar ou pendurar, o formulário já está liberado.
+  useEffect(() => {
+    if (!editId) return;
+    let active = true;
+    const occAc = new AbortController();
+    const occTimeout = setTimeout(() => occAc.abort(), 10000);
+    supabase
+      .from('transaction_series_occurrences')
+      .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences)')
+      .eq('transaction_id', editId)
+      .abortSignal(occAc.signal)
+      .maybeSingle()
+      .then(({ data: occ, error: occErr }: any) => {
+        clearTimeout(occTimeout);
+        if (!active) return;
+        if (occErr) throw occErr;
+        if (occ?.series_id) {
+          const ser = occ.transaction_series as unknown as { total_occurrences: number | null; kind: string | null } | null;
+          setSeriesInfo({ series_id: occ.series_id, occurrence_index: occ.occurrence_index, total: ser?.total_occurrences ?? null, kind: ser?.kind ?? 'recurring' });
+        } else {
           setSeriesInfo(null);
         }
-      } catch (err: any) {
-        if (disposed) return;
-        console.error('Erro ao carregar detalhe da transação:', err);
-        setError(err.message || 'Falha ao carregar a transação.');
-      } finally {
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
-        if (!disposed) setLoadingDetail(false);
-      }
-    };
-    loadDetail();
+      })
+      .then(undefined, () => {
+        clearTimeout(occTimeout);
+        if (active) setSeriesInfo(null);
+      });
     return () => {
-      disposed = true;
-      ac.abort();
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      active = false;
+      clearTimeout(occTimeout);
+      occAc.abort();
     };
-  }, [editId, detailTxId, detailRetryKey]);
+  }, [editId]);
 
   // ---- Load categories by kind/profile ----
   useEffect(() => {
@@ -667,7 +637,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const header = isEdit ? 'Editar Transação' : 'Nova Transação';
 
   return (
-    <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+    <div className="glass" style={{ padding: 'clamp(16px, 4vw, 24px)', display: 'flex', flexDirection: 'column', gap: '18px', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -721,7 +691,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
             Carregando detalhes da transação...
           </div>
         </div>
-      ) : error && isEdit && !detailTxId ? (
+      ) : detailError && !detailData ? (
         <div style={{
           backgroundColor: 'rgba(239, 68, 68, 0.1)',
           border: '1px solid rgba(239, 68, 68, 0.2)',
@@ -731,12 +701,12 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         }}>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.4 }}>
             <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
-            <span>{error}</span>
+            <span>{detailError}</span>
           </div>
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => { setDetailTxId(null); setDetailRetryKey((k) => k + 1); }}
+            onClick={retryDetail}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '13px', alignSelf: 'flex-start' }}
           >
             <RefreshCw size={14} /> Tentar novamente
@@ -767,7 +737,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               <label htmlFor="te-entry-type" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Entrada
               </label>
-              <div id="te-entry-type" role="group" aria-label="Tipo de entrada" style={{ display: 'flex', gap: '8px' }}>
+              <div id="te-entry-type" role="group" aria-label="Tipo de entrada" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {(['single', 'installment', 'recurring'] as EntryType[]).map((t) => (
                   <button
                     key={t}
@@ -775,7 +745,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                     aria-pressed={entryType === t}
                     onClick={() => setEntryType(t)}
                     style={{
-                      flex: 1, padding: '10px', borderRadius: '8px', border: entryType === t ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
+                      flex: '1 1 110px', minWidth: 0, padding: '10px', borderRadius: '8px', border: entryType === t ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
                       backgroundColor: entryType === t ? 'rgba(14, 165, 233, 0.1)' : 'rgba(13, 18, 34, 0.6)',
                       color: entryType === t ? 'var(--color-primary)' : 'var(--color-text-muted)',
                       fontWeight: entryType === t ? 700 : 500, fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
@@ -931,7 +901,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           </div>
 
           {/* Valor + Data */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div className="tx-field-grid">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label htmlFor="te-amount" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Valor (R$) <span style={{ color: 'var(--color-danger)' }}>*</span>
@@ -1136,12 +1106,12 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               ) : (
                 <span>Tem certeza que deseja excluir esta transação? Esta ação não pode ser desfeita.</span>
               )}
-              <div style={{ display: 'flex', gap: '8px' }}>
+               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 <button
                   type="button"
                   className="btn-secondary"
                   onClick={() => setConfirmDelete(false)}
-                  style={{ flex: 1, padding: '8px' }}
+                  style={{ flex: '1 1 120px', padding: '8px' }}
                   disabled={deleting}
                 >
                   Cancelar
@@ -1150,7 +1120,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   type="button"
                   className="btn-primary"
                   onClick={doDelete}
-                  style={{ flex: 1, padding: '8px', backgroundColor: 'var(--color-danger)', border: 'none' }}
+                  style={{ flex: '1 1 120px', padding: '8px', backgroundColor: 'var(--color-danger)', border: 'none' }}
                   disabled={deleting}
                 >
                   {deleting ? <><RefreshCw size={14} className="spin-animation" /> Excluindo...</> : <><Trash2 size={14} /> Confirmar exclusão</>}
@@ -1159,7 +1129,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '10px', marginTop: '4px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '4px', alignItems: 'center' }}>
             {isEdit && !confirmDelete && (
               <button
                 type="button"
@@ -1179,7 +1149,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               type="button"
               className="btn-secondary"
               onClick={onClose}
-              style={{ flex: 1, padding: '12px' }}
+              style={{ flex: '1 1 140px', minWidth: 0, padding: '12px' }}
               disabled={saving || deleting}
             >
               Cancelar
@@ -1188,7 +1158,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               type="button"
               className="btn-primary"
               onClick={doSave}
-              style={{ flex: 1, padding: '12px' }}
+              style={{ flex: '1 1 140px', minWidth: 0, padding: '12px' }}
               disabled={!canSave || saving || deleting}
             >
               {saving ? (
