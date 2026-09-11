@@ -298,7 +298,9 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       ? { id: form.category_id, label: transaction?.categories?.display_name || 'Categoria arquivada' }
       : null;
 
-  // ---- Load detail on edit ----
+  // ---- Load detail on edit (with AbortController + timeout) ----
+  const [detailRetryKey, setDetailRetryKey] = useState(0);
+
   useEffect(() => {
     if (!editId) {
       setForm((f) => ({ ...EMPTY_FORM, kind: f.kind, status: f.status, occurred_on: f.occurred_on || localDateISO(new Date()) }));
@@ -313,7 +315,9 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     }
     if (detailTxId === editId) return;
 
-    let cancelled = false;
+    const ac = new AbortController();
+    let disposed = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setLoadingDetail(true);
     setError(null);
     setConflict(false);
@@ -321,11 +325,23 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
 
     const loadDetail = async () => {
       try {
-        const { data, error: rpcError } = await supabase.rpc('transaction_get_detail', {
+        const rpcPromise = supabase.rpc('transaction_get_detail', {
           transaction_id: editId,
         });
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            ac.abort();
+            reject(new Error('Tempo limite ao carregar detalhes da transação.'));
+          }, 15000);
+        });
+
+        const result = await Promise.race([rpcPromise, timeoutPromise]);
+        const { data, error: rpcError } = result as { data: any; error: any };
+
         if (rpcError) throw rpcError;
-        if (cancelled || !data?.transaction) return;
+        if (disposed) return;
+        if (!data?.transaction) return;
 
         const t = data.transaction;
         let toAccountId = '';
@@ -349,13 +365,19 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         setExpectedUpdatedAt(t.updated_at || null);
         setDetailTxId(editId);
         // Package 015: se a transação pertence a uma série, descobre o escopo
+        // (AbortSignal encaminhado; não bloqueia carregamento principal se falhar)
         try {
+          const occAc = new AbortController();
+          const occTimeout = setTimeout(() => occAc.abort(), 10000);
           const { data: occ, error: occErr } = await supabase
             .from('transaction_series_occurrences')
             .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences)')
             .eq('transaction_id', editId)
+            .abortSignal(occAc.signal)
             .maybeSingle();
+          clearTimeout(occTimeout);
           if (occErr) throw occErr;
+          if (disposed) return;
           if (occ?.series_id) {
             const ser = occ.transaction_series as unknown as { total_occurrences: number | null; kind: string | null } | null;
             setSeriesInfo({ series_id: occ.series_id, occurrence_index: occ.occurrence_index, total: ser?.total_occurrences ?? null, kind: ser?.kind ?? 'recurring' });
@@ -366,17 +388,21 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           setSeriesInfo(null);
         }
       } catch (err: any) {
+        if (disposed) return;
         console.error('Erro ao carregar detalhe da transação:', err);
-        if (!cancelled) setError(err.message || 'Falha ao carregar a transação.');
+        setError(err.message || 'Falha ao carregar a transação.');
       } finally {
-        if (!cancelled) setLoadingDetail(false);
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        if (!disposed) setLoadingDetail(false);
       }
     };
     loadDetail();
     return () => {
-      cancelled = true;
+      disposed = true;
+      ac.abort();
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [editId, detailTxId]);
+  }, [editId, detailTxId, detailRetryKey]);
 
   // ---- Load categories by kind/profile ----
   useEffect(() => {
@@ -639,21 +665,15 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   };
 
   const header = isEdit ? 'Editar Transação' : 'Nova Transação';
-  const headerHint = isEdit
-    ? 'Edição atômica com bloqueio otimista e auditoria completa'
-    : 'Criação atômica de transação com auditoria';
 
   return (
     <div className="glass" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {isEdit ? <Pencil size={16} style={{ color: 'var(--color-primary)' }} /> : <Plus size={16} style={{ color: 'var(--color-primary)' }} />}
             {header}
           </h3>
-          <p style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-            {headerHint}
-          </p>
         </div>
         <button
           onClick={onClose}
@@ -695,9 +715,32 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       )}
 
       {loadingDetail ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '20px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
-          <RefreshCw size={16} className="spin-animation" />
-          Carregando detalhes da transação...
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '20px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <RefreshCw size={16} className="spin-animation" />
+            Carregando detalhes da transação...
+          </div>
+        </div>
+      ) : error && isEdit && !detailTxId ? (
+        <div style={{
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.2)',
+          color: 'var(--color-danger)',
+          padding: '12px 14px', borderRadius: '8px', fontSize: '13px',
+          display: 'flex', flexDirection: 'column', gap: '10px',
+        }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.4 }}>
+            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <span>{error}</span>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => { setDetailTxId(null); setDetailRetryKey((k) => k + 1); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '13px', alignSelf: 'flex-start' }}
+          >
+            <RefreshCw size={14} /> Tentar novamente
+          </button>
         </div>
       ) : (
         <>

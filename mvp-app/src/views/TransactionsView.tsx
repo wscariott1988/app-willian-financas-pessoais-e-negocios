@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ChevronLeft, ChevronRight, X, Plus } from 'lucide-react';
 import { TransactionList, type Transaction } from '../components/TransactionList';
 import { TransactionEditor } from '../components/TransactionEditor';
+import { TransactionDetail } from '../components/TransactionDetail';
 import { DeleteConfirmation } from '../components/DeleteConfirmation';
 import { Modal } from '../components/Modal';
 import { PeriodSelector } from '../components/PeriodSelector';
@@ -43,6 +44,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 }) => {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
+  const [detailTarget, setDetailTarget] = useState<Transaction | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [mobile, setMobile] = useState(false);
@@ -86,6 +88,19 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     setDeleteTarget(tx);
   };
 
+  const handleSelectTransaction = (tx: Transaction) => {
+    lastFocused.current = document.activeElement as HTMLElement | null;
+    setPeriodOpen(false);
+    setDetailTarget(tx);
+  };
+
+  const handleCloseDetail = () => {
+    setDetailTarget(null);
+    if (lastFocused.current) {
+      requestAnimationFrame(() => lastFocused.current?.focus());
+    }
+  };
+
   const handleCloseEditor = () => {
     setEditor(null);
     if (lastFocused.current) {
@@ -118,11 +133,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (editor) handleCloseEditor();
+      else if (detailTarget) handleCloseDetail();
       else if (periodOpen) handleClosePeriod();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [editor, periodOpen]);
+  }, [editor, detailTarget, periodOpen]);
 
   const modeLabel = period.mode === 'custom'
     ? 'Personalizado'
@@ -280,7 +296,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           <TransactionList
             profileId={profileId}
             selectedTransactionId={null}
-            onSelectTransaction={() => {}}
+            onSelectTransaction={handleSelectTransaction}
             refreshTrigger={refreshTrigger}
             search={search}
             onSearchChange={setSearch}
@@ -330,6 +346,24 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             transaction={deleteTarget}
             onClose={handleCloseDelete}
             onSuccess={handleDeleteSuccess}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!detailTarget}
+        onClose={handleCloseDetail}
+        ariaLabel="Detalhes da transação"
+      >
+        {detailTarget && (
+          <TransactionDetail
+            transactionId={detailTarget.id}
+            onClose={handleCloseDetail}
+            onEdit={() => {
+              const tx = detailTarget;
+              setDetailTarget(null);
+              if (tx) setEditor({ tx, creating: false });
+            }}
           />
         )}
       </Modal>

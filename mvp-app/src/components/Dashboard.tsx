@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { RecentTransactions } from './RecentTransactions';
 import { TransactionEditor } from './TransactionEditor';
+import { TransactionDetail } from './TransactionDetail';
 import { DeleteConfirmation } from './DeleteConfirmation';
 import { Modal } from './Modal';
 import { PeriodSelector } from './PeriodSelector';
@@ -57,6 +58,7 @@ interface Summary {
 export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = 'personal', period, onOpenPending, onNavigateToTransactions }) => {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
+  const [detailTarget, setDetailTarget] = useState<Transaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const [summary, setSummary] = useState<Summary>({
@@ -123,6 +125,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
   const handleDeleteTransaction = (tx: Transaction) => {
     setDeleteTarget(tx);
   };
+
+  const handleSelectTransaction = (tx: Transaction) => {
+    setDetailTarget(tx);
+  };
+
+  const handleCloseDetail = () => setDetailTarget(null);
 
   const handleDeleteSuccess = () => {
     setDeleteTarget(null);
@@ -299,6 +307,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
           refreshTrigger={refreshTrigger}
           onEditTransaction={handleEditTransaction}
           onDeleteTransaction={handleDeleteTransaction}
+          onSelectTransaction={handleSelectTransaction}
           onNavigateToTransactions={() => onNavigateToTransactions?.()}
         />
       </div>
@@ -330,6 +339,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
             transaction={deleteTarget}
             onClose={handleCloseDelete}
             onSuccess={handleDeleteSuccess}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!detailTarget}
+        onClose={handleCloseDetail}
+        ariaLabel="Detalhes da transação"
+      >
+        {detailTarget && (
+          <TransactionDetail
+            transactionId={detailTarget.id}
+            onClose={handleCloseDetail}
+            onEdit={(id) => {
+              const tx = detailTarget;
+              setDetailTarget(null);
+              if (tx) setEditor({ tx, creating: false });
+            }}
           />
         )}
       </Modal>

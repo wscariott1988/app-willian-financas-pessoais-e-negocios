@@ -419,6 +419,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                       key={tx.id}
                       className={`tx-row ${selectedTransactionId === tx.id ? 'selected' : ''}`}
                       onClick={() => onSelectTransaction(tx)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSelectTransaction(tx);
+                        }
+                      }}
+                      tabIndex={0}
                       title={txLabel}
                       aria-label={txLabel}
                     >

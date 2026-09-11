@@ -31,6 +31,7 @@ interface RecentTransactionsProps {
   refreshTrigger: number;
   onEditTransaction: (tx: Transaction) => void;
   onDeleteTransaction: (tx: Transaction) => void;
+  onSelectTransaction: (tx: Transaction) => void;
   onNavigateToTransactions: () => void;
 }
 
@@ -40,6 +41,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
   refreshTrigger,
   onEditTransaction,
   onDeleteTransaction,
+  onSelectTransaction,
   onNavigateToTransactions,
 }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -144,6 +146,14 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 className="recent-tx-row"
                 title={txLabel}
                 aria-label={txLabel}
+                onClick={() => onSelectTransaction(tx)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectTransaction(tx);
+                  }
+                }}
+                tabIndex={0}
               >
                 <div className="recent-tx-info">
                   <span className="recent-tx-desc">{tx.raw_description}</span>

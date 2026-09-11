@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { Trash2, AlertCircle, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { formatAmountForInput } from './TransactionEditor';
 import { accountDisplayLabel } from '../lib/accountCrud';
+
+const RPC_TIMEOUT_MS = 15000;
 
 export interface DeleteTarget {
   id: string;
@@ -43,7 +45,9 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   const [loadingDetail, setLoadingDetail] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const mounted = useRef(true);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -51,26 +55,64 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
+    let disposed = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    setLoadingDetail(true);
+    setError(null);
+    setLoadFailed(false);
+
     const load = async () => {
       try {
-        const { data, error: rpcError } = await supabase.rpc('transaction_get_detail', {
+        const rpcPromise = supabase.rpc('transaction_get_detail', {
           transaction_id: tx.id,
         });
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            ac.abort();
+            reject(new Error('Tempo limite ao carregar detalhes da transação.'));
+          }, RPC_TIMEOUT_MS);
+        });
+
+        const result = await Promise.race([rpcPromise, timeoutPromise]);
+        const { data, error: rpcError } = result as { data: any; error: any };
+
         if (rpcError) throw rpcError;
-        if (cancelled || !data?.transaction) return;
-        setExpectedUpdatedAt(data.transaction.updated_at || null);
-        setIsTransfer(data.transaction.transaction_kind === 'transfer' && !!data.transfer);
+        if (disposed) return;
+        if (!data?.transaction) return;
+
+        if (mounted.current) {
+          setExpectedUpdatedAt(data.transaction.updated_at || null);
+          setIsTransfer(data.transaction.transaction_kind === 'transfer' && !!data.transfer);
+        }
       } catch (err: any) {
+        if (disposed) return;
         console.error('Erro ao carregar detalhe para exclusao:', err);
-        if (!cancelled) setError(err.message || 'Falha ao carregar detalhes da transacao.');
+        if (mounted.current) {
+          setError(err.message || 'Falha ao carregar detalhes da transação.');
+          setLoadFailed(true);
+        }
       } finally {
-        if (!cancelled) setLoadingDetail(false);
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        if (!disposed && mounted.current) setLoadingDetail(false);
       }
     };
     load();
-    return () => { cancelled = true; };
-  }, [tx.id]);
+    return () => {
+      disposed = true;
+      ac.abort();
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [tx.id, retryKey]);
+
+  const handleRetry = useCallback(() => {
+    setExpectedUpdatedAt(null);
+    setIsTransfer(false);
+    setLoadFailed(false);
+    setError(null);
+    setRetryKey((k) => k + 1);
+  }, []);
 
   const handleConfirm = async () => {
     if (!expectedUpdatedAt) return;
@@ -117,7 +159,30 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
         </div>
       </div>
 
-      {error && (
+      {error && loadFailed && (
+        <div style={{
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.2)',
+          color: 'var(--color-danger)',
+          padding: '12px 14px', borderRadius: '8px', fontSize: '13px',
+          display: 'flex', flexDirection: 'column', gap: '10px',
+        }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.4 }}>
+            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <span>{error}</span>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleRetry}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '13px', alignSelf: 'flex-start' }}
+          >
+            <RefreshCw size={14} /> Tentar novamente
+          </button>
+        </div>
+      )}
+
+      {error && !loadFailed && !loadingDetail && (
         <div style={{
           backgroundColor: 'rgba(239, 68, 68, 0.1)',
           border: '1px solid rgba(239, 68, 68, 0.2)',
@@ -135,7 +200,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
           <RefreshCw size={16} className="spin-animation" />
           Carregando detalhes...
         </div>
-      ) : (
+      ) : !loadFailed ? (
         <div style={{
           backgroundColor: 'rgba(13, 18, 34, 0.6)',
           border: '1px solid var(--border-card)',
@@ -159,7 +224,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
             <span style={{ fontWeight: 600 }}>{accountName}</span>
           </div>
         </div>
-      )}
+      ) : null}
 
       {isTransfer && (
         <div style={{
