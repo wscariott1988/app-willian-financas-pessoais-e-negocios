@@ -365,7 +365,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
       </div>
 
       <div className="glass" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: '400px' }}>
-        <div style={{ overflowX: 'auto', flex: 1 }}>
+        <div className="tx-table-scroll" style={{ flex: 1 }}>
           <table className="tx-table">
             <thead>
               <tr>

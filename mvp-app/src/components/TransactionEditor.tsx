@@ -494,6 +494,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
             p_scope: scope,
             p_expected_updated_at: expectedUpdatedAt,
             p_display_name: payload.description || null,
+            p_amount: seriesInfo.kind === 'recurring' ? payload.amount : undefined,
             p_account_id: payload.account_id || null,
             p_category_id: payload.category_id || null,
             p_status: payload.status || null,

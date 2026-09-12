@@ -324,17 +324,42 @@ describe('geometria da linha e truncamentos críticos (1.2A.3c)', () => {
   const minDesktop = extractMediaBlock(css, '@media (min-width: 1024px) and (max-width: 1279px)');
   const wide = extractMediaBlock(css, '@media (min-width: 1280px)');
 
-  it('1) grid real da linha secundária (data max-content, categoria flexível, editar max-content)', () => {
+  it('1) grid real da linha (data/categoria/conta/status encolhíveis; editar fixo em max-content)', () => {
     const tr = ruleBlock(mobile, '.tx-table tr');
-    expect(tr).toContain('grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content');
+    expect(tr).toContain('grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content) max-content');
     expect(tr).toContain("'date cat account status edit'");
   });
 
-  it('3) data e status não encolhem (colunas max-content)', () => {
+  it('3) colunas de conteúdo nunca forçam largura (minmax(0,...); sem trilho rígido)', () => {
     const tr = ruleBlock(mobile, '.tx-table tr');
     expect(tr).not.toBeNull();
     const cols = tr!.slice(tr!.indexOf('grid-template-columns'));
-    expect(cols).toMatch(/^[^;]*max-content minmax\(0, 1fr\) max-content max-content/);
+    expect(cols).toMatch(/^[^;]*minmax\(0, max-content\) minmax\(0, 1fr\) minmax\(0, max-content\)/);
+  });
+
+  it('BUG 2: corretor não usa overflow-x: hidden como solução (só rolagem auto), e ≤379px não recria trilha implícita', () => {
+    const scrollMobile = extractMediaBlock(css, '@media (max-width: 1023px)').match(/\.tx-table-scroll\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(scrollMobile).not.toContain('overflow-x: hidden');
+    expect(scrollMobile).not.toContain('overflow');
+    const narrowTr = ruleBlock(narrow, '.tx-table tr');
+    expect(narrowTr).toBeNull();
+  });
+
+  it('BUG 2: célula de ações permanece dentro da grid definida (grid-area edit; sem auto-placement)', () => {
+    const edit = ruleBlock(mobile, '.tx-table td.tx-edit-cell');
+    expect(edit).toContain('grid-area: edit');
+    const tr = ruleBlock(mobile, '.tx-table tr');
+    expect(tr).toContain("'date cat account status edit'");
+    expect(narrow).not.toContain("'date cat status'");
+  });
+
+  it('BUG 2: descrição/conta/data/status posso encurtar (ellipsis + overflow hidden + min-width 0)', () => {
+    for (const sel of ['.tx-table td.tx-desc', '.tx-table td.tx-account', '.tx-table td.tx-date', '.tx-table td.tx-status']) {
+      const cell = ruleBlock(mobile, sel);
+      expect(cell).toContain('text-overflow: ellipsis');
+      expect(cell).toContain('overflow: hidden');
+      expect(cell).toContain('min-width: 0');
+    }
   });
 
   it('4) categoria aplica ellipsis com espaço flexível (min-width: 0)', () => {
@@ -707,7 +732,7 @@ describe('terminologia e legibilidade (1.2A.4B.1)', () => {
     const mobile = extractMediaBlock(css, '@media (max-width: 1023px)');
     const tr = ruleBlock(mobile, '.tx-table tr');
     expect(tr).toContain('gap: 2px 10px');
-    expect(tr).toContain('max-content minmax(0, 1fr) max-content max-content');
+    expect(tr).toContain('minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content)');
   });
 
   it('13) categorizerClose.test.tsx continua sendo executado', () => {

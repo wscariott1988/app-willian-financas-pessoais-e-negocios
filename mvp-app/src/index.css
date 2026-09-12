@@ -987,6 +987,12 @@ button.period-range-custom {
   border-collapse: collapse;
 }
 
+/* Rolo horizontal somente onde a tabela tabular (desktop) precisa; no mobile as
+   linhas são cards que cabem sem rolagem (trilhos encolhíveis, nunca overflow). */
+.tx-table-scroll {
+  overflow-x: auto;
+}
+
 .tx-table th {
   text-align: left;
   padding: 12px 16px;
@@ -1619,17 +1625,12 @@ button.period-range-custom {
   }
 }
 
-/* ============ Mobile estreito (360–379px): prioridade data > categoria > status > conta ============ */
+/* ============ Mobile estreito (≤379px): prioridade data > categoria > status > conta ============ */
 
 @media (max-width: 379px) {
-  .tx-table tr {
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
-    grid-template-areas:
-      'desc desc value'
-      'date cat status';
-  }
-
-  /* A conta permanece no nome acessível (aria-label/title), mas sai do visual */
+  /* A conta permanece no nome acessível (aria-label/title), mas sai do visual.
+     As trilhas base (≤1023px) são encolhíveis: sem redefinir o grid, nenhuma
+     área fica órfã e a coluna de ações permanece no lugar (edit). */
   .tx-table td.tx-account {
     display: none;
   }
@@ -1657,10 +1658,12 @@ button.period-range-custom {
   }
 
   /* Linha compacta em grid de duas faixas: descrição+valor / metas+status+editar.
-     Colunas reais: data (max-content), categoria (flexível 1fr), conta, status e editar (max-content). */
+     Trilhos de conteúdo são encolhíveis (minmax(0,...)) + ellipsis em cada célula,
+     para a linha nunca ser mais larga que o contêiner em 320–430px.
+     Somente a coluna de ações é fixa (2 ícones de 44px de toque). */
   .tx-table tr {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content) max-content;
     grid-template-areas:
       'desc desc desc value value'
       'date cat account status edit';
@@ -1702,12 +1705,16 @@ button.period-range-custom {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
 
   .tx-table td.tx-value {
     grid-area: value;
     justify-content: flex-end;
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .tx-table td.tx-date {
@@ -1716,6 +1723,8 @@ button.period-range-custom {
     color: var(--color-text-muted);
     white-space: nowrap;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .tx-table td.tx-date::after {
@@ -1761,6 +1770,8 @@ button.period-range-custom {
     grid-area: status;
     justify-content: flex-end;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .tx-table td.tx-status .badge {

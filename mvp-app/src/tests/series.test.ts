@@ -235,4 +235,23 @@ describe('Package 015 — UI (TransactionEditor)', () => {
   it('ocorrências editadas individualmente são preservadas (is_edited)', () => {
     expect(src).toMatch(/Ocorrências editadas individualmente são preservadas/i);
   });
+
+  it('BUG 1: recorrente envia p_amount com o novo valor no transaction_series_edit', () => {
+    expect(src).toContain("p_amount: seriesInfo.kind === 'recurring' ? payload.amount : undefined,");
+  });
+
+  it('BUG 1: installment não envia alteração indevida de amount pelo caminho de série', () => {
+    const from = src.indexOf("supabase.rpc('transaction_series_edit'");
+    const to = src.indexOf("supabase.rpc('transaction_update'");
+    const editCall = src.slice(from, to);
+    expect(editCall).toMatch(/p_amount:\s+seriesInfo\.kind === 'recurring' \? payload\.amount : undefined/);
+    // o backend rejeita p_amount em parcelas; o frontend nunca o envia nesse caminho de edição
+    expect(editCall).not.toContain('p_amount: payload.amount,');
+  });
+
+  it('BUG 1: transação comum (sem série) continua usando transaction_update', () => {
+    expect(src).toContain("const res = await supabase.rpc('transaction_update', {");
+    // a chamada de série é exclusiva do ramo `if (seriesInfo)` da edição
+    expect(src).toMatch(/transaction_series_edit[\s\S]*?\} else \{\s+const res = await supabase\.rpc\('transaction_update'/);
+  });
 });
