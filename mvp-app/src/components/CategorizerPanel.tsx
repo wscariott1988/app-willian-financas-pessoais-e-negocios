@@ -394,7 +394,7 @@ export const CategorizerPanel: React.FC<CategorizerPanelProps> = ({
         }}>
           <Info size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
           <div>
-            <strong>Transferência identificada.</strong> Transações do tipo transferência não recebem categoria canônica e são liquidadas de forma separada na reconciliação.
+            <strong>Transferência identificada.</strong> Transações do tipo transferência não são categorizadas e são liquidadas de forma separada na reconciliação.
           </div>
         </div>
       ) : (

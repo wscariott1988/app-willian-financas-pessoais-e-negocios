@@ -3,6 +3,7 @@ import { Eye, AlertCircle, RefreshCw, X, Pencil, ArrowLeftRight } from 'lucide-r
 import { useTransactionDetail, type TransactionDetailData } from '../hooks/useTransactionDetail';
 import { displayPaymentStatus } from '../lib/status';
 import { accountDisplayLabel } from '../lib/accountCrud';
+import { extractSeriesMeta, seriesDisplayLabel } from '../lib/series';
 
 interface TransactionDetailProps {
   transactionId: string;
@@ -155,6 +156,21 @@ function TransactionDetailContent({ data }: { data: TransactionDetailData }) {
 
   const stLabel = displayPaymentStatus(status, occurredOn);
 
+  // Mesma regra do badge das listas (uma única fonte: lib/series). occurrence_index
+  // é 1-based no banco — nenhum "+1" aqui. Installment => "Parcela N de TOTAL",
+  // recurring => "Recorrente". Kind desconhecido/sem série => null (sem rótulo).
+  const seriesLabel = data.series?.series_id
+    ? seriesDisplayLabel(
+        extractSeriesMeta({
+          occurrence_index: data.series.occurrence_index,
+          transaction_series: {
+            kind: data.series.kind,
+            total_occurrences: data.series.total_occurrences,
+          },
+        }),
+      )
+    : null;
+
   return (
     <div style={{
       backgroundColor: 'rgba(13, 18, 34, 0.6)',
@@ -189,9 +205,7 @@ function TransactionDetailContent({ data }: { data: TransactionDetailData }) {
         }}>
           <ArrowLeftRight size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
           <span>
-            Esta transação faz parte de uma série{data.series.kind ? ` (${data.series.kind === 'installment' ? 'Parcelada' : 'Recorrente'})` : ''}.
-            Ocorrência {Number(data.series.occurrence_index) + 1}
-            {data.series.total_occurrences != null ? ` de ${data.series.total_occurrences}` : ''}.
+            Esta transação faz parte de uma série{seriesLabel ? `. ${seriesLabel}.` : '.'}
           </span>
         </div>
       )}

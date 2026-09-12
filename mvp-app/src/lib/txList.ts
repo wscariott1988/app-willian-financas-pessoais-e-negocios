@@ -94,7 +94,7 @@ export function createTxPageFetcher(client: TxClientLike, opts: TxQueryOptions):
   return (from, to) => {
     let q = client
       .from('transactions')
-      .select('*, categories(display_name), accounts(display_name)', { count: 'exact' })
+      .select('*, categories(display_name), accounts(display_name), transaction_series_occurrences(occurrence_index, transaction_series(total_occurrences, kind))', { count: 'exact' })
       .is('deleted_at', null);
 
     if (opts.search) q = q.ilike('raw_description', `%${opts.search}%`);

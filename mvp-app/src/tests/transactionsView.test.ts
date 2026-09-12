@@ -1291,7 +1291,8 @@ describe('Diferenciação Início ↔ Transações', () => {
 });
   it('56) Início mantém resumo, pendências, transações recentes e FAB', () => {
     const html = renderToString(createElement(Dashboard, { profileId: shellProps.profileId, period }));
-    expect(html).toContain('Resumo');
+    expect(html).toContain('summary-grid');
+    expect(html).toContain('Resultado do período');
     expect(html).toContain('Pendências');
     expect(html).toContain('recent-tx-section');
     expect(html).toContain('tx-fab');

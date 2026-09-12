@@ -453,7 +453,7 @@ button {
     'env'
     'main'
     'side';
-  gap: 16px;
+  gap: 12px;
 }
 
 .dash-title {
@@ -565,6 +565,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .recent-tx-meta {
@@ -573,6 +574,43 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-tx-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Badge de série ("Parcela N de T" / "Recorrente") nas listas de transações */
+.tx-desc-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tx-desc-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tx-series-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--on-primary-container);
+  background: var(--color-primary-container);
 }
 
 .recent-tx-value {
@@ -739,8 +777,8 @@ button {
   grid-area: period;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: var(--space-2) 0 4px;
+  gap: 4px;
+  padding: 2px 0;
   background: transparent;
   border: none;
   border-radius: 0;

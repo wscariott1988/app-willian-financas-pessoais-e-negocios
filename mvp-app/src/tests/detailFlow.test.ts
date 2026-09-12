@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extractSeriesMeta, seriesDisplayLabel } from '../lib/series';
 
 vi.mock('../supabaseClient', () => ({ supabase: {} }));
 vi.mock('../lib/status', () => ({
@@ -270,6 +271,34 @@ describe('PESSOAL-07 — ocorrência de série continua identificável', () => {
     expect(editorSrc).toContain('occTimeout');
     expect(editorSrc).toContain('10000');
     expect(editorSrc).toContain('.abortSignal(occAc.signal)');
+  });
+});
+
+describe('PESSOAL-10 — índice 1-based no detalhe (mesma regra da lista)', () => {
+  it('TransactionDetail reutiliza seriesDisplayLabel (uma única fonte de rótulo)', () => {
+    expect(txDetailComponent).toContain('seriesDisplayLabel');
+    expect(txDetailComponent).toContain('extractSeriesMeta');
+  });
+
+  it('nenhum "+ 1" sobre occurrence_index no detalhe (índice é 1-based no banco)', () => {
+    expect(txDetailComponent).not.toMatch(/occurrence_index\s*\+\s*1/);
+    expect(txDetailComponent).toContain('occurrence_index: data.series.occurrence_index');
+  });
+
+  it('parcela exibe "Parcela N de TOTAL" e recorrente exibe "Recorrente" via helper', () => {
+    const label = seriesDisplayLabel(
+      extractSeriesMeta({
+        occurrence_index: 2,
+        transaction_series: { kind: 'installment', total_occurrences: 10 },
+      }),
+    );
+    expect(label).toBe('Parcela 2 de 10');
+    expect(seriesDisplayLabel(extractSeriesMeta({ occurrence_index: 2, transaction_series: { kind: 'recurring', total_occurrences: null } }))).toBe('Recorrente');
+  });
+
+  it('bloco de série continua presente no detalhe', () => {
+    expect(txDetailComponent).toContain('Esta transação faz parte de uma série');
+    expect(txDetailComponent).toContain('data.series.series_id');
   });
 });
 

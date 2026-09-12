@@ -145,3 +145,48 @@ export function previewLine(row: PreviewRow): string {
   const amt = row.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return `${row.index} — ${date} — R$ ${amt}`;
 }
+
+/**
+ * Meta mínima de série extraída da ocorrência embutida na transação
+ * (transaction_series_occurrences(occurrence_index, transaction_series(...))).
+ */
+export interface SeriesDisplayMeta {
+  kind: SeriesKind;
+  occurrence_index: number;
+  total_occurrences: number | null;
+}
+
+/**
+ * Normaliza a ocorrência embutida via PostgREST para exibição (badge nas listas).
+ * Transação sem série, embed nulo/array ou kind desconhecido -> null (sem badge).
+ */
+export function extractSeriesMeta(occurrence: unknown): SeriesDisplayMeta | null {
+  if (!occurrence || typeof occurrence !== 'object') return null;
+  const occ = occurrence as {
+    occurrence_index?: number | null;
+    transaction_series?:
+      | { kind?: string | null; total_occurrences?: number | null }
+      | Array<{ kind?: string | null; total_occurrences?: number | null }>
+      | null;
+  };
+  if (occ.occurrence_index == null) return null;
+  const ser = Array.isArray(occ.transaction_series) ? occ.transaction_series[0] : occ.transaction_series;
+  if (!ser || typeof ser !== 'object') return null;
+  const kind = ser.kind;
+  if (kind !== 'installment' && kind !== 'recurring') return null;
+  return {
+    kind,
+    occurrence_index: occ.occurrence_index,
+    total_occurrences: ser.total_occurrences ?? null,
+  };
+}
+
+/** Rótulo amigável do badge sem termos técnicos: "Parcela N de T" ou "Recorrente". */
+export function seriesDisplayLabel(meta: SeriesDisplayMeta | null): string | null {
+  if (!meta) return null;
+  if (meta.kind === 'installment') {
+    const total = meta.total_occurrences != null && meta.total_occurrences >= 1 ? meta.total_occurrences : null;
+    return total != null ? `Parcela ${meta.occurrence_index} de ${total}` : `Parcela ${meta.occurrence_index}`;
+  }
+  return 'Recorrente';
+}

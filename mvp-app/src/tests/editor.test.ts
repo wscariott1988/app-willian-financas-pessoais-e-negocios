@@ -241,3 +241,34 @@ describe('STATUS-P0 — payload e preservação (sem normalização silenciosa)'
     expect(p.status).toBe('pending');
   });
 });
+
+// --- PESSOAL-10: terminologia amigável sem termos técnicos expostos ---
+
+describe('PESSOAL-10 — terminologia sem termos técnicos', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const editorSrc = readFileSync(resolve(here, '..', 'components', 'TransactionEditor.tsx'), 'utf8');
+  const panelSrc = readFileSync(resolve(here, '..', 'components', 'CategorizerPanel.tsx'), 'utf8');
+
+  it('editor não expõe "Categoria canônica" nem "Observação (memo)"', () => {
+    expect(editorSrc).not.toContain('Categoria canônica');
+    expect(editorSrc).not.toContain('Observação (memo)');
+  });
+
+  it('editor usa rótulos amigáveis: rótulo da categoria é "Categoria"', () => {
+    const catLabel = editorSrc.match(/htmlFor="te-category"[^>]*>\s*([^<]*?)\s*<\/label>/);
+    expect(catLabel).not.toBeNull();
+    expect(catLabel![1]).toContain('Categoria');
+    expect(catLabel![1]).not.toContain('canônica');
+  });
+
+  it('editor usa rótulo amigável "Observações" para o memo', () => {
+    const memoLabel = editorSrc.match(/htmlFor="te-memo"[^>]*>\s*([^<]*?)\s*<\/label>/);
+    expect(memoLabel).not.toBeNull();
+    expect(memoLabel![1]).toContain('Observações');
+    expect(memoLabel![1]).not.toContain('memo)');
+  });
+
+  it('painel de recategorização não expõe o termo técnico "canônica"', () => {
+    expect(panelSrc).not.toContain('canônica');
+  });
+});

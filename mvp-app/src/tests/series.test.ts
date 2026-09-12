@@ -10,13 +10,15 @@ import {
   buildSeriesPreview,
   previewLine,
   previewSummary,
+  extractSeriesMeta,
+  seriesDisplayLabel,
   SERIES_KIND_LABELS,
   SERIES_FREQUENCY_LABELS,
   SERIES_SCOPE_LABELS,
   RECURRING_HORIZON,
   MAX_INSTALLMENTS,
 } from '../lib/series';
-import { ENTRY_TYPE_LABELS } from '../components/TransactionEditor';
+import { ENTRY_TYPE_LABELS, buildSeriesEditArgs } from '../components/TransactionEditor';
 
 const here = dirname(fileURLToPath(import.meta.url));
 function readEditor(): string {
@@ -236,16 +238,16 @@ describe('Package 015 — UI (TransactionEditor)', () => {
     expect(src).toMatch(/Ocorrências editadas individualmente são preservadas/i);
   });
 
-  it('BUG 1: recorrente envia p_amount com o novo valor no transaction_series_edit', () => {
-    expect(src).toContain("p_amount: seriesInfo.kind === 'recurring' ? payload.amount : undefined,");
+  it('BUG 1: recorrente envia p_amount com o novo valor; parcelas enviam null (nunca numérico)', () => {
+    expect(src).toContain("p_amount: seriesInfo.kind === 'recurring' ? payload.amount : null,");
   });
 
   it('BUG 1: installment não envia alteração indevida de amount pelo caminho de série', () => {
     const from = src.indexOf("supabase.rpc('transaction_series_edit'");
     const to = src.indexOf("supabase.rpc('transaction_update'");
     const editCall = src.slice(from, to);
-    expect(editCall).toMatch(/p_amount:\s+seriesInfo\.kind === 'recurring' \? payload\.amount : undefined/);
-    // o backend rejeita p_amount em parcelas; o frontend nunca o envia nesse caminho de edição
+    // os argumentos da edição em lote vêm do helper buildSeriesEditArgs (p_amount null em parcelas)
+    expect(editCall).toMatch(/buildSeriesEditArgs\(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast\)/);
     expect(editCall).not.toContain('p_amount: payload.amount,');
   });
 
@@ -253,5 +255,177 @@ describe('Package 015 — UI (TransactionEditor)', () => {
     expect(src).toContain("const res = await supabase.rpc('transaction_update', {");
     // a chamada de série é exclusiva do ramo `if (seriesInfo)` da edição
     expect(src).toMatch(/transaction_series_edit[\s\S]*?\} else \{\s+const res = await supabase\.rpc\('transaction_update'/);
+  });
+});
+
+describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
+  const payload = {
+    description: 'Nova descrição da parcela',
+    amount: '49.84',
+    account_id: 'acc-1',
+    category_id: 'cat-1',
+    status: 'posted',
+    memo: null,
+  };
+  const recurring = { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'recurring' };
+  const installment = { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'installment' };
+
+  it('recorrente: p_amount = novo valor e escopo default this', () => {
+    const args = buildSeriesEditArgs(recurring, 'this', payload, 'ts-1', false);
+    expect(args.p_amount).toBe('49.84');
+    expect(args.p_scope).toBe('this');
+  });
+
+  it('installment: p_amount é null (backend rejeitaria valor em lote)', () => {
+    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    expect(args.p_amount).toBeNull();
+  });
+
+  it('installment: p_amount é null nos TRÊS escopos (guarda do backend é incondicional)', () => {
+    for (const scope of ['this', 'this_and_next', 'whole'] as const) {
+      const args = buildSeriesEditArgs(installment, scope, payload, 'ts-1', false);
+      expect(args.p_amount).toBeNull();
+    }
+  });
+
+  it('recorrente: p_amount carrega o valor novo nos TRÊS escopos', () => {
+    for (const scope of ['this', 'this_and_next', 'whole'] as const) {
+      const args = buildSeriesEditArgs(recurring, scope, payload, 'ts-1', false);
+      expect(args.p_amount).toBe('49.84');
+    }
+  });
+
+  it('installment: descrição, ocorrência de partida e série ainda são propagadas', () => {
+    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    expect(args.p_display_name).toBe('Nova descrição da parcela');
+    expect(args.p_from_occurrence).toBe(3);
+    expect(args.p_series_id).toBe('s-1');
+    expect(args.p_expected_updated_at).toBe('ts-1');
+  });
+
+  it('scope whole propaga p_confirm_past; this/this_and_next enviam false', () => {
+    expect(buildSeriesEditArgs(installment, 'whole', payload, 'ts-1', true).p_confirm_past).toBe(true);
+    expect(buildSeriesEditArgs(installment, 'this_and_next', payload, 'ts-1', true).p_confirm_past).toBe(false);
+    expect(buildSeriesEditArgs(installment, 'this', payload, 'ts-1', true).p_confirm_past).toBe(false);
+  });
+});
+
+describe('Package 015 — badges de série (extractSeriesMeta/seriesDisplayLabel)', () => {
+  it('parcela: "Parcela N de T" quando o total é informado', () => {
+    const meta = extractSeriesMeta({
+      occurrence_index: 3,
+      transaction_series: { kind: 'installment', total_occurrences: 12 },
+    });
+    expect(meta).toEqual({ kind: 'installment', occurrence_index: 3, total_occurrences: 12 });
+    expect(seriesDisplayLabel(meta)).toBe('Parcela 3 de 12');
+  });
+
+  it('PESSOAL-10 regressão: occurrence_index=2 + total=10 => "Parcela 2 de 10" (nunca 3 de 10)', () => {
+    const meta = extractSeriesMeta({
+      occurrence_index: 2,
+      transaction_series: { kind: 'installment', total_occurrences: 10 },
+    });
+    const label = seriesDisplayLabel(meta);
+    expect(label).toBe('Parcela 2 de 10');
+    expect(label).not.toBe('Parcela 3 de 10');
+    expect(label).not.toContain('+ 1');
+  });
+
+  it('parcela sem total: apenas "Parcela N" (nunca "/99")', () => {
+    const meta = extractSeriesMeta({
+      occurrence_index: 3,
+      transaction_series: { kind: 'installment', total_occurrences: null },
+    });
+    expect(seriesDisplayLabel(meta)).toBe('Parcela 3');
+  });
+
+  it('recorrente: "Recorrente" (nunca "Parcela" nem "/24")', () => {
+    const meta = extractSeriesMeta({
+      occurrence_index: 7,
+      transaction_series: { kind: 'recurring', total_occurrences: 24 },
+    });
+    expect(seriesDisplayLabel(meta)).toBe('Recorrente');
+  });
+
+  it('transação sem série (embed ausente/null) -> sem badge', () => {
+    expect(extractSeriesMeta(null)).toBeNull();
+    expect(extractSeriesMeta(undefined)).toBeNull();
+    expect(seriesDisplayLabel(null)).toBeNull();
+  });
+
+  it('ordenação defensiva: embed no formato array (variante PostgREST)', () => {
+    const meta = extractSeriesMeta({
+      occurrence_index: 1,
+      transaction_series: [{ kind: 'installment', total_occurrences: 3 }],
+    });
+    expect(seriesDisplayLabel(meta)).toBe('Parcela 1 de 3');
+  });
+
+  it('kind desconhecido ou ocorrência sem índice -> sem badge', () => {
+    expect(extractSeriesMeta({ occurrence_index: 1, transaction_series: { kind: 'open' } })).toBeNull();
+    expect(extractSeriesMeta({ transaction_series: { kind: 'installment', total_occurrences: 3 } })).toBeNull();
+  });
+});
+
+describe('PESSOAL-10 — valor bloqueado em parcelas existentes (edição)', () => {
+  const src = readEditor();
+
+  it('installment existente => CurrencyInput desabilitado', () => {
+    expect(src).toContain('installmentValueLocked');
+    expect(src).toContain("seriesInfo.kind === 'installment'");
+    expect(src).toContain('disabled={installmentValueLocked}');
+  });
+
+  it('recurring e transação comum => valor permanece editável (lock só para installment)', () => {
+    const flag = src.match(/const installmentValueLocked = ([^;]+);/);
+    expect(flag).not.toBeNull();
+    expect(flag![1]).toContain('isEdit');
+    expect(flag![1]).toContain("seriesInfo.kind === 'installment'");
+  });
+
+  it('novo lançamento / criação de parcelamento não bloqueia o valor', () => {
+    const flag = src.match(/const installmentValueLocked = ([^;]+);/);
+    expect(flag![1]).not.toContain('entryType');
+    expect(flag![1].includes('isEdit')).toBe(true);
+  });
+
+  it('descrição de installment salva com p_amount = null (valor nunca enviado)', () => {
+    const payload = {
+      description: 'Renomear mercado',
+      amount: '49.84',
+      account_id: 'acc-1',
+      category_id: 'cat-1',
+      status: 'posted',
+      memo: 'nova obs',
+    };
+    const args = buildSeriesEditArgs(
+      { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'installment' },
+      'this',
+      payload,
+      'ts-1',
+      false,
+    );
+    expect(args.p_amount).toBeNull();
+    expect(args.p_display_name).toBe('Renomear mercado');
+    expect(args.p_memo).toBe('nova obs');
+  });
+
+  it('recorrente continua enviando o valor alterado', () => {
+    const args = buildSeriesEditArgs(
+      { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'recurring' },
+      'this',
+      { description: 'X', amount: '99.90', account_id: 'a', category_id: null, status: 'posted', memo: null },
+      'ts-1',
+      false,
+    );
+    expect(args.p_amount).toBe('99.90');
+  });
+
+  it('mensagem "O valor das parcelas não pode ser alterado." aparece apenas no caso correto', () => {
+    const occurrences = src.match(/O valor das parcelas não pode ser alterado\./g) ?? [];
+    expect(occurrences.length).toBe(1);
+    expect(src).toMatch(/\{installmentValueLocked && \(\s*<span[^>]*>\s*O valor das parcelas não pode ser alterado\./);
+    // a mensagem exibida não carrega jargão técnico
+    expect('O valor das parcelas não pode ser alterado.').not.toMatch(/RPC|backend|RPC|edit/);
   });
 });

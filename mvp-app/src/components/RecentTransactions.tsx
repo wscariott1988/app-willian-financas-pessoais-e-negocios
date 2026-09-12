@@ -4,6 +4,7 @@ import { RefreshCw, AlertCircle, Pencil, Trash2, ArrowRight, Layers } from 'luci
 import { type TxClientLike } from '../lib/txList';
 import { displayPaymentStatus, isAbortError } from '../lib/status';
 import { accountDisplayLabel } from '../lib/accountCrud';
+import { extractSeriesMeta, seriesDisplayLabel } from '../lib/series';
 import { StatusBadge } from './StatusBadge';
 import type { PeriodRange } from '../lib/period';
 
@@ -54,7 +55,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
     try {
       const q = (supabase as TxClientLike)
         .from('transactions')
-        .select('*, categories(display_name), accounts(display_name)', { count: 'exact' })
+        .select('*, categories(display_name), accounts(display_name), transaction_series_occurrences(occurrence_index, transaction_series(total_occurrences, kind))', { count: 'exact' })
         .is('deleted_at', null)
         .gte('occurred_on', range.start)
         .lte('occurred_on', range.end)
@@ -134,10 +135,12 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
           {transactions.map((tx) => {
             const catDisplay = (tx as any).categories?.display_name || tx.category_raw || 'Sem categoria';
             const stLabel = displayPaymentStatus(tx.status, tx.occurred_on);
+            const seriesLabel = seriesDisplayLabel(extractSeriesMeta((tx as any).transaction_series_occurrences));
             const txLabel = [
               tx.raw_description,
               `Data: ${formatDate(tx.occurred_on)}`,
               catDisplay,
+              ...(seriesLabel ? [seriesLabel] : []),
               ...(stLabel ? [`Status: ${stLabel}`] : []),
             ].join(' · ');
             return (
@@ -156,7 +159,10 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 tabIndex={0}
               >
                 <div className="recent-tx-info">
-                  <span className="recent-tx-desc">{tx.raw_description}</span>
+                  <span className="recent-tx-title-row">
+                    <span className="recent-tx-desc">{tx.raw_description}</span>
+                    {seriesLabel && <span className="tx-series-badge">{seriesLabel}</span>}
+                  </span>
                   <span className="recent-tx-meta">
                     {formatDate(tx.occurred_on)} · {accountDisplayLabel(tx.accounts)} · {catDisplay}
                   </span>

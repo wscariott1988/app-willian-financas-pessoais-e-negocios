@@ -279,3 +279,49 @@ describe('composição desktop da Início (≥1024px / ≥1280px)', () => {
     expect(css).toMatch(/html,\s*body\s*\{\s*overflow-x:\s*hidden/);
   });
 });
+
+// --- PESSOAL-10: Visão Geral compacta, terminologia e badges de série ---
+
+describe('PESSOAL-10 — Visão Geral compacta e embeds de série', () => {
+  const dashSrc = readFileSync(resolve(here, '..', 'components', 'Dashboard.tsx'), 'utf8');
+  const txListLib = readFileSync(resolve(here, '..', 'lib', 'txList.ts'), 'utf8');
+  const recentSrc = readFileSync(resolve(here, '..', 'components', 'RecentTransactions.tsx'), 'utf8');
+  const listComp = readFileSync(resolve(here, '..', 'components', 'TransactionList.tsx'), 'utf8');
+
+  it('subtítulo removido do cabeçalho da Início (Visão Geral compacta)', () => {
+    expect(dashSrc).not.toContain('Resumo e transações do período selecionado para o perfil ativo');
+  });
+
+  it('h1 da Início não usa margin-bottom extra abaixo do título', () => {
+    expect(dashSrc).not.toContain("marginBottom: '4px'");
+  });
+
+  it('compactação é específica acima/abaixo da navegação do mês, não só o gap geral', () => {
+    const selector = ruleBlock(css, '.period-selector');
+    expect(selector).toContain('padding: 2px 0');
+    expect(selector).toContain('gap: 4px');
+    const dashRoot = ruleBlock(css, '.dash-root');
+    expect(dashRoot).toContain('gap: 12px');
+  });
+
+  it('área de toque da navegação do mês preservada (44px)', () => {
+    const navBtn = ruleBlock(css, '.period-nav-btn');
+    expect(navBtn).toContain('min-width: var(--touch-min)');
+    expect(navBtn).toContain('min-height: var(--touch-min)');
+    const nav = ruleBlock(css, '.period-nav');
+    expect(nav).toContain('min-height: 40px');
+  });
+
+  it('fabricante da lista embute transaction_series_occurrences com kind', () => {
+    expect(txListLib).toContain('transaction_series_occurrences(occurrence_index, transaction_series(total_occurrences, kind))');
+  });
+
+  it('transações recentes embutem transaction_series_occurrences com kind', () => {
+    expect(recentSrc).toContain('transaction_series_occurrences(occurrence_index, transaction_series(total_occurrences, kind))');
+  });
+
+  it('badge de série presente nas duas listas (tx-series-badge)', () => {
+    expect(listComp).toContain('tx-series-badge');
+    expect(recentSrc).toContain('tx-series-badge');
+  });
+});

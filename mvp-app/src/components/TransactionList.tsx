@@ -4,6 +4,7 @@ import { Search, Landmark, AlertCircle, RefreshCw, Layers, ArrowUpDown, ArrowUp,
 import { buildAccountQuery, mapAccountPeriods, type AccountPeriodRow } from '../lib/accountQuery';
 import { displayPaymentStatus, isAbortError } from '../lib/status';
 import { accountDisplayLabel } from '../lib/accountCrud';
+import { extractSeriesMeta, seriesDisplayLabel } from '../lib/series';
 import { StatusBadge } from './StatusBadge';
 import {
   TX_PAGE_SIZE,
@@ -407,11 +408,13 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 (isPending ? pendingTxns : transactions).map((tx) => {
                   const stLabel = displayPaymentStatus(tx.status, tx.occurred_on);
                   const catDisplay = (tx as any).categories?.display_name || tx.category_raw || 'Não informada';
+                  const seriesLabel = seriesDisplayLabel(extractSeriesMeta((tx as any).transaction_series_occurrences));
                   const txLabel = [
                     tx.raw_description,
                     `Data: ${formatDate(tx.occurred_on)}`,
                     `Categoria: ${catDisplay}`,
                     `Conta: ${accountDisplayLabel(tx.accounts)}`,
+                    ...(seriesLabel ? [seriesLabel] : []),
                     ...(stLabel ? [`Status: ${stLabel}`] : []),
                   ].join(' · ');
                   return (
@@ -434,7 +437,10 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                         <span className="tx-date-short" aria-hidden="true">{formatDateShort(tx.occurred_on)}</span>
                       </td>
                       <td data-label="Descrição" className="tx-desc">
-                        {tx.raw_description}
+                        <span className="tx-desc-wrap">
+                          <span className="tx-desc-text">{tx.raw_description}</span>
+                          {seriesLabel && <span className="tx-series-badge">{seriesLabel}</span>}
+                        </span>
                       </td>
                       <td data-label="Valor" className="tx-value">{formatCurrency(tx.amount, tx.transaction_kind)}</td>
                       <td data-label="Conta" className="tx-account">{accountDisplayLabel(tx.accounts)}</td>

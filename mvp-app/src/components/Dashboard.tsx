@@ -157,12 +157,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
       <div className="dash-title">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
           <div>
-            <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
+            <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em' }}>
               Visão Geral
             </h1>
-            <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
-              Resumo e transações do período selecionado para o perfil ativo
-            </p>
           </div>
           <button
             type="button"

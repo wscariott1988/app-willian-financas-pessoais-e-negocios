@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { useTransactionDetail } from '../hooks/useTransactionDetail';
+import { CurrencyInput } from './CurrencyInput';
 import { displayStatusValue, isStatusEditable, STATUS_OPTIONS } from '../lib/status';
 import { isAccountOpenOn } from '../lib/accountCrud';
 import { accountDisplayLabel } from '../lib/accountCrud';
@@ -170,6 +171,48 @@ export function buildSavePayload(form: TxFormState): Record<string, any> {
   };
 }
 
+// Contexto de série carregado para a edição (Package 015 · STATUS-P0).
+// Mantém o kind real da série para o frontend nunca reeditar o valor de uma
+// parcela em lote (o backend 021 rejeita p_amount em parcelamentos).
+export type SeriesEditInfo = {
+  series_id: string;
+  occurrence_index: number;
+  total: number | null;
+  kind: string;
+};
+
+// Payload exato enviado ao RPC transaction_series_edit.
+// Regra comprovada no backend (021_transaction_series.sql, app.transaction_series_edit):
+//   IF p_amount IS NOT NULL AND v_ser.kind = 'installment' THEN
+//       RAISE EXCEPTION 'parcelamento nao permite alterar valor em lote; edite ocorrencias individualmente';
+// Esse guarda é INCONDICIONAL (antes de qualquer lógica de escopo) e rejeita
+// p_amount em parcelamentos nos TRÊS escopos: 'this', 'this_and_next' e 'whole'.
+// Por isso o frontend envia SEMPRE p_amount = null em parcels (não undefined —
+// null é serializado e chega como NULL ao parâmetro DEFAULT, então o backend não
+// recusa a chamada); valor de parcela só se edita individualmente, via
+// transaction_update. Em recorrentes, p_amount carrega o valor do formulário.
+export function buildSeriesEditArgs(
+  seriesInfo: SeriesEditInfo,
+  scope: SeriesScope,
+  payload: Record<string, any>,
+  expectedUpdatedAt: string | null,
+  confirmPast: boolean,
+): Record<string, any> {
+  return {
+    p_series_id: seriesInfo.series_id,
+    p_from_occurrence: seriesInfo.occurrence_index,
+    p_scope: scope,
+    p_expected_updated_at: expectedUpdatedAt,
+    p_display_name: payload.description || null,
+    p_amount: seriesInfo.kind === 'recurring' ? payload.amount : null,
+    p_account_id: payload.account_id || null,
+    p_category_id: payload.category_id || null,
+    p_status: payload.status || null,
+    p_memo: payload.memo || null,
+    p_confirm_past: scope === 'whole' ? confirmPast : false,
+  };
+}
+
 export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   profileId,
   profileCode,
@@ -197,7 +240,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [seriesScope, setSeriesScope] = useState<SeriesScope | null>(null);
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
   const [seriesError, setSeriesError] = useState<string | null>(null);
-  const [seriesInfo, setSeriesInfo] = useState<{ series_id: string; occurrence_index: number; total: number | null; kind: string } | null>(null);
+  const [seriesInfo, setSeriesInfo] = useState<SeriesEditInfo | null>(null);
   const [extending, setExtending] = useState(false);
   const [extendMsg, setExtendMsg] = useState<string | null>(null);
   const [confirmPast, setConfirmPast] = useState(false);
@@ -210,6 +253,12 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
 
   const isEdit = !!transaction && !creating;
   const editId = transaction?.id ?? null;
+
+  // PESSOAL-10: o valor de uma PARCELA (installment existente) nunca é editável
+  // em lote — o backend rejeita p_amount nos escopos this/this_and_next/whole.
+  // Só vale para edição de ocorrência de parcelamento existente; recorrência,
+  // transação comum e criação não são afetados e o CurrencyInput segue normal.
+  const installmentValueLocked = isEdit && !!seriesInfo && seriesInfo.kind === 'installment';
 
   useEffect(() => {
     mounted.current = true;
@@ -348,7 +397,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     const occTimeout = setTimeout(() => occAc.abort(), 10000);
     supabase
       .from('transaction_series_occurrences')
-      .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences)')
+      .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences, kind)')
       .eq('transaction_id', editId)
       .abortSignal(occAc.signal)
       .maybeSingle()
@@ -489,17 +538,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           // Package 015: edição com escopo de série (this | this_and_next | whole)
           const scope = seriesScope ?? 'this';
           const res = await supabase.rpc('transaction_series_edit', {
-            p_series_id: seriesInfo.series_id,
-            p_from_occurrence: seriesInfo.occurrence_index,
-            p_scope: scope,
-            p_expected_updated_at: expectedUpdatedAt,
-            p_display_name: payload.description || null,
-            p_amount: seriesInfo.kind === 'recurring' ? payload.amount : undefined,
-            p_account_id: payload.account_id || null,
-            p_category_id: payload.category_id || null,
-            p_status: payload.status || null,
-            p_memo: payload.memo || null,
-            p_confirm_past: scope === 'whole' ? confirmPast : false,
+            ...buildSeriesEditArgs(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast),
           });
           data = res.data;
           rpcError = res.error;
@@ -907,15 +946,19 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               <label htmlFor="te-amount" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Valor (R$) <span style={{ color: 'var(--color-danger)' }}>*</span>
               </label>
-              <input
+              <CurrencyInput
                 id="te-amount"
-                type="text"
-                inputMode="decimal"
                 value={form.amount}
-                onChange={(e) => set({ amount: e.target.value })}
+                onValueChange={(v) => set({ amount: v })}
                 placeholder="0,00"
+                disabled={installmentValueLocked}
                 style={{ width: '100%' }}
               />
+              {installmentValueLocked && (
+                <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
+                  O valor das parcelas não pode ser alterado.
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label htmlFor="te-date" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -982,7 +1025,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           {form.kind !== 'transfer' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label htmlFor="te-category" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Categoria canônica
+                Categoria
               </label>
               {loadingCats ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 2px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
@@ -1061,7 +1104,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
           {/* Observação */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <label htmlFor="te-memo" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              Observação (memo)
+              Observações
             </label>
             <textarea
               id="te-memo"
