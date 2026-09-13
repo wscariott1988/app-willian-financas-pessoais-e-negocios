@@ -2451,18 +2451,100 @@ button.period-range-custom {
   color: var(--color-warning);
 }
 
-/* ============ CFG-P3A: Contas e Categorias compactas (Configurações) ============ */
+/* ============ PESSOAL-11: sub-tabs de Configurações (Contas | Categorias | Histórico) ============ */
+.settings-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  background: rgba(13, 18, 34, 0.5);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-full);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.settings-tab {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.settings-tab:hover:not(.settings-tab-active) {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-tab-active {
+  background: var(--bg-high);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* ============ CFG-P3A / PESSOAL-11: Contas compactas (Configurações) ============ */
 .settings-accounts-list {
   gap: var(--space-1);
 }
 
-.settings-account-row {
+.settings-account-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-account-group-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-card);
+  background: rgba(13, 18, 34, 0.4);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-account-group-header:hover {
+  border-color: var(--border-focus);
+}
+
+.settings-account-group-label {
+  letter-spacing: -0.01em;
+}
+
+.settings-account-group-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-muted);
+}
+
+.settings-account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 6px var(--space-3);
-  flex-wrap: wrap;
+}
+
+.settings-account-main {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .settings-account-info {
@@ -2470,6 +2552,7 @@ button.period-range-custom {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  flex: 1;
 }
 
 .settings-account-name {
@@ -2477,6 +2560,93 @@ button.period-range-custom {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-account-menu {
+  position: relative;
+}
+
+.settings-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.settings-menu-btn:hover,
+.settings-menu-btn[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+}
+
+.settings-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  background: var(--bg-container);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.settings-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.settings-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-menu-danger {
+  color: var(--color-danger);
+}
+
+.settings-account-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+  border-top: 1px dashed var(--border-card);
+}
+
+.settings-account-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+  border-top: 1px dashed var(--border-card);
+}
+
+.settings-confirm-block {
+  border-top: 1px dashed var(--border-card);
+  padding-top: var(--space-2);
 }
 
 .settings-account-actions {
@@ -2610,11 +2780,14 @@ button.period-range-custom {
 
 @media (max-width: 640px) {
   .settings-account-row {
-    align-items: flex-start;
+    align-items: stretch;
   }
   .settings-account-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+  .settings-tabs {
+    width: 100%;
   }
 }
 /* ============ CFG-P4A: Histórico (Configurações, read-only) ============ */

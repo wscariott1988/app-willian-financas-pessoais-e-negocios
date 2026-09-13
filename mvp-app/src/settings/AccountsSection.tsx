@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Star, RefreshCw } from 'lucide-react';
+import { Star, RefreshCw, ChevronDown, ChevronRight, MoreVertical } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { buildAccountQuery, buildUsageQuery, mapUsage, type AccountPeriodRow } from '../lib/accountQuery';
 import {
@@ -24,6 +24,8 @@ interface AvailableAccount {
 export const DEACTIVATE_HINT =
   'Desativar esta conta impede novos lançamentos nela neste perfil. Os lançamentos anteriores continuam no histórico.';
 
+type AccountsGroup = 'actives' | 'inactives';
+
 export function AccountsSection({ profileId }: { profileId: string }) {
   const [accounts, setAccounts] = useState<AccountWithStatus[]>([]);
   const [available, setAvailable] = useState<AvailableAccount[]>([]);
@@ -39,6 +41,11 @@ export function AccountsSection({ profileId }: { profileId: string }) {
   const [editName, setEditName] = useState('');
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openGroups, setOpenGroups] = useState<Record<AccountsGroup, boolean>>({
+    actives: true,
+    inactives: false,
+  });
 
   const loadList = async (isCancelled?: () => boolean) => {
     const today = localDateISO(new Date());
@@ -120,6 +127,7 @@ export function AccountsSection({ profileId }: { profileId: string }) {
     setEditingId(null);
     setConfirmingId(null);
     setActivatingId(null);
+    setOpenMenuId(null);
     setLoading(true);
     try {
       await loadList();
@@ -161,6 +169,9 @@ export function AccountsSection({ profileId }: { profileId: string }) {
     if (busyId) return;
     setBusyId(accountId);
     setActionError(null);
+    setTimeout(() => {
+      setOpenMenuId(null);
+    }, 0);
     const result = await setAccountActive(supabase as any, accountId, activate, localDateISO(new Date()));
     if (result.error) {
       setActionError(result.error);
@@ -210,6 +221,159 @@ export function AccountsSection({ profileId }: { profileId: string }) {
     }
   };
 
+  const actives = accounts.filter((a) => a.active);
+  const inactives = accounts.filter((a) => !a.active);
+
+  const toggleGroup = (group: AccountsGroup) => {
+    setOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }));
+  };
+
+  const renderAccountRow = (a: AccountWithStatus) => (
+    <li key={a.id} className="settings-item settings-account-row">
+      <div className="settings-account-main">
+        <button
+          type="button"
+          className={`settings-fav-btn ${a.is_favorite ? 'settings-fav-active' : ''}`}
+          onClick={() => handleToggleFavorite(a.id)}
+          disabled={favoriteBusyId !== null}
+          aria-label={a.is_favorite ? `Desfavoritar ${a.display_name}` : `Favoritar ${a.display_name}`}
+          aria-pressed={a.is_favorite}
+          title={a.is_favorite ? 'Favorita' : 'Favoritar'}
+        >
+          {favoriteBusyId === a.id ? (
+            <RefreshCw size={14} className="spin-animation" />
+          ) : a.is_favorite ? (
+            <Star size={14} fill="currentColor" aria-hidden="true" />
+          ) : (
+            <Star size={14} aria-hidden="true" />
+          )}
+        </button>
+        <div className="settings-account-info">
+          <span className="settings-account-name">{a.display_name}</span>
+          <span className={`settings-status-badge ${a.active ? 'settings-status-active' : 'settings-status-inactive'}`}>
+            {a.active ? 'Ativa' : 'Inativa'}
+          </span>
+        </div>
+        <div className="settings-account-menu">
+          <button
+            type="button"
+            className="settings-menu-btn"
+            aria-haspopup="menu"
+            aria-expanded={openMenuId === a.id}
+            aria-label={`Opções de ${a.display_name}`}
+            onClick={() => setOpenMenuId(openMenuId === a.id ? null : a.id)}
+          >
+            <MoreVertical size={16} aria-hidden="true" />
+          </button>
+          {openMenuId === a.id && (
+            <div className="settings-menu" role="menu" aria-label={`Menu de ${a.display_name}`}>
+              <button
+                type="button"
+                role="menuitem"
+                className="settings-menu-item"
+                disabled={busyId !== null}
+                onClick={() => { setEditingId(a.id); setEditName(a.display_name); setConfirmingId(null); setOpenMenuId(null); }}
+              >
+                Editar
+              </button>
+              {a.active ? (
+                confirmingId === a.id ? (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="settings-menu-item settings-menu-danger"
+                      disabled={busyId !== null}
+                      onClick={() => handleToggle(a.id, false)}
+                    >
+                      Confirmar desativação
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="settings-menu-item"
+                      onClick={() => setConfirmingId(null)}
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="settings-menu-item"
+                    onClick={() => { setConfirmingId(a.id); setActionError(null); }}
+                  >
+                    Desativar
+                  </button>
+                )
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="settings-menu-item"
+                  disabled={busyId !== null}
+                  onClick={() => handleToggle(a.id, true)}
+                >
+                  Reativar
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {editingId === a.id && (
+        <div className="settings-account-edit">
+          <span className="settings-hint">Renomear conta</span>
+          <div className="settings-account-actions">
+            <input
+              className="settings-input"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Nome da conta"
+            />
+            <button
+              className="settings-btn"
+              disabled={busyId !== null || editName.trim() === ''}
+              onClick={() => handleRename(a.id)}
+            >
+              Salvar
+            </button>
+            <button className="settings-btn" onClick={() => setEditingId(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {confirmingId === a.id && a.active && editingId !== a.id && (
+        <div className="settings-account-confirm">
+          <span className="settings-hint">{DEACTIVATE_HINT}</span>
+        </div>
+      )}
+    </li>
+  );
+
+  const renderGroup = (group: AccountsGroup, label: string, items: AccountWithStatus[]) => {
+    const open = openGroups[group];
+    return (
+      <div className="settings-account-group">
+        <button
+          type="button"
+          className="settings-account-group-header"
+          aria-expanded={open}
+          onClick={() => toggleGroup(group)}
+        >
+          {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+          <span className="settings-account-group-label">{label}</span>
+          <span className="settings-account-group-count">{items.length}</span>
+        </button>
+        {open && (
+          <ul className="settings-list settings-accounts-list">{items.map(renderAccountRow)}</ul>
+        )}
+      </div>
+    );
+  };
+
   return (
     <section className="settings-section">
       <h2 className="settings-section-title">Contas</h2>
@@ -222,86 +386,16 @@ export function AccountsSection({ profileId }: { profileId: string }) {
           {accounts.length === 0 ? (
             <p className="settings-state">Nenhuma conta encontrada para este perfil.</p>
           ) : (
-            <ul className="settings-list settings-accounts-list">
-              {accounts.map((a) => (
-                <li key={a.id} className="settings-item settings-account-row">
-                  <div className="settings-account-info">
-                    <span className="settings-account-name">{a.display_name}</span>
-                    <span className={`settings-status-badge ${a.active ? 'settings-status-active' : 'settings-status-inactive'}`}>
-                      {a.active ? 'Ativa' : 'Inativa'}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className={`settings-fav-btn ${a.is_favorite ? 'settings-fav-active' : ''}`}
-                    onClick={() => handleToggleFavorite(a.id)}
-                    disabled={favoriteBusyId !== null}
-                    aria-label={a.is_favorite ? `Desfavoritar ${a.display_name}` : `Favoritar ${a.display_name}`}
-                    aria-pressed={a.is_favorite}
-                    title={a.is_favorite ? 'Favorita' : 'Favoritar'}
-                  >
-                    {favoriteBusyId === a.id ? (
-                      <RefreshCw size={14} className="spin-animation" />
-                    ) : a.is_favorite ? (
-                      <Star size={14} fill="currentColor" aria-hidden="true" />
-                    ) : (
-                      <Star size={14} aria-hidden="true" />
-                    )}
-                  </button>
-                  {editingId === a.id ? (
-                    <div className="settings-account-actions">
-                      <input
-                        className="settings-input"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        placeholder="Nome da conta"
-                      />
-                      <button
-                        className="settings-btn"
-                        disabled={busyId !== null || editName.trim() === ''}
-                        onClick={() => handleRename(a.id)}
-                      >
-                        Salvar
-                      </button>
-                      <button className="settings-btn" onClick={() => setEditingId(null)}>Cancelar</button>
-                    </div>
-                  ) : (
-                    <div className="settings-account-actions">
-                      {a.active ? (
-                        confirmingId === a.id ? (
-                          <>
-                            <span className="settings-hint">{DEACTIVATE_HINT}</span>
-                            <button
-                              className="settings-btn settings-btn-danger"
-                              disabled={busyId !== null}
-                              onClick={() => handleToggle(a.id, false)}
-                            >
-                              Desativar
-                            </button>
-                            <button className="settings-btn" onClick={() => setConfirmingId(null)}>Cancelar</button>
-                          </>
-                        ) : (
-                          <button className="settings-btn" onClick={() => { setConfirmingId(a.id); setActionError(null); }}>
-                            Desativar
-                          </button>
-                        )
-                      ) : (
-                        <button className="settings-btn" disabled={busyId !== null} onClick={() => handleToggle(a.id, true)}>
-                          Reativar
-                        </button>
-                      )}
-                      <button
-                        className="settings-btn"
-                        disabled={busyId !== null}
-                        onClick={() => { setEditingId(a.id); setEditName(a.display_name); setConfirmingId(null); }}
-                      >
-                        Editar
-                      </button>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <>
+              {renderGroup('actives', 'Ativas', actives)}
+              {renderGroup('inactives', 'Inativas', inactives)}
+            </>
+          )}
+
+          {confirmingId && (
+            <div className="settings-block settings-confirm-block">
+              <p className="settings-hint">{DEACTIVATE_HINT}</p>
+            </div>
           )}
 
           <div className="settings-block">

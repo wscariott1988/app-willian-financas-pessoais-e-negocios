@@ -149,7 +149,6 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     <div className="tx-view">
       <div className="tx-view-head">
         <div className="tx-view-title">
-          <h1>{isPending ? 'Pendências' : 'Transações'}</h1>
           <p className="tx-view-subtitle">
             {isPending
               ? 'Transações não pagas ou sem categoria'

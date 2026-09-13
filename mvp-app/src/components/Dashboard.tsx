@@ -156,11 +156,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profileId, profileCode = '
     <div className="dash-root">
       <div className="dash-title">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-          <div>
-            <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-              Visão Geral
-            </h1>
-          </div>
           <button
             type="button"
             className="btn-primary tx-new-button"

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, ArrowLeftRight, Landmark, BarChart3, Settings, Wallet } from 'lucide-react';
+import { Home, ArrowLeftRight, BarChart3, Settings, Wallet } from 'lucide-react';
 import { ProfileSwitcher } from './ProfileSwitcher';
 import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
@@ -15,7 +15,6 @@ export type ViewId = 'inicio' | 'transacoes' | 'contas' | 'analises' | 'configur
 const NAV_ITEMS: ReadonlyArray<{ id: ViewId; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'inicio', label: 'Início', icon: Home },
   { id: 'transacoes', label: 'Transações', icon: ArrowLeftRight },
-  { id: 'contas', label: 'Contas', icon: Landmark },
   { id: 'analises', label: 'Análises', icon: BarChart3 },
   { id: 'configuracoes', label: 'Configurações', icon: Settings },
 ];

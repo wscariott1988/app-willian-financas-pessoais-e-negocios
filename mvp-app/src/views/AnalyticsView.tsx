@@ -87,13 +87,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ profileId, profile
   const isEmpty = !!result && result.totals.totalCount === 0;
 
   return (
-    <div className="analytics-root">
+<div className="analytics-root">
       <div className="dash-title">
-        <h1 style={{ fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', marginBottom: '4px' }}>
-          Análises
-        </h1>
         <p style={{ fontSize: '14px', color: 'var(--color-text-muted)' }}>
-          Leitura do período no perfil {profileCode === 'business' ? 'Negócio' : 'Pessoal'} — somente leitura
+          Leitura do período no perfil {profileCode === 'business' ? 'Negócio' : 'Pessoal'} - somente leitura
         </p>
       </div>
 
