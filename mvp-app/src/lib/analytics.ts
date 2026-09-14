@@ -19,6 +19,9 @@ export interface AnalyticsTxRow {
   amount: number | string;
   account_id: string;
   category_id: string | null;
+  occurred_on?: string;
+  status?: string | null;
+  raw_description?: string | null;
   accounts: { display_name: string } | Array<{ display_name: string }> | null;
   categories: { display_name: string; canonical_path: string | null } | Array<{ display_name: string; canonical_path: string | null }> | null;
 }

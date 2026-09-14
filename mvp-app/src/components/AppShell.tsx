@@ -5,12 +5,17 @@ import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { SettingsView } from '../views/SettingsView';
 import { AnalyticsView } from '../views/AnalyticsView';
-import { useMemo, useState } from 'react';
-import { type PeriodMode, type PeriodRange, type PeriodSelection, computePeriodRange, selectionFromDate } from '../lib/period';
+import { useState } from 'react';
+import { type PendingFilter } from '../lib/txList';
+import { usePeriodController } from '../hooks/usePeriodController';
+import { PERIOD_DEFAULT_MODES } from '../lib/periodController';
 import { PeriodPicker } from './PeriodPicker';
-import type { PendingFilter } from '../lib/txList';
 
 export type ViewId = 'inicio' | 'transacoes' | 'contas' | 'analises' | 'configuracoes';
+
+// O contrato do seletor de período vive em lib/periodController.ts; mantemos o
+// re-export para não quebrar os imports existentes (Dashboard/Views).
+export type { PeriodController } from '../lib/periodController';
 
 const NAV_ITEMS: ReadonlyArray<{ id: ViewId; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'inicio', label: 'Início', icon: Home },
@@ -18,17 +23,6 @@ const NAV_ITEMS: ReadonlyArray<{ id: ViewId; label: string; icon: React.Componen
   { id: 'analises', label: 'Análises', icon: BarChart3 },
   { id: 'configuracoes', label: 'Configurações', icon: Settings },
 ];
-
-export interface PeriodController {
-  selection: PeriodSelection;
-  mode: PeriodMode;
-  range: PeriodRange;
-  onSelectionChange: (sel: PeriodSelection) => void;
-  onModeChange: (mode: PeriodMode) => void;
-  onCustomApply: (start: string, end: string) => void;
-  onCustomReset: () => void;
-  onPickerOpen: () => void;
-}
 
 interface AppShellProps {
   profileId: string;
@@ -50,19 +44,23 @@ export const AppShell: React.FC<AppShellProps> = ({
   initialView = 'inicio',
 }) => {
   const [view, setView] = useState<ViewId>(initialView);
-  const [selection, setSelection] = useState<PeriodSelection>(() => selectionFromDate(new Date()));
-  const [mode, setMode] = useState<PeriodMode>('up_to_today');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-  const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
+  // PESSOAL-12: um estado de período independente por aba, cada um com o seu
+  // default (Início = Até hoje; Transações/Análises = Mês todo). Mudanças
+  // manuais dentro de cada tela são preservadas na sessão; nada é compartilhado
+  // entre telas nem resetado a cada render.
+  const homePeriod = usePeriodController(PERIOD_DEFAULT_MODES.inicio);
+  const txPeriod = usePeriodController(PERIOD_DEFAULT_MODES.transacoes);
+  const analyticsPeriod = usePeriodController(PERIOD_DEFAULT_MODES.analises);
   // Modo da view Transações preservado durante a navegação interna (sessão ativa)
   const [txMode, setTxMode] = useState<TxMode>('period');
   const [txPendingFilter, setTxPendingFilter] = useState<PendingFilter>('all');
 
-  const monthRange = useMemo(() => computePeriodRange(selection, mode, new Date()), [selection, mode]);
-  const range: PeriodRange = mode === 'custom' && customStart && customEnd
-    ? { start: customStart, end: customEnd }
-    : monthRange;
+  // O picker de período personalizado é único na tela; ele opera sobre o estado
+  // do contexto ativo (a única view visível), respeitando o período de cada aba.
+  const activePeriod =
+    view === 'transacoes' ? txPeriod
+    : view === 'analises' ? analyticsPeriod
+    : homePeriod;
 
   // Cards de pendências da Início: abrem Transações na fila global filtrada.
   const handleOpenPending = (filter: 'unpaid' | 'noCategory') => {
@@ -74,29 +72,6 @@ export const AppShell: React.FC<AppShellProps> = ({
   const handleNavigateToTransactions = () => {
     setTxMode('period');
     setView('transacoes');
-  };
-
-  const handleCustomApply = (start: string, end: string) => {
-    setCustomStart(start);
-    setCustomEnd(end);
-    setMode('custom');
-    setPeriodPickerOpen(false);
-  };
-
-  const handleCustomReset = () => {
-    setMode('up_to_today');
-    setSelection(selectionFromDate(new Date()));
-  };
-
-  const period: PeriodController = {
-    selection,
-    mode,
-    range,
-    onSelectionChange: setSelection,
-    onModeChange: setMode,
-    onCustomApply: handleCustomApply,
-    onCustomReset: handleCustomReset,
-    onPickerOpen: () => setPeriodPickerOpen(true),
   };
 
   const switcherProps = {
@@ -151,7 +126,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               key={profileId}
               profileId={profileId}
               profileCode={profileCode}
-              period={period}
+              period={homePeriod.controller}
               onOpenPending={handleOpenPending}
               onNavigateToTransactions={handleNavigateToTransactions}
             />
@@ -161,7 +136,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               key={profileId}
               profileId={profileId}
               profileCode={profileCode}
-              period={period}
+              period={txPeriod.controller}
               mode={txMode}
               onModeChange={setTxMode}
               pendingFilter={txPendingFilter}
@@ -174,7 +149,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               key={profileId}
               profileId={profileId}
               profileCode={profileCode}
-              period={period}
+              period={analyticsPeriod.controller}
             />
           )}
           {view === 'configuracoes' && <SettingsView profileId={profileId} />}
@@ -187,11 +162,11 @@ export const AppShell: React.FC<AppShellProps> = ({
       </nav>
 
       <PeriodPicker
-        open={periodPickerOpen}
-        onClose={() => setPeriodPickerOpen(false)}
-        onApply={handleCustomApply}
-        currentStart={mode === 'custom' ? customStart : undefined}
-        currentEnd={mode === 'custom' ? customEnd : undefined}
+        open={activePeriod.pickerOpen}
+        onClose={activePeriod.closePicker}
+        onApply={activePeriod.controller.onCustomApply}
+        currentStart={activePeriod.controller.mode === 'custom' ? activePeriod.customStart : undefined}
+        currentEnd={activePeriod.controller.mode === 'custom' ? activePeriod.customEnd : undefined}
       />
     </div>
   );

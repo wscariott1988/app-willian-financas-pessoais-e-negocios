@@ -3040,3 +3040,289 @@ button.period-range-custom {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
 }
+
+/* ============ PESSOAL-12: Análises determinísticas (blocos novos) ============ */
+
+/* Resumo: % das despesas sobre as receitas */
+.analytics-share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px 2px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.analytics-share-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.analytics-share-track {
+  width: 90px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.analytics-share-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-warning);
+  border-radius: 9999px;
+}
+
+/* Evolução mensal (CSS puro, sem biblioteca) */
+.analytics-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.analytics-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: -6px;
+}
+
+.analytics-legend-income {
+  background: var(--color-success);
+}
+
+.analytics-legend-expense {
+  background: var(--color-danger);
+}
+
+.analytics-legend-balance {
+  background: var(--color-primary);
+}
+
+.evolution-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding-top: var(--space-3);
+  min-height: 150px;
+  overflow-x: auto;
+}
+
+.evolution-col {
+  flex: 1 1 0;
+  min-width: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.evolution-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+  width: 100%;
+  justify-content: center;
+}
+
+.evolution-bar {
+  width: 12px;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+
+.evolution-bar-income {
+  background: var(--color-success);
+  opacity: 0.9;
+}
+
+.evolution-bar-expense {
+  background: var(--color-danger);
+  opacity: 0.9;
+}
+
+.evolution-month {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.evolution-balance {
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Toggle Top 5 / Top 10 das categorias */
+.analytics-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: 9999px;
+  padding: 2px;
+  align-self: flex-start;
+}
+
+.analytics-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+
+.analytics-toggle button.active {
+  background: var(--color-primary);
+  color: var(--on-primary);
+}
+
+/* Pago x previsto */
+.paid-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 2px 0 6px;
+}
+
+.paid-seg {
+  height: 100%;
+}
+
+.paid-seg-paid {
+  background: var(--color-success);
+}
+
+.paid-seg-unpaid {
+  background: var(--color-pending);
+}
+
+.paid-seg-legacy {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.analytics-footnote {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  margin: 6px 2px 0;
+}
+
+/* Parcelamentos e recorrências */
+.series-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.series-metric {
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.series-metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.series-metric-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.series-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.analytics-section-subtitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.badge-pill-installment {
+  background: rgba(88, 101, 242, 0.2);
+  color: var(--color-primary);
+}
+
+.badge-pill-recurring {
+  background: rgba(221, 183, 255, 0.16);
+  color: var(--color-secondary);
+}
+
+/* Maiores despesas */
+.analytics-top-title {
+  display: block;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-top-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+@media (max-width: 480px) {
+  .series-metrics {
+    gap: 6px;
+  }
+
+  .series-metric {
+    padding: 8px;
+  }
+
+  .series-metric-value {
+    font-size: 15px;
+  }
+
+  .evolution-chart {
+    min-height: 140px;
+  }
+
+  .evolution-col {
+    min-width: 40px;
+  }
+}

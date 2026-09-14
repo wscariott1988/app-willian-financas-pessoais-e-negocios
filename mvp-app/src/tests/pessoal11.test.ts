@@ -98,10 +98,12 @@ describe('PESSOAL-11 — títulos redundantes removidos', () => {
     expect(tx).toContain('Todas as transações do perfil ativo no período selecionado');
   });
 
-  it('Análises não exibe h1 "Análises" (mantém descrição do período)', () => {
+  it('Análises começa direto pelo seletor de período (sem h1 e sem subtítulo redundante)', () => {
     const anl = readSource('views/AnalyticsView.tsx');
     expect(anl).not.toContain('>Análises</h1>');
-    expect(anl).toContain('somente leitura');
+    expect(anl).not.toContain('somente leitura');
+    expect(anl).not.toContain('Leitura do período no perfil');
+    expect(anl).not.toContain('dash-title');
   });
 });
 

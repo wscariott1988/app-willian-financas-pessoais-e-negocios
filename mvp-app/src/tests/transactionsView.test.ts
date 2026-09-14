@@ -984,39 +984,40 @@ describe('seletor de período personalizado', () => {
     expect(src).toContain('open={open}');
   });
 
-  it('7) AppShell gerencia periodPickerOpen e customStart/customEnd', () => {
+  it('7) AppShell mantém picker e período personalizados por contexto', () => {
     const src = readSource('components/AppShell.tsx');
-    expect(src).toContain('periodPickerOpen');
-    expect(src).toContain('customStart');
-    expect(src).toContain('customEnd');
-    expect(src).toContain('setPeriodPickerOpen');
+    expect(src).toContain('usePeriodController(');
+    expect(src).toContain('activePeriod.pickerOpen');
+    expect(src).toContain('activePeriod.closePicker');
+    expect(src).toContain('activePeriod.customStart');
+    expect(src).toContain('activePeriod.customEnd');
   });
 
-  it('8) AppShell handleCustomApply define datas e fecha o picker', () => {
-    const src = readSource('components/AppShell.tsx');
-    expect(src).toContain('handleCustomApply');
-    expect(src).toContain("setMode('custom')");
-    expect(src).toContain('setPeriodPickerOpen(false)');
+  it('8) aplicar período personalizado define datas, modo custom e fecha o picker', () => {
+    const src = readSource('lib/periodController.ts');
+    expect(src).toContain("case 'custom_apply'");
+    expect(src).toContain("mode: 'custom'");
+    expect(src).toContain('pickerOpen: false');
   });
 
-  it('9) AppShell handleCustomReset volta para up_to_today', () => {
-    const src = readSource('components/AppShell.tsx');
-    expect(src).toContain('handleCustomReset');
-    expect(src).toContain("setMode('up_to_today')");
+  it('9) resetar período personalizado volta para up_to_today (contrato histórico)', () => {
+    const src = readSource('lib/periodController.ts');
+    expect(src).toContain("case 'custom_reset'");
+    expect(src).toContain("mode: 'up_to_today'");
   });
 
-  it('10) AppShell range é custom quando mode=custom e datas existem', () => {
-    const src = readSource('components/AppShell.tsx');
-    expect(src).toContain("mode === 'custom'");
-    expect(src).toContain('customStart');
-    expect(src).toContain('customEnd');
+  it('10) range é custom somente quando mode=custom e datas existem', () => {
+    const hookSrc = readSource('hooks/usePeriodController.ts');
+    expect(hookSrc).toContain("mode === 'custom'");
+    expect(hookSrc).toContain('customStart');
+    expect(hookSrc).toContain('customEnd');
   });
 
   it('11) PeriodController inclui onCustomApply, onCustomReset e onPickerOpen', () => {
-    const src = readSource('components/AppShell.tsx');
-    expect(src).toContain('onCustomApply: handleCustomApply');
-    expect(src).toContain('onCustomReset: handleCustomReset');
-    expect(src).toContain('onPickerOpen:');
+    const src = readSource('lib/periodController.ts');
+    expect(src).toContain('onCustomApply');
+    expect(src).toContain('onCustomReset');
+    expect(src).toContain('onPickerOpen');
   });
 
   it('12) Dashboard passa onPickerOpen e onCustomReset ao PeriodSelector', () => {

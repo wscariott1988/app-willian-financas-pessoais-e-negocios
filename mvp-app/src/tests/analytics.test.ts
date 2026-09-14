@@ -207,9 +207,18 @@ describe('CFG-P6B — view (read-only; rota integrada)', () => {
   const view = readSource('views/AnalyticsView.tsx');
   const shell = readSource('components/AppShell.tsx');
 
-  it('17. séries NÃO são somadas duas vezes (nenhuma referência a transaction_series)', () => {
-    expect(view).not.toContain('transaction_series');
-    expect(view).not.toContain('amount_total');
+  it('17. séries alimentam APENAS o bloco dedicado (nunca somadas aos totais de receita/despesa)', () => {
+    // A agregação financeira canônica permanece 100% série-livre (sem referência).
+    const lib = readSource('lib/analytics.ts');
+    const libCode = lib.slice(lib.indexOf('export interface'));
+    expect(libCode).not.toContain('transaction_series');
+    expect(libCode).not.toContain('amount_total');
+    // O bloco PESSOAL-12 consulta ocorrências materializadas (nunca soma o template).
+    const insights = readSource('lib/analyticsInsights.ts');
+    expect(insights).toContain('transaction_series_occurrences');
+    expect(insights).toContain('o.amount');
+    const view = readSource('views/AnalyticsView.tsx');
+    expect(view).toContain(".from('transaction_series_occurrences')");
   });
 
   it('18. ocorrência materializada entra normalmente (query em transactions)', () => {
