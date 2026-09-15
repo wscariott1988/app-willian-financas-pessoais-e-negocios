@@ -8,6 +8,9 @@ import { supabase } from '../supabaseClient';
 export interface AskApiResponse {
   answer: string;
   period: { start: string; end: string } | null;
+  periodAnalyzed?: { start: string; end: string } | null;
+  engine?: 'deterministic' | 'gemini';
+  geminiCallCount?: number;
   toolsUsed: string[];
   evidence?: Array<{ label: string; value: string }>;
 }
@@ -106,6 +109,14 @@ export async function askFinance(params: AskFinanceParams): Promise<AskApiRespon
       toolsUsed: Array.isArray(payload.toolsUsed)
         ? payload.toolsUsed.filter((t): t is string => typeof t === 'string')
         : [],
+      periodAnalyzed:
+        payload.periodAnalyzed &&
+        typeof payload.periodAnalyzed === 'object' &&
+        !Array.isArray(payload.periodAnalyzed)
+          ? (payload.periodAnalyzed as { start: string; end: string })
+          : undefined,
+      engine: payload.engine === 'deterministic' || payload.engine === 'gemini' ? payload.engine : undefined,
+      geminiCallCount: typeof payload.geminiCallCount === 'number' ? payload.geminiCallCount : undefined,
       evidence: Array.isArray(payload.evidence)
         ? payload.evidence.filter(
             (e): e is { label: string; value: string } =>

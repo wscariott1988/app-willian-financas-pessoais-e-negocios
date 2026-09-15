@@ -179,9 +179,18 @@ export interface EvidenceItem {
   value: string;
 }
 
+/** Motor que produziu a resposta (PESSOAL-13C1). */
+export type AskEngine = 'deterministic' | 'gemini';
+
 export interface AskResponse {
   answer: string;
   period: { start: string; end: string } | null;
   toolsUsed: string[];
   evidence?: EvidenceItem[];
+  /** 'deterministic' quando respondido sem nenhuma chamada ao Gemini. */
+  engine?: AskEngine;
+  /** Quantidade de chamadas sendMessage ao Gemini nesta requisição (0 em determinístico). */
+  geminiCallCount?: number;
+  /** Período EFETIVAMENTE consultado pelo backend (igual a `period` aqui; badge da tela). */
+  periodAnalyzed?: { start: string; end: string };
 }

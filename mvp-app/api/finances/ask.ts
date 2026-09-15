@@ -26,11 +26,14 @@ import {
 import { getRegisteredGeminiClient } from '../../server/finance-ai/geminiClient.js';
 import { createGeminiSdkClient } from '../../server/finance-ai/geminiSdkClient.js';
 import { createUserSupabaseClient, AuthTokenError } from '../../server/supabaseServer.js';
+import { runDeterministicAsk } from '../../server/finance-ai/deterministicRouter.js';
 import {
   AskError,
   buildFailureEvent,
+  buildSuccessEvent,
   classifyGeminiClientError,
   emitSanitizedFailureEvent,
+  emitSanitizedSuccessEvent,
   isAbortLikeError,
   newRequestId,
   providerStatusOf,
@@ -302,26 +305,58 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
     return respond(res, 502, friendlyForOutcome('config'));
   }
 
-  // Prioridade: client injetável (mocks/testes) → SDK concreto quando há
-  // GEMINI_API_KEY → null (resposta controlada sem a chave).
-  const gemini =
-    getRegisteredGeminiClient() ??
-    createGeminiSdkClient(process.env as Record<string, string | undefined>);
-  if (!gemini) {
-    return respond(res, 200, {
-      answer:
-        'A análise de inteligência financeira ainda não está configurada neste ambiente. ' +
-        'Por favor, tente novamente mais tarde.',
-      period: currentMonthPeriod(),
-      toolsUsed: [],
-      evidence: [],
-    });
-  }
-
+  // PESSOAL-13C1: rota determinística ANTES de qualquer Gemini — perguntas
+  // simples (totais, categoria, mês com maior gasto) são respondidas direto dos
+  // dados financeiros com custo Gemini zero. Quando a intenção não é de alta
+  // confiança (análise/conselho/recomendação), cai no fluxo Gemini atual.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ORCHESTRATOR_TIMEOUT_MS);
 
   try {
+    const deterministic = await runDeterministicAsk({
+      supabase: userClient.client,
+      question: body.question,
+      period: body.period,
+    });
+    if (deterministic) {
+      emitSanitizedSuccessEvent(
+        buildSuccessEvent({
+          requestId,
+          engine: 'deterministic',
+          intent: deterministic.intent,
+          elapsedMs: Date.now() - startedAt,
+          geminiCallCount: 0,
+        }),
+      );
+      return respond(res, 200, deterministic.response);
+    }
+
+    // Prioridade: client injetável (mocks/testes) → SDK concreto quando há
+    // GEMINI_API_KEY → null (resposta controlada sem a chave).
+    const gemini =
+      getRegisteredGeminiClient() ??
+      createGeminiSdkClient(process.env as Record<string, string | undefined>);
+    if (!gemini) {
+      const current = currentMonthPeriod();
+      emitSanitizedSuccessEvent(
+        buildSuccessEvent({
+          requestId,
+          engine: 'gemini',
+          elapsedMs: Date.now() - startedAt,
+          geminiCallCount: 0,
+        }),
+      );
+      return respond(res, 200, {
+        answer:
+          'A análise de inteligência financeira ainda não está configurada neste ambiente. ' +
+          'Por favor, tente novamente mais tarde.',
+        period: current,
+        toolsUsed: [],
+        evidence: [],
+        ...{ engine: 'gemini', geminiCallCount: 0, periodAnalyzed: current },
+      });
+    }
+
     const result = await runFinanceAsk({
       supabase: userClient.client,
       gemini,
@@ -329,6 +364,14 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
       period: body.period,
       signal: controller.signal,
     });
+    emitSanitizedSuccessEvent(
+      buildSuccessEvent({
+        requestId,
+        engine: 'gemini',
+        elapsedMs: Date.now() - startedAt,
+        geminiCallCount: result.geminiCallCount ?? 0,
+      }),
+    );
     return respond(res, 200, result);
   } catch (err) {
     const failure = resolveFailure(err);

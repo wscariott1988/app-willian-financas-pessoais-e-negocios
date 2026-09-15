@@ -14,6 +14,7 @@
 // nunca o texto original.
 
 import { randomUUID } from 'node:crypto';
+import type { AskEngine } from './types.js';
 
 // ── Stages ─────────────────────────────────────────────────────
 
@@ -388,3 +389,72 @@ export const OBSERVABILITY_FIELDS = [
   'retryable',
   'elapsedMs',
 ] as const;
+
+// ── Evento de SUCESSO sanitizado (PESSOAL-13C1) ────────────────
+// Permite comprovar custo Gemini zero na rota determinística sem expor nenhum
+// dado sensível: apenas requestId, engine, intent, latência e contagem de
+// chamadas. NUNCA contém pergunta, resposta, valores financeiros, UUIDs, JWT,
+// tokens ou conteúdo do Gemini.
+
+export const OBSERVABILITY_SUCCESS_FIELDS = [
+  'event',
+  'requestId',
+  'engine',
+  'intent',
+  'elapsedMs',
+  'geminiCallCount',
+] as const;
+
+export interface SanitizedSuccessEvent {
+  event: 'ask_resolved';
+  requestId: string;
+  engine: AskEngine;
+  /** Intenção determinística quando engine='deterministic'; ausente ou 'gemini' caso contrário. */
+  intent?: string;
+  elapsedMs: number;
+  geminiCallCount: number;
+}
+
+export function buildSuccessEvent(opts: {
+  requestId: string;
+  engine: AskEngine;
+  intent?: string;
+  elapsedMs: number;
+  geminiCallCount: number;
+}): SanitizedSuccessEvent {
+  const event: SanitizedSuccessEvent = {
+    event: 'ask_resolved',
+    requestId: opts.requestId,
+    engine: opts.engine,
+    elapsedMs: opts.elapsedMs,
+    geminiCallCount: opts.geminiCallCount,
+  };
+  if (opts.intent && opts.engine === 'deterministic') event.intent = opts.intent;
+  return event;
+}
+
+export type SanitizedSuccessSink = (event: SanitizedSuccessEvent) => void;
+
+let successSink: SanitizedSuccessSink | null = null;
+
+export function setSanitizedSuccessSink(sink: SanitizedSuccessSink | null): void {
+  successSink = sink;
+}
+
+export function getSanitizedSuccessSink(): SanitizedSuccessSink | null {
+  return successSink;
+}
+
+export function emitSanitizedSuccessEvent(event: SanitizedSuccessEvent): void {
+  if (successSink) {
+    successSink(event);
+    return;
+  }
+  const line = `[finance-ask] ${JSON.stringify(event)}`;
+  try {
+    // eslint-disable-next-line no-console
+    console.info(line);
+  } catch {
+    // nunca deixar a telemetria derrubar a response
+  }
+}

@@ -214,6 +214,8 @@ export async function runFinanceAsk(deps: OrchestratorDeps): Promise<AskResponse
   };
 
   ensureNotAborted();
+  let geminiCallCount = 0;
+  geminiCallCount += 1;
   let response = await sendGeminiStage(deps, 'gemini_initial_request', messages);
   pushModelTurn(messages, response);
 
@@ -302,6 +304,7 @@ export async function runFinanceAsk(deps: OrchestratorDeps): Promise<AskResponse
     }
 
     ensureNotAborted();
+    geminiCallCount += 1;
     response = await sendGeminiStage(deps, 'gemini_followup', messages);
     pushModelTurn(messages, response);
   }
@@ -321,6 +324,9 @@ export async function runFinanceAsk(deps: OrchestratorDeps): Promise<AskResponse
     period: consultedPeriod ?? resolved,
     toolsUsed,
     evidence: dedupEvidence.slice(0, 8),
+    engine: 'gemini',
+    geminiCallCount,
+    periodAnalyzed: consultedPeriod ?? resolved,
   };
 }
 

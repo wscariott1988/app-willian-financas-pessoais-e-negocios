@@ -122,9 +122,10 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
 
       {result && (
         <div className="finance-ai-result">
-          {result.period && (
+          {(result.periodAnalyzed ?? result.period) && (
             <div className="finance-ai-period">
-              <ShieldCheck size={13} /> Período analisado: {formatPeriod(result.period)}
+              <ShieldCheck size={13} /> Período analisado:{' '}
+              {formatPeriod(result.periodAnalyzed ?? result.period!)}
             </div>
           )}
           <p className="finance-ai-answer">{result.answer}</p>
@@ -137,6 +138,13 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
                 </li>
               ))}
             </ul>
+          )}
+          {result.engine && (
+            <p className="finance-ai-engine" data-engine={result.engine}>
+              {result.engine === 'deterministic'
+                ? 'Resposta instantânea calculada a partir dos seus dados (IA não foi acionada).'
+                : 'Resposta gerada pela inteligência artificial a partir dos seus dados.'}
+            </p>
           )}
           <p className="finance-ai-meta">
             Análise gerada com base nos seus dados do período; transferências não são
