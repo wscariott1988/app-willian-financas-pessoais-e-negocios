@@ -21,8 +21,8 @@ import {
   categoryLabel,
   type AnalyticsTxRow,
   type CategoryBreakdownRow,
-} from './analytics';
-import { isStatusOperationalVisible, isPaidStatus } from './status';
+} from './analytics.js';
+import { isStatusOperationalVisible, isPaidStatus } from './status.js';
 
 function number(v: number | string | null | undefined): number {
   const n = Number(v ?? 0);
@@ -209,6 +209,202 @@ export function topExpenses(rows: AnalyticsTxRow[], limit: number = 5): TopExpen
     }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, Math.max(1, limit));
+}
+
+// ============ Agregação mensal de despesas (PESSOAL-13B3.12) ============
+
+export const MONTH_FULL: ReadonlyArray<string> = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+];
+
+/**
+ * Normalização segura de termos de categoria/subcategoria: minúsculas, sem
+ * acentos (NFD), espaços múltiplos colapsados e trim. Nunca altera o dado real
+ * — somente o termo de comparação.
+ */
+export function normalizeCategoryTerm(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+interface CategoryEmbedLabel {
+  display_name?: string;
+  canonical_path?: string | null;
+}
+
+function embeddedCategory(
+  value:
+    | { display_name: string; canonical_path: string | null }
+    | Array<{ display_name: string; canonical_path: string | null }>
+    | null
+    | undefined,
+): CategoryEmbedLabel | null {
+  if (!value) return null;
+  if (Array.isArray(value)) return (value[0] as CategoryEmbedLabel) ?? null;
+  return value as CategoryEmbedLabel;
+}
+
+/** Termos de categoria de uma linha (display_name, path completo e segmentos). */
+export function categoryTermsOf(
+  row: AnalyticsTxRow,
+): ReadonlyArray<string> {
+  const cat = embeddedCategory(row.categories);
+  if (!cat) return [];
+  const terms = new Set<string>();
+  if (cat.display_name) terms.add(normalizeCategoryTerm(cat.display_name));
+  if (cat.canonical_path) {
+    const path = normalizeCategoryTerm(cat.canonical_path);
+    terms.add(path);
+    for (const segment of path.split('>')) {
+      const s = segment.trim();
+      if (s) terms.add(s);
+    }
+  }
+  return [...terms];
+}
+
+/**
+ * Match determinístico de categoria/subcategoria com normalização segura de
+ * maiúsculas, acentos e espaços. 'Supermercado', 'SUPERMERCADO' e
+ * 'alimentação > supermercado' casam com o path canônico 'Alimentação >
+ * Supermercado'. Sem termo, retorna true (sem filtro).
+ */
+export function matchesCategoryTerm(row: AnalyticsTxRow, term: string | undefined): boolean {
+  if (!term || !term.trim()) return true;
+  const target = normalizeCategoryTerm(term);
+  if (!target) return true;
+  const terms = categoryTermsOf(row);
+  if (terms.length === 0) return false;
+  if (terms.includes(target)) return true;
+  // containment em segmento com comprimento mínimo para evitar match curto/ruim
+  return terms.some((t) => t.includes(target) && target.length >= 3);
+}
+
+export interface ExpenseMonthlyAggregateOptions {
+  start?: string;
+  end?: string;
+  category?: string;
+  subcategory?: string;
+  kind?: string;
+}
+
+export interface ExpenseMonthPoint {
+  key: string; // 'YYYY-MM'
+  monthLabel: string; // 'março de 2026'
+  amount: number;
+  count: number;
+}
+
+export interface ExpenseMonthlyAggregateResult {
+  hasData: boolean;
+  /** Sempre 'expense': receitas e transferências são excluídas (semântica de "gastei"). */
+  kind: 'expense';
+  categoryFiltered: boolean;
+  matchedCategory: string | null;
+  periodAnalyzed: { start: string; end: string };
+  months: ExpenseMonthPoint[];
+  winnerMonths: Array<{ key: string; monthLabel: string }>;
+  winnerAmount: number;
+  winnerCount: number;
+  totalAmount: number;
+  totalCount: number;
+}
+
+function monthLabelOf(key: string): string {
+  const year = Number(key.slice(0, 4));
+  const month = Number(key.slice(5, 7));
+  const name = MONTH_FULL[month - 1] ?? '';
+  return name ? `${name} de ${year}` : key;
+}
+
+function calendarYearPeriod(isoDate: string): { start: string; end: string } {
+  const year = isoDate.slice(0, 4);
+  return { start: `${year}-01-01`, end: `${year}-12-31` };
+}
+
+/**
+ * Agrupa DESPESAS por mês dentro de um período, com filtro opcional de
+ * categoria/subcategoria. Regras determinísticas (PESSOAL-13B3.12):
+ *   - somente transaction_kind === 'expense'; receitas e transferências NUNCA
+ *     entram (semântica de "gastei").
+ *   - todas as despesas do período entram (pagas/posted e não pagas/previstas),
+ *     mesma regra do resumo (analytics/summary); status não filtra totais.
+ *   - categoria vem SOMENTE do category_id vinculado (display_name/canonical_path);
+ *     nunca por descrição.
+ *   - em empate, todos os meses empatados são retornados.
+ *   - sem truncamento: nenhum limite de registros.
+ */
+export function expenseMonthlyAggregate(
+  rows: AnalyticsTxRow[],
+  options: ExpenseMonthlyAggregateOptions = {},
+  todayISO?: string,
+): ExpenseMonthlyAggregateResult {
+  const start = options.start && /^\d{4}-\d{2}-\d{2}$/.test(options.start) ? options.start : undefined;
+  const end = options.end && /^\d{4}-\d{2}-\d{2}$/.test(options.end) ? options.end : undefined;
+  const category =
+    options.category && options.category.trim() ? options.category.trim() : undefined;
+  const subcategory =
+    options.subcategory && options.subcategory.trim() ? options.subcategory.trim() : undefined;
+
+  const periodAnalyzed =
+    start && end
+      ? { start, end }
+      : todayISO && /^\d{4}-\d{2}-\d{2}$/.test(todayISO)
+        ? calendarYearPeriod(todayISO)
+        : { start: '', end: '' };
+
+  const byMonth = new Map<string, { key: string; amount: number; count: number }>();
+  for (const r of rows) {
+    if (r.transaction_kind !== 'expense') continue;
+    const date = r.occurred_on ?? '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (start && date < start) continue;
+    if (end && date > end) continue;
+    if (!matchesCategoryTerm(r, subcategory ?? category)) continue;
+    const key = date.slice(0, 7);
+    const cur = byMonth.get(key) ?? { key, amount: 0, count: 0 };
+    cur.amount += number(r.amount);
+    cur.count += 1;
+    byMonth.set(key, cur);
+  }
+
+  const months = [...byMonth.values()]
+    .map((m) => ({ key: m.key, monthLabel: monthLabelOf(m.key), amount: m.amount, count: m.count }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  const hasData = months.length > 0;
+  let winnerAmount = 0;
+  for (const m of months) {
+    if (m.amount > winnerAmount) winnerAmount = m.amount;
+  }
+  const winnerMonths = months
+    .filter((m) => m.amount === winnerAmount && winnerAmount > 0)
+    .map((m) => ({ key: m.key, monthLabel: m.monthLabel }));
+  const winnerCount = months
+    .filter((m) => m.amount === winnerAmount && winnerAmount > 0)
+    .reduce((acc, m) => acc + m.count, 0);
+
+  const totalAmount = months.reduce((acc, m) => acc + m.amount, 0);
+  const totalCount = months.reduce((acc, m) => acc + m.count, 0);
+
+  return {
+    hasData,
+    kind: 'expense',
+    categoryFiltered: Boolean(category || subcategory),
+    matchedCategory: subcategory ?? category ?? null,
+    periodAnalyzed,
+    months,
+    winnerMonths,
+    winnerAmount,
+    winnerCount,
+    totalAmount,
+    totalCount,
+  };
 }
 
 // ============ Séries / parcelamentos ============

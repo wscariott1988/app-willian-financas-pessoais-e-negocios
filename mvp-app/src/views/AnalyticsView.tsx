@@ -17,6 +17,7 @@ import { formatShortDate } from '../lib/period';
 import { todayISO } from '../lib/series';
 import type { PageFetcher } from '../lib/pagination';
 import type { PeriodController } from '../components/AppShell';
+import { FinanceAiSection } from '../components/FinanceAiSection';
 
 const PAGE_SIZE = 1000;
 const ANALYTICS_PAGE_SIZE = PAGE_SIZE;
@@ -179,6 +180,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ profileId, period 
         onPickerOpen={period.onPickerOpen}
         onCustomReset={period.onCustomReset}
       />
+
+      <FinanceAiSection period={range} />
 
       {loading && !result ? (
         <div className="analytics-state">

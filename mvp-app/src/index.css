@@ -3326,3 +3326,198 @@ button.period-range-custom {
     min-width: 40px;
   }
 }
+
+/* ============ Finance AI (PESSOAL-13B1): "Pergunte às suas finanças" ============ */
+
+.finance-ai-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.finance-ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.finance-ai-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--color-text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: none;
+  box-sizing: border-box;
+  min-height: 80px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.finance-ai-input::placeholder {
+  color: var(--color-text-faint);
+}
+
+.finance-ai-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15);
+}
+
+.finance-ai-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.finance-ai-submit {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-min);
+  padding: 10px 20px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: var(--on-primary);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.finance-ai-submit:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.finance-ai-submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.finance-ai-submit:active:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.finance-ai-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.finance-ai-chip {
+  padding: 7px 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.finance-ai-chip:hover {
+  background: var(--bg-high);
+  color: var(--color-text);
+  border-color: var(--color-primary);
+}
+
+.finance-ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.finance-ai-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.finance-ai-period {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+  padding: 6px 12px;
+  background: rgba(var(--color-primary-rgb, 59, 130, 246), 0.08);
+  border-radius: var(--radius-full);
+  width: fit-content;
+}
+
+.finance-ai-answer {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.finance-ai-evidence {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.finance-ai-evidence li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+}
+
+.finance-ai-evidence-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.finance-ai-evidence-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.finance-ai-meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-faint);
+  font-style: italic;
+}
+
+@media (max-width: 480px) {
+  .finance-ai-submit {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .finance-ai-evidence {
+    grid-template-columns: 1fr;
+  }
+}

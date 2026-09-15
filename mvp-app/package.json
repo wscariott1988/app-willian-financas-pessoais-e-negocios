@@ -12,10 +12,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "@google/genai": "^2.22.0",
     "@supabase/supabase-js": "^2.49.10",
-    "lucide-react": "^0.511.0"
+    "lucide-react": "^0.511.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
