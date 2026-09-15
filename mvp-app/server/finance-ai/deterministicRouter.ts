@@ -395,9 +395,30 @@ function isCategoryQuestion(stripped: string): boolean {
   return extractCategoryTerm(stripped) !== null;
 }
 
+// PESSOAL-13C1.2: NUNCA fuzzy matching irrestrito da pergunta. Sinais combinados
+// e controlados para "quanto (eu) gastei" — variantes típicas de UM erro de
+// letra (uanto/qanto/qunto/qto/quato) + verbo "gastei" + proximidade + ausência
+// de termos de receita + ausência de referência a tempo ("gastei de tempo" não é
+// despesa financeira).
+const QUANTO_VARIANTS_SRC = ['quanto', 'uanto', 'qanto', 'qunto', 'qto', 'quato'];
+const QUANTO_VARIANTS_RE = new RegExp(`\\b(?:${QUANTO_VARIANTS_SRC.join('|')})\\b`);
+const INCOME_TERM_RE = /\b(?:recebi|receita|receitas|ganhei|ganho|entrou)\b/;
+const TIME_TERM_RE = /\b(?:tempo|horas?|minutos?|segundos?)\b/;
+const QUANTO_TO_GASTEI_WINDOW = 24;
+
+function isQuantoGasteiLike(t: string): boolean {
+  if (!/\bgastei\b/.test(t)) return false;
+  if (INCOME_TERM_RE.test(t)) return false;
+  if (TIME_TERM_RE.test(t)) return false;
+  const amount = QUANTO_VARIANTS_RE.exec(t);
+  const verb = /\bgastei\b/.exec(t);
+  if (!amount || !verb) return false;
+  return Math.abs(verb.index - amount.index) <= QUANTO_TO_GASTEI_WINDOW;
+}
+
 function isTotalExpenseQuestion(norm: string): boolean {
   const t = norm.replace(/[?!.;]+$/g, '');
-  if (/\bquanto (eu )?gastei[^?\n]*$/.test(t)) return true;
+  if (isQuantoGasteiLike(t)) return true;
   if (/\bquanto (eu )?gasgastei\b/.test(t)) return true;
   if (/\bquanto (foi|foram) (o|a|os|as|as minhas|os meus)?\s*(gasto|gastos|despesa|despesas)\b/.test(t)) return true;
   if (/\btotal de (gastos|despesas)\b/.test(t)) return true;
@@ -629,35 +650,77 @@ async function fetchExpenseCategories(supabase: SupabaseClient): Promise<Categor
   return labels;
 }
 
+interface ResolvedCategory {
+  /** Nó da tabela categories usado como referência (nunca exibido como path de descendente). */
+  label: CategoryLabel;
+  /**
+   * Alvo canônico de correspondência para a regra de match das transações:
+   * path BASE no segmento que casou (ex.: "Alimentação > Supermercado"). Um
+   * descendente ("Alimentação > Supermercado > Sem sub-categoria" ou uma
+   * subcategoria real) casado no segmento "supermercado" devolve esse prefixo —
+   * NUNCA o path textual exato do descendente. Assim a consulta abrange a própria
+   * categoria, registros sem subcategoria e subcategorias descendentes, e a regra
+   * canônica reutilizada é EXATAMENTE matchesCategoryTerm (mesma definição do
+   * agregador Gemini / analyticsInsights — fonte única, nunca divergente).
+   */
+  matchTerm: string;
+}
+
+function depthOfPath(path: string | null): number {
+  return path ? path.split('>').length : 1;
+}
+
 /**
  * Resolve a categoria extraída para a classificação CANÔNICA do usuário
  * (display_name/canonical_path da tabela categories). Nunca devolve a string
- * bruta da pergunta. Retorna null quando a categoria não é reconhecida.
+ * bruta da pergunta. Entre múltiplas correspondências hierárquicas prefere o nó
+ * ancestral (menor profundidade) e, para segmento casado, devolve o path BASE do
+ * nó (prefixo até o segmento). Retorna null quando a categoria não é reconhecida.
  */
-function resolveCategory(labels: CategoryLabel[], term: string): CategoryLabel | null {
+function resolveCategory(labels: CategoryLabel[], term: string): ResolvedCategory | null {
   const target = normalizeCategoryTerm(term);
   if (!target) return null;
-  let fallback: CategoryLabel | null = null;
+  const exact: ResolvedCategory[] = [];
+  const hierarchic: ResolvedCategory[] = [];
   for (const l of labels) {
     const dn = normalizeCategoryTerm(l.display_name);
-    const cp = l.canonical_path ? normalizeCategoryTerm(l.canonical_path) : null;
-    if (dn === target) return l;
-    if (cp === target) return l;
+    const rawPath = l.canonical_path;
+    const cp = rawPath ? normalizeCategoryTerm(rawPath) : null;
+    if (dn === target || cp === target) {
+      exact.push({ label: l, matchTerm: rawPath ?? l.display_name });
+      continue;
+    }
     if (cp) {
-      for (const seg of cp.split('>')) {
-        if (seg.trim() === target) return l;
+      const normSegs = cp.split('>').map((s) => s.trim());
+      const rawSegs = rawPath ? rawPath.split('>').map((s) => s.trim()) : [];
+      const idx = normSegs.indexOf(target);
+      if (idx >= 0) {
+        hierarchic.push({
+          label: l,
+          matchTerm: rawSegs.slice(0, idx + 1).join(' > '),
+        });
+        continue;
       }
-      if (target.length >= 3 && cp.includes(target) && !fallback) {
-        fallback = l;
+      if (target.length >= 3 && cp.includes(target)) {
+        const normIdx = normSegs.findIndex((s) => s.includes(target));
+        if (normIdx >= 0) {
+          hierarchic.push({
+            label: l,
+            matchTerm: rawSegs.slice(0, normIdx + 1).join(' > '),
+          });
+        }
       }
     }
   }
-  return fallback;
-}
-
-/** Nome legível canônico para o card/resposta (path → display_name). */
-function categoryLabelOf(l: CategoryLabel): string {
-  return l.canonical_path || l.display_name || 'Categoria';
+  if (exact.length > 0) {
+    exact.sort((a, b) => depthOfPath(a.label.canonical_path) - depthOfPath(b.label.canonical_path));
+    return exact[0];
+  }
+  if (hierarchic.length > 0) {
+    hierarchic.sort((a, b) => depthOfPath(a.label.canonical_path) - depthOfPath(b.label.canonical_path));
+    return hierarchic[0];
+  }
+  return null;
 }
 
 async function buildPeriodSummary(
@@ -738,7 +801,7 @@ async function buildCategoryTotal(
       ),
     };
   }
-  const label = categoryLabelOf(resolvedCat);
+  const label = resolvedCat.matchTerm;
   const rows = await fetchPeriodRows(supabase, resolved.start, resolved.end);
   const { amount, count } = categoryExpenseTotals(rows, label);
   const phrase = periodPhraseOf(resolved);
@@ -778,7 +841,7 @@ async function buildMonthMost(
       ),
     };
   }
-  const label = categoryLabelOf(resolvedCat);
+  const label = resolvedCat.matchTerm;
   const rows = await fetchPeriodRows(supabase, resolved.start, resolved.end);
   const agg = expenseMonthlyAggregate(
     rows,

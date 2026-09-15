@@ -38,6 +38,8 @@ import {
   type SanitizedSuccessEvent,
 } from '../../server/finance-ai/observability';
 import type { GeminiClient, GeminiResponse } from '../../server/finance-ai/types';
+import { expenseMonthlyAggregate } from '../../src/lib/analyticsInsights';
+import type { AnalyticsTxRow } from '../../src/lib/analytics';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
@@ -767,5 +769,405 @@ describe('PESSOAL-13C1.1 — Interpretação da pergunta (separação e precedê
     expect(body.answer).toContain('81 despesas');
     expect(body.period).toEqual({ start: '2026-04-01', end: '2026-04-30' });
     expect(body.periodAnalyzed).toEqual({ start: '2026-04-01', end: '2026-04-30' });
+  });
+});
+
+describe('PESSOAL-13C1.2 — Tolerância a erros simples e categoria hierárquica', () => {
+  const SUPERMERCADO_APRIL_18: FakeLeanRow[] = (() => {
+    const rows: FakeLeanRow[] = [];
+    for (let i = 0; i < 17; i += 1) {
+      rows.push(expenseRow(100.5, '2026-04-03', APRIL_SUPERMERCADO));
+    }
+    rows.push(expenseRow(1199.89, '2026-04-03', APRIL_SUPERMERCADO));
+    return rows;
+  })();
+
+  // Leaf "Sem sub-categoria" ANTES do pai Supermercado (sem ORDER BY na tabela,
+  // a ordem real é não-determinística — a resolução NÃO pode depender dela).
+  const SUPERMERCADO_WITH_LEAF_FIRST: FakeCategoryRow[] = [
+    catLabel('Alimentação', 'Alimentação'),
+    catLabel('Sem sub-categoria', 'Alimentação > Supermercado > Sem sub-categoria'),
+    catLabel('Supermercado', 'Alimentação > Supermercado'),
+  ];
+
+  function neverGemini(): GeminiClient {
+    return {
+      async sendMessage(): Promise<GeminiResponse> {
+        throw new Error('Gemini NÃO pode ser chamado');
+      },
+    };
+  }
+
+  it('"uanto gastei no mês?" → engine=deterministic e geminiCallCount=0', async () => {
+    const geminiTurns: number[] = [];
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        geminiTurns.push(1);
+        return { text: 'NUNCA', functionCalls: [] };
+      },
+    });
+    const client = detClient(SUPERMERCADO_APRIL_18);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'uanto gastei no mês?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      geminiCallCount?: number;
+      answer: string;
+      toolsUsed: string[];
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.geminiCallCount).toBe(0);
+    expect(body.toolsUsed).toEqual(['financial_summary']);
+    expect(body.answer).toContain(brl(2908.39));
+    expect(geminiTurns).toEqual([]);
+  });
+
+  it.each([
+    'uanto gastei no mês?',
+    'qanto gastei no mês?',
+    'qunto gastei no mês?',
+    'quanto gastei no mês?',
+    'quanto eu gastei no mês?',
+    'qto gastei no mês?',
+    'quanto gastei no mes?',
+  ])('variações controladas de erro de uma letra: "%s" → determinística com zero Gemini', async (question) => {
+    const geminiTurns: number[] = [];
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        geminiTurns.push(1);
+        return { text: 'NUNCA', functionCalls: [] };
+      },
+    });
+    const client = detClient([expenseRow(120, '2026-04-03', APRIL_SUPERMERCADO)]);
+    authOk(client);
+    const res = await handler(postRequest({ question, period: APRIL2026 }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      geminiCallCount?: number;
+      answer: string;
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.geminiCallCount).toBe(0);
+    expect(body.answer).toContain(brl(120));
+    expect(geminiTurns).toEqual([]);
+  });
+
+  it('frase não financeira parecida NÃO é classificada como despesas ("quanto gastei de tempo")', async () => {
+    const turns: number[] = [];
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        turns.push(1);
+        return { text: 'Análise.', functionCalls: [] };
+      },
+    });
+    authOk(detClient([]));
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei de tempo no projeto hoje?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; geminiCallCount?: number };
+    expect(body.engine).toBe('gemini');
+    expect(body.geminiCallCount).toBeGreaterThanOrEqual(1);
+    expect(turns).toHaveLength(1);
+  });
+
+  it('Supermercado com subcategoria nula é incluído (leaf "Sem sub-categoria" vem antes na tabela)', async () => {
+    registerGeminiClient(neverGemini());
+    const client = detClient(
+      [...SUPERMERCADO_APRIL_18, expenseRow(400, '2026-04-05', cat('Padaria'))],
+      true,
+      SUPERMERCADO_WITH_LEAF_FIRST,
+    );
+    authOk(client);
+    const res = await handler(
+      postRequest({
+        question: 'Quanto gastei em supermercado no mês? Informe o total e a quantidade.',
+        period: APRIL2026,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      answer: string;
+      toolsUsed: string[];
+      evidence: Array<{ label: string; value: string }>;
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.toolsUsed).toEqual(['expenses_by_category']);
+    expect(body.answer).toContain(brl(2908.39));
+    expect(body.answer).toContain('18 despesas');
+    expect(JSON.stringify(body)).not.toContain('Sem sub-categoria');
+    const quantidade = body.evidence.find((e) => e.label === 'Quantidade de despesas');
+    expect(quantidade?.value).toBe('18');
+  });
+
+  it('Supermercado com subcategoria descendente é incluído', async () => {
+    registerGeminiClient(neverGemini());
+    const cats = [
+      catLabel('Alimentação', 'Alimentação'),
+      catLabel('Hortifruti', 'Alimentação > Supermercado > Hortifruti'),
+    ];
+    const rows: FakeLeanRow[] = [
+      expenseRow(900, '2026-04-05', cat('Hortifruti', 'Alimentação > Supermercado > Hortifruti')),
+    ];
+    const client = detClient(rows, true, cats);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      answer: string;
+      toolsUsed: string[];
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.toolsUsed).toEqual(['expenses_by_category']);
+    expect(body.answer).toContain(brl(900));
+    expect(body.answer).toContain('Alimentação > Supermercado');
+  });
+
+  it('categoria irmã (Padaria) não é incluída na consulta por supermercado', async () => {
+    const rows: FakeLeanRow[] = [
+      expenseRow(100, '2026-04-05', cat('Padaria', 'Alimentação > Padaria')),
+      expenseRow(200, '2026-04-06', APRIL_SUPERMERCADO),
+    ];
+    const client = detClient(rows, true, SUPERMERCADO_CATS);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; answer: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain(brl(200));
+    expect(body.answer).not.toContain(brl(300));
+  });
+
+  it('transferências continuam excluídas do total de supermercado', async () => {
+    const rows: FakeLeanRow[] = [
+      expenseRow(500, '2026-04-05', APRIL_SUPERMERCADO),
+      { transaction_kind: 'transfer', amount: 9000, occurred_on: '2026-04-06', categories: APRIL_SUPERMERCADO },
+    ];
+    const client = detClient(rows, true, SUPERMERCADO_CATS);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; answer: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain(brl(500));
+    expect(body.answer).not.toContain(brl(9500));
+  });
+
+  it('agregação determinística e expense_monthly_aggregate retornam o mesmo total e quantidade (mesma fixture)', async () => {
+    const fixture = SUPERMERCADO_APRIL_18;
+    const client = detClient(
+      fixture,
+      true,
+      [
+        catLabel('Supermercado', 'Alimentação > Supermercado'),
+        catLabel('Hortifruti', 'Alimentação > Supermercado > Hortifruti'),
+      ],
+    );
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      answer: string;
+      evidence: Array<{ label: string; value: string }>;
+    };
+    const agg = expenseMonthlyAggregate(fixture as unknown as AnalyticsTxRow[], {
+      start: '2026-04-01',
+      end: '2026-04-30',
+      category: 'Alimentação > Supermercado',
+    });
+    expect(agg.hasData).toBe(true);
+    expect(Math.round(agg.totalAmount * 100) / 100).toBe(2908.39);
+    expect(agg.totalCount).toBe(18);
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain(brl(agg.totalAmount));
+    const quantidade = body.evidence.find((e) => e.label === 'Quantidade de despesas');
+    expect(quantidade?.value).toBe(String(agg.totalCount));
+  });
+
+  it('consulta anual encontra abril como vencedor com total, quantidade e total geral de abril (hierarquia com "Sem sub-categoria")', async () => {
+    registerGeminiClient(neverGemini());
+    const rows: FakeLeanRow[] = [
+      ...SUPERMERCADO_APRIL_18,
+      expenseRow(11863.73, '2026-04-10', cat('Aluguel')),
+      expenseRow(1200, '2026-03-05', APRIL_SUPERMERCADO),
+    ];
+    const cats = [
+      catLabel('Alimentação', 'Alimentação'),
+      catLabel('Sem sub-categoria', 'Alimentação > Supermercado > Sem sub-categoria'),
+      catLabel('Supermercado', 'Alimentação > Supermercado'),
+      catLabel('Aluguel', 'Aluguel'),
+    ];
+    const client = detClient(rows, true, cats);
+    authOk(client);
+    const res = await handler(
+      postRequest({
+        question:
+          'Qual mês eu mais gastei em supermercado em 2026? Informe o mês, o total, quantas despesas e o total geral de despesas desse mês.',
+        period: APRIL2026,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      toolsUsed: string[];
+      answer: string;
+      evidence: Array<{ label: string; value: string }>;
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.toolsUsed).toEqual(['expense_monthly_aggregate']);
+    expect(body.answer).toContain('Abril');
+    expect(body.answer).toContain(brl(2908.39));
+    expect(body.answer).toContain(brl(14772.12));
+    expect(JSON.stringify(body)).not.toContain('Sem sub-categoria');
+    const consideradas = body.evidence.find((e) => e.label === 'Despesas consideradas');
+    expect(consideradas?.value).toBe('18');
+    const totalGeral = body.evidence.find((e) => e.label === 'Total geral (todas as categorias)');
+    expect(totalGeral?.value).toBe(brl(14772.12));
+  });
+
+  it('título/evidência não contém "Sem sub-categoria" (categoria resolvida pelo path base)', async () => {
+    const cats = [
+      catLabel('Sem sub-categoria', 'Alimentação > Supermercado > Sem sub-categoria'),
+    ];
+    const rows: FakeLeanRow[] = [expenseRow(200, '2026-04-05', APRIL_SUPERMERCADO)];
+    const client = detClient(rows, true, cats);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; answer: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain('Alimentação > Supermercado');
+    expect(body.answer).not.toContain('Sem sub-categoria');
+    expect(body.answer).not.toContain('canudinhos');
+  });
+
+  it('categoria resolvida mas realmente sem movimento → R$ 0,00 legítimo (sem esclarecimento)', async () => {
+    const cats = [
+      catLabel('Sem sub-categoria', 'Alimentação > Supermercado > Sem sub-categoria'),
+    ];
+    const rows: FakeLeanRow[] = [expenseRow(100, '2026-04-01', cat('Aluguel'))];
+    const client = detClient(rows, true, cats);
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em supermercado em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      engine?: string;
+      answer: string;
+      evidence: Array<{ label: string; value: string }>;
+    };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain('Não encontrei despesas');
+    expect(body.answer).toContain('Alimentação > Supermercado');
+    expect(JSON.stringify(body)).not.toContain('Sem sub-categoria');
+    const catEv = body.evidence.find((e) => e.label === 'Alimentação > Supermercado');
+    expect(catEv?.value).toBe(brl(0));
+  });
+
+  it('categoria inexistente continua pedindo esclarecimento', async () => {
+    const geminiTurns: number[] = [];
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        geminiTurns.push(1);
+        return { text: 'NUNCA', functionCalls: [] };
+      },
+    });
+    const client = detClient(
+      [expenseRow(100, '2026-04-01', APRIL_SUPERMERCADO)],
+      true,
+      [catLabel('Aluguel')],
+    );
+    authOk(client);
+    const res = await handler(
+      postRequest({ question: 'Quanto gastei em canudinhos em abril de 2026?', period: APRIL2026 }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; answer: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain('Não consegui identificar a categoria');
+    expect(geminiTurns).toEqual([]);
+  });
+
+  it('nenhum cenário da C1.2 chama o Gemini (prova de custo zero)', async () => {
+    const geminiTurns: number[] = [];
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        geminiTurns.push(1);
+        return { text: 'NUNCA', functionCalls: [] };
+      },
+    });
+    const scenarios: Array<{ rows: FakeLeanRow[]; cats?: FakeCategoryRow[]; question: string }> = [
+      {
+        rows: [expenseRow(100, '2026-04-01', APRIL_SUPERMERCADO)],
+        question: 'uanto gastei no mês?',
+      },
+      {
+        rows: [expenseRow(100, '2026-04-01', APRIL_SUPERMERCADO)],
+        cats: SUPERMERCADO_CATS,
+        question: 'qto gastei em supermercado no mês? Informe o total e a quantidade.',
+      },
+      {
+        rows: [expenseRow(100, '2026-04-01', cat('Alimentação'))],
+        question: 'quanto eu gastei no mess?',
+      },
+      {
+        rows: [expenseRow(100, '2026-04-01', APRIL_SUPERMERCADO)],
+        cats: [catLabel('Sem sub-categoria', 'Alimentação > Supermercado > Sem sub-categoria')],
+        question: 'Quanto gastei em supermercado em abril de 2026?',
+      },
+      {
+        rows: [expenseRow(100, '2026-04-01', APRIL_SUPERMERCADO)],
+        cats: SUPERMERCADO_CATS,
+        question: 'Quanto gastei em canudinhos em abril de 2026?',
+      },
+    ];
+    for (const s of scenarios) {
+      authOk(detClient(s.rows, true, s.cats ?? []));
+      const res = await handler(postRequest({ question: s.question, period: APRIL2026 }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { engine?: string };
+      expect(body.engine).toBe('deterministic');
+    }
+    expect(geminiTurns).toEqual([]);
+  });
+
+  it('regressão: período explícito e período da tela continuam corretos com variantes de uma letra', async () => {
+    const clientMay = detClient([]);
+    authOk(clientMay);
+    const res1 = await handler(
+      postRequest({ question: 'uanto gastei em maio?', period: APRIL2026 }),
+    );
+    expect(res1.status).toBe(200);
+    const b1 = (await res1.json()) as { engine?: string; period: { start: string; end: string } };
+    expect(b1.engine).toBe('deterministic');
+    expect(b1.period).toEqual({ start: '2026-05-01', end: '2026-05-31' });
+
+    const clientScreen = detClient([]);
+    authOk(clientScreen);
+    const res2 = await handler(
+      postRequest({ question: 'qanto gastei?', period: APRIL2026 }),
+    );
+    expect(res2.status).toBe(200);
+    const b2 = (await res2.json()) as { engine?: string; period: { start: string; end: string } };
+    expect(b2.engine).toBe('deterministic');
+    expect(b2.period).toEqual(APRIL2026);
   });
 });
