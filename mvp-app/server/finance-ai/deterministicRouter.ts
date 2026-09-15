@@ -24,6 +24,21 @@
 // Observabilidade: o percurso determinístico que retorna é sinalizado pelo
 // endpoint como engine='deterministic' com geminiCallCount=0.
 //
+// Interpretação da pergunta (PESSOAL-13C1.1):
+//   - a pergunta principal é separada de instruções complementares: rótulos
+//     copiados ("Pergunta", "Resultado esperado"), texto após '?', quebra de
+//     linha, ';', '!' ou verbos de instrução ("informe", "diga", ...) NUNCA
+//     participam da interpretação da intenção nem da categoria;
+//   - precedência de intenções: "qual mês mais gastei" > categoria > comparação
+//     mensal > "quantas despesas" > "quanto gastei" > receitas > saldo. A
+//     presença isolada de "resultado" (ex.: "resultado esperado") não vira saldo;
+//   - a categoria termina antes de instrução, período explícito ("em 2026"),
+//     expressão relativa ("no mês") ou pontuação delimitadora;
+//   - a categoria é resolvida para o nome canônico (categories table, RLS via
+//     JWT) ANTES da consulta. Categoria inválida → esclarecimento sem custo
+//     (nunca consulta texto contaminado, nunca R$ 0,00, nunca Gemini). R$ 0,00
+//     só quando a categoria foi reconhecida e realmente não há despesas.
+//
 // Degradação segura: o fast-path exige paginação via `.range` (presente no
 // postgREST real e em clients que o implementam). Clients sem `.range` (test
 // doubles / integrações incompletas) NÃO geram total possivelmente truncado:
@@ -114,6 +129,37 @@ function normalizeText(value: string): string {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+// ── Separação da pergunta principal (PESSOAL-13C1.1) ───────────
+
+const COMPLEMENT_VERBS =
+  /\b(?:informe|diga|mostre|retorne|responda)\b/i;
+const COPIED_LABELS =
+  /\b(?:pergunta|resultado\s+esperado)\b/gi;
+
+/**
+ * Extrai SOMENTE a pergunta principal. Delimitadores que encerram a pergunta:
+ * rótulos copiados de prompt ("Pergunta", "Resultado esperado" — removidos),
+ * primeiro '?', quebra de linha, ';'/'!' e verbos de instrução complementar.
+ * Instruções complementares podem sugerir campos, mas NUNCA participam da
+ * interpretação (nem da categoria).
+ */
+function extractMainQuestion(raw: string): string {
+  const firstNl = raw.indexOf('\n');
+  let t = firstNl >= 0 ? raw.slice(0, firstNl) : raw;
+  t = t
+    .replace(COPIED_LABELS, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  let end = t.length;
+  const qIndex = t.indexOf('?');
+  if (qIndex >= 0) end = Math.min(end, qIndex);
+  const verb = COMPLEMENT_VERBS.exec(t);
+  if (verb) end = Math.min(end, verb.index);
+  const punct = /[;!]/.exec(t);
+  if (punct) end = Math.min(end, punct.index);
+  return t.slice(0, end).trim();
 }
 
 // ── Meses (português) ──────────────────────────────────────────
@@ -276,13 +322,32 @@ function extractCategoryTerm(stripped: string): string | null {
     /\b(?:gastei|gasto|gastos|gaste|despesas|despesa|compras|total)\s+(?:em|com|na|no|para)\s+(.+)$/i;
   const m = re.exec(t);
   if (!m) return null;
-  let term = m[1].trim();
+  // A categoria termina antes de: pontuação delimitadora, instrução residual,
+  // lista (vírgula), período explícito ("em 2026") e expressão relativa
+  // ("no mês"). Paths canônicos ("Alimentação > Supermercado") são preservados.
+  let term = m[1];
   term = term
-    .replace(/\s*(?:de|em)?\s*(?:19|20)\d{2}\s*$/, '')
-    .replace(/\s*(?:no|o)?\s*(?:mes|meses|periodo|ano)\s*$/, '')
+    .replace(/[?!.;]+.*$/, ' ')
+    .split(',')[0]
+    .replace(/^\s*(?:em|com|na|no|para)\s+/, ' ')
+    .replace(/\s+(?:em|no|na|de|durante)?\s*(?:(?:19|20)\d{2})\b.*$/g, ' ')
+    .replace(
+      /\s+(?:no|o|neste|nesse|este|esse|do|em)?\s*(?:mes|meses|periodo|ano|trimestre)\b.*$/g,
+      ' ',
+    )
+    .replace(/\s{2,}/g, ' ')
     .trim();
   if (!term) return null;
-  if (/\b(?:quanto|qual|meses|mes|periodo|ano)\b/.test(term)) return null;
+  const normTerm = normalizeText(term);
+  if (
+    /\b(?:quanto|qual|meses?|periodo|ano|informe|diga|mostre|retorne|responda)\b/.test(
+      normTerm,
+    )
+  ) {
+    return null;
+  }
+  const firstToken = normTerm.split(/\s+/)[0];
+  if (MONTH_BY_NORM[firstToken]) return null;
   return term;
 }
 
@@ -342,10 +407,13 @@ function isTotalExpenseQuestion(norm: string): boolean {
 }
 
 function isBalanceQuestion(norm: string): boolean {
+  // "resultado esperado" é rótulo copiado de prompt; nunca vira saldo.
+  if (/\bresultado esperado\b/.test(norm)) return false;
   if (/\b(conta bancaria|saldo da conta|saldo bancario|saldo em conta)\b/.test(norm)) return false;
   if (/\b(sobrou|sobram|restou|sobra)\b/.test(norm)) return true;
   if (/\bresultado do periodo\b/.test(norm)) return true;
   if (/\bsaldo do periodo|saldo no periodo\b/.test(norm)) return true;
+  if (/\bqual\s+(?:o\s+)?(?:meu\s+)?(?:resultado|saldo)\b/.test(norm)) return true;
   if (/\bqual (o|era|foi) o (resultado|saldo)\b/.test(norm)) return true;
   if (/\b(resultado|saldo)\b/.test(norm) && /\b(periodo|mes|ano)\b/.test(norm)) return true;
   return false;
@@ -374,14 +442,11 @@ function detectIntent(question: string, resolved: ResolvedQueryPeriod): Determin
 
   const stripped = stripPeriodPhrases(norm, resolved);
 
+  // Precedência (PESSOAL-13C1.1): expressões específicas primeiro, saldo por
+  // último. "resultado esperado" (rótulo) jamais seleciona saldo.
   if (isMonthMostQuestion(norm)) {
     const category = extractCategoryTerm(stripped);
     if (category) return { intent: 'month_most_spent', category };
-    return null;
-  }
-
-  if (isIncomeQuestion(norm)) {
-    if (isTotalIncomeQuestion(norm)) return { intent: 'total_income' };
     return null;
   }
 
@@ -391,9 +456,13 @@ function detectIntent(question: string, resolved: ResolvedQueryPeriod): Determin
   }
 
   if (isMonthlyComparison(norm)) return { intent: 'monthly_comparison' };
-  if (isTotalExpenseQuestion(norm)) return { intent: 'total_expenses' };
-  if (isBalanceQuestion(norm)) return { intent: 'period_balance' };
   if (isExpenseCountQuestion(norm)) return { intent: 'expense_count' };
+  if (isTotalExpenseQuestion(norm)) return { intent: 'total_expenses' };
+  if (isIncomeQuestion(norm)) {
+    if (isTotalIncomeQuestion(norm)) return { intent: 'total_income' };
+    return null;
+  }
+  if (isBalanceQuestion(norm)) return { intent: 'period_balance' };
   return null;
 }
 
@@ -523,27 +592,72 @@ function categoryExpenseTotals(
   return { amount, count };
 }
 
-function bestCategoryLabel(rows: AnalyticsTxRow[], term: string): string | null {
+interface CategoryLabel {
+  display_name: string;
+  canonical_path: string | null;
+}
+
+const CATEGORY_CLARIFICATION =
+  'Não consegui identificar a categoria. Você pode informar somente o nome, como supermercado, aluguel ou combustível?';
+
+/** Uma consulta enxuta/paginada à tabela categories (RLS via JWT do usuário). */
+async function fetchExpenseCategories(supabase: SupabaseClient): Promise<CategoryLabel[]> {
+  const labels: CategoryLabel[] = [];
+  let from = 0;
+  for (;;) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase
+      .from('categories')
+      .select('display_name, canonical_path', { count: 'exact' })
+      .eq('direction', 'expense');
+    q = q.range(from, from + DETERMINISTIC_PAGE_SIZE - 1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error, count } = (await q) as { data: unknown; error: unknown; count: number | null };
+    if (error) throw error;
+    const page = (data as CategoryLabel[] | null) ?? [];
+    labels.push(...page);
+    if (typeof count === 'number') {
+      if (labels.length >= count) break;
+      if (page.length === 0) {
+        throw new Error(`consulta de categorias abortada (${labels.length}/${count})`);
+      }
+    } else if (page.length < DETERMINISTIC_PAGE_SIZE) {
+      break;
+    }
+    from += DETERMINISTIC_PAGE_SIZE;
+  }
+  return labels;
+}
+
+/**
+ * Resolve a categoria extraída para a classificação CANÔNICA do usuário
+ * (display_name/canonical_path da tabela categories). Nunca devolve a string
+ * bruta da pergunta. Retorna null quando a categoria não é reconhecida.
+ */
+function resolveCategory(labels: CategoryLabel[], term: string): CategoryLabel | null {
   const target = normalizeCategoryTerm(term);
-  let pathFallback: string | null = null;
-  for (const r of rows) {
-    const cats = r.categories as
-      | { display_name: string; canonical_path: string | null }
-      | Array<{ display_name: string; canonical_path: string | null }>
-      | null;
-    if (!cats) continue;
-    const cat = Array.isArray(cats) ? cats[0] : cats;
-    if (!cat) continue;
-    if (normalizeCategoryTerm(cat.display_name) === target) return cat.display_name;
-    if (
-      target.length >= 3 &&
-      cat.canonical_path &&
-      normalizeCategoryTerm(cat.canonical_path).includes(target)
-    ) {
-      pathFallback = cat.canonical_path;
+  if (!target) return null;
+  let fallback: CategoryLabel | null = null;
+  for (const l of labels) {
+    const dn = normalizeCategoryTerm(l.display_name);
+    const cp = l.canonical_path ? normalizeCategoryTerm(l.canonical_path) : null;
+    if (dn === target) return l;
+    if (cp === target) return l;
+    if (cp) {
+      for (const seg of cp.split('>')) {
+        if (seg.trim() === target) return l;
+      }
+      if (target.length >= 3 && cp.includes(target) && !fallback) {
+        fallback = l;
+      }
     }
   }
-  return pathFallback;
+  return fallback;
+}
+
+/** Nome legível canônico para o card/resposta (path → display_name). */
+function categoryLabelOf(l: CategoryLabel): string {
+  return l.canonical_path || l.display_name || 'Categoria';
 }
 
 async function buildPeriodSummary(
@@ -609,9 +723,24 @@ async function buildCategoryTotal(
   resolved: ResolvedQueryPeriod,
   category: string,
 ): Promise<DeterministicAnswer> {
+  const cats = await fetchExpenseCategories(supabase);
+  const resolvedCat = resolveCategory(cats, category);
+  if (!resolvedCat) {
+    // Categoria não reconhecida → esclarecimento sem custo (nunca consulta o
+    // texto contaminado, nunca R$ 0,00 e nunca aciona o Gemini).
+    return {
+      intent: 'category_total',
+      response: makeResponse(
+        CATEGORY_CLARIFICATION,
+        resolved,
+        [],
+        [{ label: 'Período analisado', value: periodDisplay(resolved) }],
+      ),
+    };
+  }
+  const label = categoryLabelOf(resolvedCat);
   const rows = await fetchPeriodRows(supabase, resolved.start, resolved.end);
-  const { amount, count } = categoryExpenseTotals(rows, category);
-  const label = bestCategoryLabel(rows, category) ?? category;
+  const { amount, count } = categoryExpenseTotals(rows, label);
   const phrase = periodPhraseOf(resolved);
 
   const answer =
@@ -636,13 +765,26 @@ async function buildMonthMost(
   resolved: ResolvedQueryPeriod,
   category: string,
 ): Promise<DeterministicAnswer> {
+  const cats = await fetchExpenseCategories(supabase);
+  const resolvedCat = resolveCategory(cats, category);
+  if (!resolvedCat) {
+    return {
+      intent: 'month_most_spent',
+      response: makeResponse(
+        CATEGORY_CLARIFICATION,
+        resolved,
+        [],
+        [{ label: 'Período analisado', value: periodDisplay(resolved) }],
+      ),
+    };
+  }
+  const label = categoryLabelOf(resolvedCat);
   const rows = await fetchPeriodRows(supabase, resolved.start, resolved.end);
   const agg = expenseMonthlyAggregate(
     rows,
-    { start: resolved.start, end: resolved.end, category },
+    { start: resolved.start, end: resolved.end, category: label },
     todayISO(),
   );
-  const label = bestCategoryLabel(rows, category) ?? category;
 
   if (!agg.hasData) {
     const answer = `Não encontrei despesas em ${label} no período analisado.`;
@@ -782,7 +924,12 @@ async function buildMonthlyComparison(
 export async function runDeterministicAsk(
   deps: DeterministicRouterDeps,
 ): Promise<DeterministicAnswer | null> {
-  const q = deps.question.trim();
+  const raw = deps.question.trim();
+  if (!raw || raw.length > MAX_QUESTION_LENGTH) return null;
+
+  // PESSOAL-13C1.1: interpreta apenas a pergunta principal (rótulos copiados,
+  // instruções após '?'/quebra/verbos NUNCA participam da intenção/categoria).
+  const q = extractMainQuestion(raw);
   if (!q || q.length > MAX_QUESTION_LENGTH) return null;
 
   const screen =
