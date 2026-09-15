@@ -20,7 +20,10 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@supabase/supabase-js": ["./node_modules/@supabase/supabase-js"]
+    }
   },
   "include": ["src"]
 }
