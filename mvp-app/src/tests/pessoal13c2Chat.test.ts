@@ -937,3 +937,125 @@ describe('PESSOAL-13C2 — FinanceAiSection renderiza o chat inicial', () => {
     expect(html).toContain('Nova conversa');
   });
 });
+
+// ── 7. PESSOAL-13C2B.1: contrato tipado do turno (BeginTurnResult) ───────────
+
+describe('PESSOAL-13C2B.1 — BeginTurnResult: narrowing exaustivo sem leitura pela união crua', () => {
+  it('fonte do endpoint usa switch exaustivo e NUNCA lê `.conversation` pela união crua', async () => {
+    const src = (await import('node:fs')).readFileSync(
+      new URL('../../api/finances/ask.ts', import.meta.url),
+      'utf8',
+    );
+    // A variável que guarda a união inteira não pode expor membros de estado.
+    expect(src).not.toContain('activeTurn?.conversation');
+    expect(src).not.toContain('activeTurn.conversation');
+    // O único caminho para `conversation` é o branch 'fresh' do switch —
+    // narrowing explícito por discriminante, copiado para freshConversation.
+    expect(src).toContain('switch (begun.kind)');
+    expect(src).toContain("case 'in_flight':");
+    expect(src).toContain("case 'cached':");
+    expect(src).toContain("case 'cached_failure':");
+    expect(src).toContain("case 'fresh':");
+    expect(src).toContain('freshConversation = begun.conversation;');
+    // Exaustividade garantida em tempo de compilação (nenhuma asserção insegura).
+    expect(src).toContain('const exhaustive: never = begun;');
+    // As leituras de uso derivam da snapshot capturada no caso 'fresh', nunca
+    // de um membro opcional da união inteira.
+    expect(src).toContain('freshConversation?.context');
+    expect(src).toContain('freshConversation?.title');
+  });
+
+  it('beginChatTurn expõe `conversation` SÓ no estado fresh; demais estados não carregam o membro', async () => {
+    const freshClient = setRef(new FakeClient());
+    freshClient.state.chat_conversations = [
+      { ...CONV, context: { category: 'Supermercado', intent: 'category_total', period: APRIL2026, summaries: [] } },
+    ];
+    const fresh = await beginChatTurn(freshClient as never, { conversationId: 'conv-1', clientRequestId: 'r1', question: 'q' });
+    expect(fresh.kind).toBe('fresh');
+    if (fresh.kind === 'fresh') {
+      expect(fresh.conversation.title).toBe('');
+      expect(fresh.conversation.context?.category).toBe('Supermercado');
+    }
+
+    const cachedClient = setRef(new FakeClient());
+    cachedClient.state.chat_conversations = [{ ...CONV }];
+    cachedClient.state.chat_messages = [
+      { id: 'a1', conversation_id: 'conv-1', role: 'assistant', status: 'completed', client_request_id: 'r1', content: 'ok', payload: { engine: 'gemini' }, period_analyzed: null },
+    ];
+    const cached = await beginChatTurn(cachedClient as never, { conversationId: 'conv-1', clientRequestId: 'r1', question: 'x' });
+    expect(cached.kind).toBe('cached');
+    expect('conversation' in cached).toBe(false);
+
+    const inflightClient = setRef(new FakeClient());
+    inflightClient.state.chat_conversations = [{ ...CONV }];
+    inflightClient.state.chat_messages = [
+      { id: 'u1', conversation_id: 'conv-1', role: 'user', status: 'completed', client_request_id: 'r1' },
+      { id: 'a1', conversation_id: 'conv-1', role: 'assistant', status: 'pending', client_request_id: 'r1' },
+    ];
+    const inflight = await beginChatTurn(inflightClient as never, { conversationId: 'conv-1', clientRequestId: 'r1', question: 'x' });
+    expect(inflight.kind).toBe('in_flight');
+    expect('conversation' in inflight).toBe(false);
+
+    const failedClient = setRef(new FakeClient());
+    failedClient.state.chat_conversations = [{ ...CONV }];
+    failedClient.state.chat_messages = [
+      { id: 'a1', conversation_id: 'conv-1', role: 'assistant', status: 'failed', client_request_id: 'r1', content: '', error: 'Serviço indisponível.' },
+    ];
+    const failed = await beginChatTurn(failedClient as never, { conversationId: 'conv-1', clientRequestId: 'r1', question: 'x' });
+    expect(failed.kind).toBe('cached_failure');
+    expect('conversation' in failed).toBe(false);
+  });
+
+  it('endpoint aplica o contexto capturado no estado fresh (conversation sem acesso pré-narrowing)', async () => {
+    registerGeminiClient(neverGemini());
+    const c = detRows([
+      { transaction_kind: 'expense', amount: 90, occurred_on: '2026-05-08', deleted_at: null, categories: SUP },
+    ]);
+    c.state.categories = [...SUP_CATS];
+    c.state.chat_conversations = [
+      { ...CONV, context: { category: 'Supermercado', intent: 'category_total', period: APRIL2026, summaries: [] } },
+    ];
+    c.state.chat_messages = [];
+    authOk(c);
+    const res = await handler(
+      postRequest({
+        question: 'E em maio?',
+        period: { start: '2026-05-01', end: '2026-05-31' },
+        conversationId: 'conv-1',
+        clientRequestId: 'r1',
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; answer: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.answer).toContain(brl(90));
+    expect(body.answer).toMatch(/supermercado/i);
+  });
+
+  it('reenvio com cache reproduz o geminiCallCount — zero chamada Gemini duplicada (idempotência intacta)', async () => {
+    let geminiCalls = 0;
+    registerGeminiClient({
+      async sendMessage(): Promise<GeminiResponse> {
+        geminiCalls += 1;
+        return { text: 'investimento', functionCalls: [] };
+      },
+    });
+    const c = withChat({ ...CONV }, []);
+    authOk(c);
+    const body1 = { question: 'Devo investir mais?', period: APRIL2026, conversationId: 'conv-1', clientRequestId: 'r1' };
+    const res1 = await handler(postRequest(body1));
+    expect(res1.status).toBe(200);
+    const b1 = (await res1.json()) as { engine?: string; geminiCallCount?: number };
+    expect(b1.engine).toBe('gemini');
+    expect(geminiCalls).toBe(1);
+
+    authOk(c);
+    const res2 = await handler(postRequest(body1));
+    expect(res2.status).toBe(200);
+    const b2 = (await res2.json()) as { engine?: 'gemini' | 'deterministic'; geminiCallCount?: number };
+    // Cache reconstitui o payload anterior; o Gemini NÃO é chamado de novo.
+    expect(geminiCalls).toBe(1);
+    expect(b2.engine).toBe('gemini');
+    expect(b2.geminiCallCount).toBe(b1.geminiCallCount ?? 0);
+  });
+});

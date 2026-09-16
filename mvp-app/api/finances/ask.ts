@@ -35,6 +35,7 @@ import {
   failChatTurn,
   ChatOwnershipError,
   type BeginTurnResult,
+  type ChatConversationSnapshot,
 } from '../../server/chat/chatStore.js';
 import {
   contextFromTurn,
@@ -405,6 +406,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
 
   // PESSOAL-13C2: turno ativo da conversa (âncora assistant + contexto).
   let activeTurn: BeginTurnResult | null = null;
+  let freshConversation: ChatConversationSnapshot | null = null;
   let assistantCreated = false;
 
   try {
@@ -414,34 +416,46 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
         clientRequestId: body.clientRequestId as string,
         question: body.question,
       });
-      if (begun.kind === 'in_flight') {
-        return respond(res, 409, {
-          error: 'in_flight',
-          message: 'Esta pergunta já está sendo processada.',
-        });
+      // PESSOAL-13C2B.1: união discriminada tratada por switch exaustivo. O
+      // membro `conversation` SÓ existe no estado 'fresh' — nunca lemos o campo
+      // pela união crua (acesso assim quebrava o type-check do builder
+      // @vercel/node). Cada estado é tratado explicitamente; um novo `kind`
+      // sem case vira erro de compilação no default (nenhuma asserção insegura).
+      switch (begun.kind) {
+        case 'in_flight':
+          return respond(res, 409, {
+            error: 'in_flight',
+            message: 'Esta pergunta já está sendo processada.',
+          });
+        case 'cached':
+          emitSanitizedSuccessEvent(
+            buildSuccessEvent({
+              requestId,
+              engine: begun.payload?.engine ?? 'deterministic',
+              elapsedMs: Date.now() - startedAt,
+              geminiCallCount: begun.payload?.geminiCallCount ?? 0,
+            }),
+          );
+          return respond(res, 200, cachedResponseOf(begun));
+        case 'cached_failure':
+          return respond(res, 502, {
+            error: 'upstream',
+            message: begun.message,
+          });
+        case 'fresh':
+          freshConversation = begun.conversation;
+          activeTurn = begun;
+          assistantCreated = true;
+          break;
+        default: {
+          const exhaustive: never = begun;
+          void exhaustive;
+          throw new Error('Estado de turno inesperado (unreachable).');
+        }
       }
-      if (begun.kind === 'cached') {
-        emitSanitizedSuccessEvent(
-          buildSuccessEvent({
-            requestId,
-            engine: begun.payload?.engine ?? 'deterministic',
-            elapsedMs: Date.now() - startedAt,
-            geminiCallCount: begun.payload?.geminiCallCount ?? 0,
-          }),
-        );
-        return respond(res, 200, cachedResponseOf(begun));
-      }
-      if (begun.kind === 'cached_failure') {
-        return respond(res, 502, {
-          error: 'upstream',
-          message: begun.message,
-        });
-      }
-      activeTurn = begun;
-      assistantCreated = true;
     }
-    const conversationContext = activeTurn?.conversation.context ?? null;
-    const conversationTitle = activeTurn?.conversation.title ?? '';
+    const conversationContext = freshConversation?.context ?? null;
+    const conversationTitle = freshConversation?.title ?? '';
 
     const deterministic = await runDeterministicAsk({
       supabase: userClient.client,
