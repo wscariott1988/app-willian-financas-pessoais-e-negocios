@@ -542,7 +542,17 @@ function sqlAt(rel: string): string {
   return readFileSync(new URL(`../../../supabase/cloud/${rel}`, import.meta.url), 'utf8');
 }
 
+// Apenas as STATEMENTS reais de ACL (GRANT/REVOKE), nunca comentários — a
+// auditoria do 024 compara a lista exata, sem depender de vocabulário do
+// cabeçalho (ex.: "PostgREST", "grants" e "DELETE em chat_messages" são
+// palavras legítimas em comentário e não são grants).
+
 const MIGRATION_023 = readFileSync(new URL('../../../supabase/migrations/023_chat_persistence.sql', import.meta.url), 'utf8');
+const MIGRATION_024 = readFileSync(new URL('../../../supabase/migrations/024_chat_acl_least_privilege.sql', import.meta.url), 'utf8');
+
+function aclStatements(migration: string): string[] {
+  return migration.split('\n').filter((l) => /^\s*(GRANT|REVOKE) /.test(l));
+}
 
 describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
   it('023: grants só authenticated, sem DELETE de mensagens, RLS habilitada, políticas e tetos', () => {
@@ -618,8 +628,121 @@ describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
   });
 
   it('nenhum dos scripts exige service_role nem transporta secrets', () => {
-    for (const rel of ['VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql', 'PREFLIGHT_CLOUD_023_CHAT_RLS_READONLY.sql', 'ROLLBACK_TEST_ONLY_023_CHAT_PERSISTENCE.sql']) {
+    for (const rel of ['VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql', 'VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql', 'PREFLIGHT_CLOUD_023_CHAT_RLS_READONLY.sql', 'ROLLBACK_TEST_ONLY_023_CHAT_PERSISTENCE.sql']) {
       expect(sqlAt(rel)).not.toContain('service_role');
     }
+  });
+});
+
+// ── 6. PESSOAL-13C2A.3: auditoria do 024 (menor privilégio) ──────────────
+
+describe('PESSOAL-13C2A.3 — auditoria estática do 024 (menor privilégio)', () => {
+  it('024: em transação, REVOKE ALL (PUBLIC/anon/authenticated) ANTES dos grants mínimos, com nomes totalmente qualificados', () => {
+    expect(MIGRATION_024).toContain('BEGIN;');
+    expect(MIGRATION_024).toContain('COMMIT;');
+    const revokes = [
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM PUBLIC;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM anon;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM authenticated;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM PUBLIC;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM anon;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM authenticated;',
+    ];
+    const stmts = aclStatements(MIGRATION_024);
+    expect(stmts.slice(0, revokes.length)).toEqual(revokes);
+    const ultimoRevoke = MIGRATION_024.indexOf(revokes[revokes.length - 1]);
+    expect(ultimoRevoke).toBeGreaterThanOrEqual(0);
+    const primeiroGrant = MIGRATION_024.indexOf('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.chat_conversations TO authenticated;');
+    expect(primeiroGrant).toBeGreaterThan(ultimoRevoke);
+  });
+
+  it('024: lista EXATA de privilégios por tabela — conversas CRUD, mensagens SEM DELETE (e sem TRUNCATE/REFERENCES/TRIGGER)', () => {
+    // As ÚNICAS statements de ACL são os dois grants abaixo (os 6 revokes vêm
+    // do teste anterior) — nada além, nada a menos. Invariável a comentários.
+    const grants = aclStatements(MIGRATION_024).filter((l) => l.startsWith('GRANT'));
+    expect(grants).toEqual([
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.chat_conversations TO authenticated;',
+      'GRANT SELECT, INSERT, UPDATE ON TABLE public.chat_messages TO authenticated;',
+    ]);
+    expect(grants.some((l) => l.includes('chat_messages') && /DELETE/.test(l))).toBe(false);
+    expect(grants.some((l) => /TRUNCATE|REFERENCES|TRIGGER/.test(l))).toBe(false);
+    expect(grants.some((l) => /TO anon/.test(l))).toBe(false);
+  });
+
+  it('024: não enfraquece RLS nem cascade, não toca roles de serviço/dono e não concede nada no schema app', () => {
+    expect(MIGRATION_024).not.toContain('CREATE POLICY');
+    expect(MIGRATION_024).not.toContain('DROP POLICY');
+    expect(MIGRATION_024).not.toContain('DISABLE ROW LEVEL SECURITY');
+    expect(MIGRATION_024).not.toContain('ALTER DEFAULT PRIVILEGES');
+    // Nenhuma STATEMENT de ACL menciona roles de serviço/dono nem o schema
+    // app (a checagem é sobre statements reais — "PostgREST" é vocabulário
+    // de arquitetura em comentário e não conta como grant/revoke).
+    const stmts = aclStatements(MIGRATION_024);
+    expect(stmts.join('\n')).not.toMatch(/postgres|service_role/i);
+    expect(stmts.join('\n')).not.toMatch(/app\./i);
+    expect(MIGRATION_024).not.toContain('app.jwt_');
+    expect(MIGRATION_024).not.toContain('DROP TABLE');
+    expect(MIGRATION_024).not.toContain('DROP CONSTRAINT');
+    expect(MIGRATION_024).not.toContain('ON DELETE');
+  });
+});
+
+describe('PESSOAL-13C2A.3 — auditoria estática do VERIFY 024 (ACL + comportamento)', () => {
+  it('VERIFY 024: ACL exata via has_table_privilege para CADA privilégio (sem DELETE/TRUNCATE/REFERENCES/TRIGGER em mensagens)', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    // authenticated em conversas: os quatro CRUD concedidos...
+    for (const priv of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+      expect(v).toContain(`has_table_privilege('authenticated', 'public.chat_conversations', '${priv}')`);
+    }
+    // ... e os três elevados VEDADOS nas duas tabelas.
+    for (const priv of ['TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+      expect(v).toContain(`NOT has_table_privilege('authenticated', 'public.chat_conversations', '${priv}')`);
+      expect(v).toContain(`NOT has_table_privilege('authenticated', 'public.chat_messages', '${priv}')`);
+    }
+    // authenticated em mensagens: SELECT/INSERT/UPDATE concedidos, DELETE vedado.
+    for (const priv of ['SELECT', 'INSERT', 'UPDATE']) {
+      expect(v).toContain(`has_table_privilege('authenticated', 'public.chat_messages', '${priv}')`);
+    }
+    expect(v).toContain(`NOT has_table_privilege('authenticated', 'public.chat_messages', 'DELETE')`);
+    // anon: todas as 14 verificações (7 privilégios × 2 tabelas) são NOT.
+    expect(v.match(/NOT has_table_privilege\('anon'/g)).toHaveLength(14);
+    // PUBLIC (default privilege) também sem privilégios (aclexplode grantee=0).
+    expect(v).toContain('aclexplode');
+  });
+
+  it('VERIFY 024: comportamento em BEGIN/ROLLBACK exigindo 42501 EXATO no DELETE direto de mensagem (não aceita "DELETE 0")', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    expect(v).toContain('BEGIN;');
+    expect(v).toContain('ROLLBACK;');
+    expect(v).toContain('SET LOCAL ROLE authenticated');
+    expect(v).toContain('set_config(');
+    expect(v).toContain('request.jwt.claims');
+    expect(v).toContain('to_regprocedure(');
+    // O contrato central: DELETE direto em chat_messages deve existir e ser
+    // verificado por SQLSTATE — concluir sem erro (mesmo com 0 linhas) falha.
+    expect(v).toContain('DELETE FROM public.chat_messages WHERE conversation_id = v_conv_a');
+    expect(v).toContain('GET STACKED DIAGNOSTICS');
+    expect(v).toContain('RETURNED_SQLSTATE');
+    expect(v).toContain("v_state <> '42501'");
+    expect(v).toContain('authenticated concluiu DELETE individual de mensagem');
+    // Cascade preservado e comprovável pela sessão administrativa.
+    expect(v).toContain('cascade');
+    expect(v).toMatch(/chat_messages WHERE conversation_id = v_conv_b/);
+    // Sem DDL/DML persistente nem novos privilégios.
+    expect(v).not.toContain('INSERT INTO public.profiles');
+    expect(v).not.toContain('GRANT ');
+    expect(v).not.toContain('DROP ');
+    expect(v).not.toContain('service_role');
+    expect(v).not.toContain('GEMINI_API_KEY');
+  });
+
+  it('VERIFY 024: nunca invoca helpers app.jwt_* sob authenticated/anon (regressão PESSOAL-13C2A.2 — 42501)', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    const beginIdx = v.indexOf('BEGIN;');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    const roleSwitchIdx = v.indexOf('SET LOCAL ROLE authenticated;', beginIdx);
+    expect(roleSwitchIdx).toBeGreaterThan(beginIdx);
+    const sobRoleSimulada = v.slice(roleSwitchIdx);
+    expect(sobRoleSimulada).not.toMatch(/app\.jwt_(profile_id|role|sub)/);
   });
 });
