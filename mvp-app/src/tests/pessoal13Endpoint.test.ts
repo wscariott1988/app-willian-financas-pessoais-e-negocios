@@ -99,6 +99,7 @@ describe('PESSOAL-13B1 — Endpoint: autenticação', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     registerGeminiClient(mockGeminiClient());
     const res = await handler(
@@ -171,6 +172,7 @@ describe('PESSOAL-13B1 — Endpoint: compatibilidade com o runtime Node do Verce
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     registerGeminiClient(mockGeminiClient());
     const res = await handler(
@@ -299,6 +301,7 @@ describe('PESSOAL-13B1 — Endpoint: método e body', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     registerGeminiClient(mockGeminiClient());
     const res = await expectStatus(
@@ -313,6 +316,7 @@ describe('PESSOAL-13B1 — Endpoint: método e body', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-real-do-jwt',
+      user: null,
     });
     registerGeminiClient(mockGeminiClient());
     const res = await expectStatus(
@@ -351,6 +355,7 @@ describe('PESSOAL-13B1 — Endpoint: método e body', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: fakeClient as never,
       userId: 'user-real-do-jwt',
+      user: null,
     });
 
     // Mock Gemini: 1ª rodada pede financial_summary com período; 2ª responde.
@@ -392,6 +397,7 @@ describe('PESSOAL-13B1 — Endpoint: sem Gemini configurado', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     expect(getRegisteredGeminiClient()).toBeNull();
     const res = await expectStatus(
@@ -408,6 +414,7 @@ describe('PESSOAL-13B1 — Endpoint: falhas do Gemini', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     const failing: GeminiClient = {
       async sendMessage(): Promise<GeminiResponse> {
@@ -426,6 +433,7 @@ describe('PESSOAL-13B1 — Endpoint: falhas do Gemini', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     const failing: GeminiClient = {
       async sendMessage(): Promise<GeminiResponse> {
@@ -446,6 +454,7 @@ describe('PESSOAL-13B1 — Endpoint: falhas do Gemini', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     const looping: GeminiClient = {
       async sendMessage(): Promise<GeminiResponse> {
@@ -470,6 +479,7 @@ describe('PESSOAL-13B1 — Endpoint: max tool calls', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: { from: () => ({ select: () => ({ is: () => ({ gte: () => ({ lte: () => ({ data: [], error: null }) }) }) }) }) } as never,
       userId: 'user-123',
+      user: null,
     });
     let turn = 0;
     const maxing: GeminiClient = {
@@ -505,6 +515,7 @@ describe('PESSOAL-13B1 — Endpoint: não expõe detalhes internos', () => {
     vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
       client: {} as never,
       userId: 'user-123',
+      user: null,
     });
     const failing: GeminiClient = {
       async sendMessage(): Promise<GeminiResponse> {

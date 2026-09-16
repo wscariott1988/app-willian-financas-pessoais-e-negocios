@@ -78,6 +78,7 @@ function authOk(fakeClient: unknown): void {
   vi.mocked(createUserSupabaseClient).mockResolvedValueOnce({
     client: fakeClient as never,
     userId: 'user-test-0000-0000-0000-000000000000',
+    user: null,
   });
 }
 
