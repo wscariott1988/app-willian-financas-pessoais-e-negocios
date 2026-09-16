@@ -1,7 +1,7 @@
 -- READ-ONLY: este arquivo NÃO contém DDL, DML persistente ou chamadas de RPC
 -- externas. A Parte B roda em uma transação que termina em ROLLBACK e usa
--- dados 100% sintéticos (UUIDs de teste), sem imprimir UUID reais, e-mails ou
--- valores financeiros.
+-- dados 100% sintéticos, sem imprimir UUID reais, e-mails ou valores
+-- financeiros.
 -- ============================================================
 -- VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql
 -- Verificação PÓS-aplicação do 023_chat_persistence.sql (PESSOAL-13C2) no
@@ -10,11 +10,22 @@
 --   PARTE A — ESTRUTURA (catálogo): uma única statement SELECT exporta a
 --             grade de pré-condições/esquema/RLS/grants (PASS/BLOCKED).
 --   PARTE B — COMPORTAMENTO (RLS real): dentro de BEGIN/ROLLBACK, com
---             request.jwt.claims simulados de forma COMPATÍVEL com a
---             implementação real (app.jwt_profile_id lê request.jwt.claims)
---             e SET LOCAL ROLE authenticated, prova isolamento/propriedade a
---             partir das POLÍTICAS. Termina SEMPRE em ROLLBACK (nunca altera
---             dados permanentemente).
+--             request.jwt.claims simulados e SET LOCAL ROLE authenticated,
+--             prova isolamento/propriedade a partir das POLÍTICAS, TESTANDO
+--             o comportamento das tabelas — nunca chamando os helpers do
+--             schema app diretamente sob authenticated/anon.
+--
+-- PESSOAL-13C2A.2 (regressão 42501): uma versão anterior chamava
+-- app.jwt_profile_id() diretamente DEPOIS de SET LOCAL ROLE authenticated;
+-- resolver o nome em runtime exige USAGE no schema app, que em alguns
+-- projetos de teste não é concedido a authenticated/anon → erro 42501.
+-- A existência dos helpers canônicos (app.jwt_profile_id/app.jwt_role) é
+-- verificada APENAS PELO CATÁLOGO (to_regprocedure) na PARTE A e na guarda
+-- da PARTE B, sempre na SESSÃO ADMINISTRATIVA, antes de qualquer troca de
+-- role. Dentro dos papeis simulados o helper só é exercido pela própria RLS
+-- (comportamento real de produção), jamais por uma chamada direta do VERIFY.
+-- Erros esperados de permissão só contam como bloqueio quando o SQLSTATE é
+-- EXATAMENTE o esperado (42501); qualquer outro erro é relançado.
 -- ============================================================
 
 -- ============================================================
@@ -45,8 +56,8 @@ SELECT * FROM (
 
     SELECT 3 AS ord, 'A_estrutura_colunas_conversations' AS stage,
            CASE WHEN (SELECT count(*) FROM information_schema.columns
-                       WHERE table_schema='public' AND table_name='chat_conversations'
-                         AND column_name IN ('id','profile_id','title','context','created_at','updated_at','last_message_at')) = 7
+                        WHERE table_schema='public' AND table_name='chat_conversations'
+                          AND column_name IN ('id','profile_id','title','context','created_at','updated_at','last_message_at')) = 7
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object('colunas', (SELECT string_agg(column_name, ',')
                                             FROM information_schema.columns
@@ -55,8 +66,8 @@ SELECT * FROM (
 
     SELECT 4 AS ord, 'A_estrutura_colunas_messages' AS stage,
            CASE WHEN (SELECT count(*) FROM information_schema.columns
-                       WHERE table_schema='public' AND table_name='chat_messages'
-                         AND column_name IN ('id','conversation_id','role','status','content','payload','intent','engine','period_analyzed','client_request_id','error','created_at')) = 12
+                        WHERE table_schema='public' AND table_name='chat_messages'
+                          AND column_name IN ('id','conversation_id','role','status','content','payload','intent','engine','period_analyzed','client_request_id','error','created_at')) = 12
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object('colunas', (SELECT string_agg(column_name, ',')
                                             FROM information_schema.columns
@@ -75,29 +86,29 @@ SELECT * FROM (
 
     SELECT 6 AS ord, 'A_politicas_own_profile' AS stage,
            CASE WHEN (SELECT count(*) FROM pg_policies
-                       WHERE schemaname='public' AND tablename='chat_conversations'
-                         AND (qual::text LIKE '%app%jwt_profile_id%' OR with_check::text LIKE '%app%jwt_profile_id%')) >= 1
+                        WHERE schemaname='public' AND tablename='chat_conversations'
+                          AND (qual::text LIKE '%app%jwt_profile_id%' OR with_check::text LIKE '%app%jwt_profile_id%')) >= 1
                  AND (SELECT count(*) FROM pg_policies
-                       WHERE schemaname='public' AND tablename='chat_messages'
-                         AND (qual::text LIKE '%chat_conversations%' OR with_check::text LIKE '%chat_conversations%')) >= 1
+                        WHERE schemaname='public' AND tablename='chat_messages'
+                          AND (qual::text LIKE '%chat_conversations%' OR with_check::text LIKE '%chat_conversations%')) >= 1
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object(
                'conversations_usa_jwt_profile_id', (SELECT count(*) FROM pg_policies
-                                                     WHERE schemaname='public' AND tablename='chat_conversations'
-                                                       AND (qual::text LIKE '%app%jwt_profile_id%' OR with_check::text LIKE '%app%jwt_profile_id%')),
+                                                      WHERE schemaname='public' AND tablename='chat_conversations'
+                                                        AND (qual::text LIKE '%app%jwt_profile_id%' OR with_check::text LIKE '%app%jwt_profile_id%')),
                'messages_usa_conversation_own', (SELECT count(*) FROM pg_policies
-                                                  WHERE schemaname='public' AND tablename='chat_messages'
-                                                    AND (qual::text LIKE '%chat_conversations%' OR with_check::text LIKE '%chat_conversations%'))
+                                                   WHERE schemaname='public' AND tablename='chat_messages'
+                                                     AND (qual::text LIKE '%chat_conversations%' OR with_check::text LIKE '%chat_conversations%'))
            ) AS detail
     UNION ALL
 
     SELECT 7 AS ord, 'A_politicas_por_comando' AS stage,
            CASE WHEN (SELECT count(*) FROM pg_policies
-                       WHERE schemaname='public' AND tablename='chat_conversations'
-                         AND cmd IN ('SELECT','INSERT','UPDATE','DELETE')) = 4
+                        WHERE schemaname='public' AND tablename='chat_conversations'
+                          AND cmd IN ('SELECT','INSERT','UPDATE','DELETE')) = 4
                  AND (SELECT count(*) FROM pg_policies
-                       WHERE schemaname='public' AND tablename='chat_messages'
-                         AND cmd IN ('SELECT','INSERT','UPDATE','DELETE')) = 4
+                        WHERE schemaname='public' AND tablename='chat_messages'
+                          AND cmd IN ('SELECT','INSERT','UPDATE','DELETE')) = 4
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object(
                'conversations', (SELECT string_agg(policyname || ':' || cmd, ',') FROM pg_policies
@@ -109,37 +120,37 @@ SELECT * FROM (
 
     SELECT 8 AS ord, 'A_constraints_por_nome_estavel' AS stage,
            CASE WHEN (SELECT count(*) FROM pg_constraint c JOIN pg_class rel ON rel.oid = c.conrelid
-                       WHERE rel.oid IN ('public.chat_conversations'::regclass, 'public.chat_messages'::regclass)
-                         AND c.conname IN
-                             ('chat_conversations_pkey',
-                              'chat_conversations_profile_id_fkey',
-                              'chat_conversations_title_length',
-                              'chat_conversations_context_size',
-                              'chat_messages_pkey',
-                              'chat_messages_conversation_id_fkey',
-                              'chat_messages_role_check',
-                              'chat_messages_status_check',
-                              'chat_messages_content_check',
-                              'chat_messages_engine_check',
-                              'chat_messages_client_request_id_check',
-                              'chat_messages_response_payload',
-                              'chat_messages_payload_size')) = 13
+                        WHERE rel.oid IN ('public.chat_conversations'::regclass, 'public.chat_messages'::regclass)
+                          AND c.conname IN
+                              ('chat_conversations_pkey',
+                               'chat_conversations_profile_id_fkey',
+                               'chat_conversations_title_length',
+                               'chat_conversations_context_size',
+                               'chat_messages_pkey',
+                               'chat_messages_conversation_id_fkey',
+                               'chat_messages_role_check',
+                               'chat_messages_status_check',
+                               'chat_messages_content_check',
+                               'chat_messages_engine_check',
+                               'chat_messages_client_request_id_check',
+                               'chat_messages_response_payload',
+                               'chat_messages_payload_size')) = 13
                  AND (SELECT count(*) FROM pg_constraint c JOIN pg_class rel ON rel.oid = c.conrelid
-                       WHERE rel.oid IN ('public.chat_conversations'::regclass, 'public.chat_messages'::regclass)
-                         AND c.conname NOT IN
-                             ('chat_conversations_pkey',
-                              'chat_conversations_profile_id_fkey',
-                              'chat_conversations_title_length',
-                              'chat_conversations_context_size',
-                              'chat_messages_pkey',
-                              'chat_messages_conversation_id_fkey',
-                              'chat_messages_role_check',
-                              'chat_messages_status_check',
-                              'chat_messages_content_check',
-                              'chat_messages_engine_check',
-                              'chat_messages_client_request_id_check',
-                              'chat_messages_response_payload',
-                              'chat_messages_payload_size')) = 0
+                        WHERE rel.oid IN ('public.chat_conversations'::regclass, 'public.chat_messages'::regclass)
+                          AND c.conname NOT IN
+                              ('chat_conversations_pkey',
+                               'chat_conversations_profile_id_fkey',
+                               'chat_conversations_title_length',
+                               'chat_conversations_context_size',
+                               'chat_messages_pkey',
+                               'chat_messages_conversation_id_fkey',
+                               'chat_messages_role_check',
+                               'chat_messages_status_check',
+                               'chat_messages_content_check',
+                               'chat_messages_engine_check',
+                               'chat_messages_client_request_id_check',
+                               'chat_messages_response_payload',
+                               'chat_messages_payload_size')) = 0
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object(
                'constraints_esperadas', 13,
@@ -188,7 +199,7 @@ SELECT * FROM (
                 THEN 'PASS' ELSE 'BLOCKED' END AS status,
            jsonb_build_object(
                'anon_grant_conversations', (SELECT string_agg(privilege_type, ',') FROM information_schema.role_table_grants
-                                             WHERE grantee='anon' AND table_schema='public' AND table_name='chat_conversations'),
+                                              WHERE grantee='anon' AND table_schema='public' AND table_name='chat_conversations'),
                'anon_grant_messages', (SELECT string_agg(privilege_type, ',') FROM information_schema.role_table_grants
                                         WHERE grantee='anon' AND table_schema='public' AND table_name='chat_messages')
            ) AS detail
@@ -225,149 +236,235 @@ ORDER BY ord;
 -- ============================================================
 -- PARTE B — VERIFICAÇÃO COMPORTAMENTAL DA RLS (BEGIN/ROLLBACK)
 --
--- Pre-condições verificadas ANTES de qualquer teste: as funções canônicas do
--- projeto existem (app.jwt_profile_id/app.jwt_role) e as tabelas existem.
--- request.jwt.claims é configurado EXATAMENTE como a implementação real lê
--- (current_setting('request.jwt.claims')::jsonb) e o papel é alternado para
--- authenticated via SET LOCAL. Sem DDL/DML persistente: tudo termina em
--- ROLLBACK. Nenhum UUID/email/valor financeiro real é impresso.
+-- Pre-condições verificadas na SESSÃO ADMINISTRATIVA, ANTES de qualquer
+-- troca de role, pelo catálogo (to_regclass/to_regprocedure/pg_roles — a
+-- existência de app.jwt_profile_id/app.jwt_role nunca é exercida por chamada
+-- direta). Dois perfis REAIS são selecionados silenciosamente para as
+-- fixtures sintéticas (FK profiles.id íntegra) e nunca são impressos.
+-- request.jwt.claims é configurado como a implementação real lê
+-- (current_setting('request.jwt.claims')::jsonb) e o papel é alternado via
+-- SET LOCAL. Erros esperados de permissão (42501) só são tratados como
+-- bloqueio quando o SQLSTATE é EXATAMENTE 42501; qualquer outro erro é
+-- relançado. Sem DDL/DML persistente: tudo termina em ROLLBACK. Nenhum
+-- UUID/email/valor financeiro/conteúdo real é impresso.
 -- ============================================================
 BEGIN;
 
 DO $$
 DECLARE
-    v_p1       uuid := '00000000-0000-4000-8000-000000000001';
-    v_conv_p1  uuid := '00000000-0000-4000-8000-0000000000c1';
-    v_n        bigint;
-    v_blocked  boolean;
+    v_p1        uuid;
+    v_p2        uuid;
+    v_conv_a    uuid := '00000000-0000-4000-8000-0000000000c1';
+    v_conv_b    uuid := '00000000-0000-4000-8000-0000000000c2';
+    v_n         bigint;
+    v_linhas    bigint;
+    v_state     text;
+    v_blocked   boolean;
 BEGIN
-    -- Guarda de pré-condições (nada é executado se faltar categoria estrutural).
+    -- Guarda de pré-condições estruturais (catálogo, sessão administrativa).
+    -- Nada é executado se faltar alguma categoria estrutural.
     IF to_regclass('public.chat_conversations') IS NULL
        OR to_regclass('public.chat_messages') IS NULL
        OR to_regprocedure('app.jwt_profile_id()') IS NULL
        OR to_regprocedure('app.jwt_role()') IS NULL
        OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
        OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-        RAISE NOTICE 'VERIFY 023 (comportamento): BLOCKED - pre-condicao ausente (nenhum DML executado)';
+        RAISE NOTICE 'VERIFY 023 (comportamento): BLOCKED - pre-condicao estrutural ausente (nenhum DML executado)';
         RETURN;
     END IF;
 
-    -- Identidade simulada P1 (claims compatíveis com a implementação real).
+    -- Dois perfis REAIS existentes, selecionados silenciosamente (nunca
+    -- impressos: nenhum UUID real aparece na saída).
+    SELECT id INTO v_p1 FROM public.profiles ORDER BY created_at, id LIMIT 1;
+    SELECT id INTO v_p2 FROM public.profiles WHERE id IS DISTINCT FROM v_p1 ORDER BY created_at, id LIMIT 1;
+    IF v_p1 IS NULL OR v_p2 IS NULL THEN
+        RAISE NOTICE 'VERIFY 023 (comportamento): BLOCKED - menos de dois perfis para isolar (nenhum DML executado)';
+        RETURN;
+    END IF;
+
+    -- Fixtures sintéticas criadas na SESSÃO ADMINISTRATIVA (antes de qualquer
+    -- troca de role): uma conversa por perfil + uma mensagem por conversa,
+    -- com UUIDs sintéticos de teste (nunca impressos).
+    DELETE FROM public.chat_conversations WHERE id IN (v_conv_a, v_conv_b);
+    INSERT INTO public.chat_conversations (id, profile_id, title)
+    VALUES (v_conv_a, v_p1, 'fixture-a'), (v_conv_b, v_p2, 'fixture-b');
+    INSERT INTO public.chat_messages (id, conversation_id, role, status, content)
+    VALUES ('00000000-0000-4000-8000-0000000000d1', v_conv_a, 'user', 'completed', 'msg-a'),
+           ('00000000-0000-4000-8000-0000000000d2', v_conv_b, 'user', 'completed', 'msg-b');
+
+    -- ---------- Perfil A ----------
     PERFORM set_config(
         'request.jwt.claims',
-        '{"role":"authenticated","sub":"00000000-0000-4000-8000-0000000000a1","profile_id":"00000000-0000-4000-8000-000000000001"}',
+        jsonb_build_object(
+            'role', 'authenticated',
+            'sub', '00000000-0000-4000-8000-0000000000a1',
+            'profile_id', v_p1
+        )::text,
         true
     );
     SET LOCAL ROLE authenticated;
 
-    -- (1) app.jwt_profile_id() resolve os claims simulados.
-    IF app.jwt_profile_id() IS DISTINCT FROM v_p1 THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: jwt_profile_id nao resolve os claims simulados';
-    END IF;
-    RAISE NOTICE 'VERIFY 023 OK: jwt_profile_id resolve os claims simulados (authenticated)';
+    -- A vê somente a PRÓPRIA conversa (comportamento das políticas — nenhuma
+    -- chamada direta a helper do schema app).
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_a;
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A nao enxerga a propria conversa'; END IF;
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_b;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A enxerga conversa do perfil B'; END IF;
+    RAISE NOTICE 'VERIFY 023 OK: A so ve a propria conversa (SELECT)';
 
-    -- (2) tabela vazia: nada vaza (SELECT limitado pela policy de propriedade).
-    SELECT count(*) INTO v_n FROM public.chat_conversations;
-    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: conversa visivel sem dados'; END IF;
-    RAISE NOTICE 'VERIFY 023 OK: SELECT em tabela vazia retorna 0 linhas';
+    -- A altera a própria conversa e não toca na do perfil B.
+    UPDATE public.chat_conversations SET title = 'fixture-a2' WHERE id = v_conv_a;
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_a AND title = 'fixture-a2';
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A nao atualiza a propria conversa'; END IF;
+    UPDATE public.chat_conversations SET title = 'hack' WHERE id = v_conv_b;
+    GET DIAGNOSTICS v_linhas = ROW_COUNT;
+    IF v_linhas <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A alterou conversa do perfil B'; END IF;
+    RAISE NOTICE 'VERIFY 023 OK: A atualiza so a propria conversa (UPDATE)';
 
-    -- (3) P1 cria a PRÓPRIA conversa (WITH CHECK profile_id = jwt_profile_id()).
-    INSERT INTO public.chat_conversations (id, profile_id, title)
-    VALUES (v_conv_p1, v_p1, 'teste');
-    IF NOT EXISTS (SELECT 1 FROM public.chat_conversations WHERE id = v_conv_p1 AND profile_id = v_p1) THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: proprio INSERT de conversa foi bloqueado';
-    END IF;
-    RAISE NOTICE 'VERIFY 023 OK: INSERT da propria conversa permitido';
+    -- A não apaga a conversa do perfil B (política de propriedade → 0 linhas).
+    DELETE FROM public.chat_conversations WHERE id = v_conv_b;
+    GET DIAGNOSTICS v_linhas = ROW_COUNT;
+    IF v_linhas <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A apagou conversa do perfil B'; END IF;
+    RAISE NOTICE 'VERIFY 023 OK: A nao apaga conversa do perfil B (DELETE)';
 
-    -- (4) P1 insere mensagem na própria conversa (EXISTS na conversa do perfil).
+    -- Mensagens SEMPRE verificadas através da conversa pertencente ao perfil.
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_a;
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A nao ve mensagens da propria conversa'; END IF;
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_b;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A ve mensagens da conversa do perfil B'; END IF;
+    RAISE NOTICE 'VERIFY 023 OK: A ve mensagens so via conversa do proprio perfil';
+
+    -- A insere mensagem na PRÓPRIA conversa (2 mensagens na conversa A).
     INSERT INTO public.chat_messages (id, conversation_id, role, status, content, client_request_id)
-    VALUES ('00000000-0000-4000-8000-0000000000d1', v_conv_p1, 'user', 'completed', 'oi', 'req-1');
-    IF NOT EXISTS (SELECT 1 FROM public.chat_messages WHERE conversation_id = v_conv_p1 AND role = 'user') THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: proprio INSERT de mensagem foi bloqueado';
-    END IF;
-    RAISE NOTICE 'VERIFY 023 OK: INSERT de mensagem na propria conversa permitido';
+    VALUES ('00000000-0000-4000-8000-0000000000d3', v_conv_a, 'assistant', 'completed', '', 'req-a');
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_a;
+    IF v_n <> 2 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A nao inseriu mensagem na propria conversa'; END IF;
 
-    -- (5) P2 não vê a conversa de P1 nem consegue criar conversa do perfil de P1
-    --     (a flag v_blocked vira true com erro de RLS/privilégio OU com 0 linhas).
-    PERFORM set_config(
-        'request.jwt.claims',
-        '{"role":"authenticated","sub":"00000000-0000-4000-8000-0000000000a2","profile_id":"00000000-0000-4000-8000-000000000002"}',
-        true
-    );
-    SELECT count(*) INTO v_n FROM public.chat_conversations;
-    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: conversa de OUTRO perfil visivel'; END IF;
-    RAISE NOTICE 'VERIFY 023 OK: conversa de outro perfil invisivel (SELECT)';
-
-    v_blocked := false;
-    BEGIN
-        INSERT INTO public.chat_conversations (id, profile_id, title)
-        VALUES ('00000000-0000-4000-8000-0000000000c2', v_p1, 'teste');
-        GET DIAGNOSTICS v_n = ROW_COUNT;
-        v_blocked := (v_n = 0);
-    EXCEPTION
-        WHEN OTHERS THEN
-            v_blocked := true;
-    END;
-    IF NOT v_blocked THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: INSERT de conversa com perfil de OUTRO usuario permitido';
-    END IF;
-    RAISE NOTICE 'VERIFY 023 OK: INSERT de conversa sob perfil alheio foi bloqueado';
-
+    -- A é impedido de inserir mensagem na conversa do perfil B (erro RLS 42501).
     v_blocked := false;
     BEGIN
         INSERT INTO public.chat_messages (id, conversation_id, role, status, content, client_request_id)
-        VALUES ('00000000-0000-4000-8000-0000000000d2', v_conv_p1, 'assistant', 'pending', '', 'req-2');
-        GET DIAGNOSTICS v_n = ROW_COUNT;
-        v_blocked := (v_n = 0);
-    EXCEPTION
-        WHEN OTHERS THEN
-            v_blocked := true;
+        VALUES ('00000000-0000-4000-8000-0000000000d4', v_conv_b, 'assistant', 'completed', '', 'req-b');
+        v_blocked := false;
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE;
+        IF v_state <> '42501' THEN RAISE; END IF;
+        v_blocked := true;
     END;
     IF NOT v_blocked THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: INSERT de mensagem em conversa de OUTRO perfil permitido';
+        RAISE EXCEPTION 'VERIFY 023 FAIL: perfil A inseriu mensagem na conversa do perfil B';
     END IF;
-    RAISE NOTICE 'VERIFY 023 OK: INSERT de mensagem em conversa de outro perfil bloqueado';
+    RAISE NOTICE 'VERIFY 023 OK: A nao insere mensagem em conversa do perfil B (42501)';
 
-    -- (6) UPDATE/consulta da própria conversa segue valendo após a troca de claims
-    --     (volta para P1 e confirma a propriedade na leitura).
-    PERFORM set_config(
-        'request.jwt.claims',
-        '{"role":"authenticated","sub":"00000000-0000-4000-8000-0000000000a1","profile_id":"00000000-0000-4000-8000-000000000001"}',
-        true
-    );
-    UPDATE public.chat_conversations SET title = 'teste-2' WHERE id = v_conv_p1;
-    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_p1 AND title = 'teste-2';
-    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: UPDATE da propria conversa bloqueado'; END IF;
-    RAISE NOTICE 'VERIFY 023 OK: UPDATE da propria conversa permitido';
-
-    -- (7) DELETE individual de mensagem é vedado por privilégio (sem DELETE grant).
+    -- DELETE individual de mensagem é VEDADO por privilégio (sem grant DELETE
+    -- em chat_messages → SQLSTATE exatamente 42501).
     v_blocked := false;
     BEGIN
-        DELETE FROM public.chat_messages WHERE conversation_id = v_conv_p1 AND role = 'user';
+        DELETE FROM public.chat_messages WHERE conversation_id = v_conv_a;
         v_blocked := false;
-    EXCEPTION
-        WHEN OTHERS THEN
-            v_blocked := true;
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE;
+        IF v_state <> '42501' THEN RAISE; END IF;
+        v_blocked := true;
     END;
     IF NOT v_blocked THEN
         RAISE EXCEPTION 'VERIFY 023 FAIL: authenticated concluiu DELETE individual de mensagem';
     END IF;
-    RAISE NOTICE 'VERIFY 023 OK: DELETE individual de mensagem negado a authenticated';
+    RAISE NOTICE 'VERIFY 023 OK: DELETE individual de mensagem negado (42501)';
 
-    -- (8) anon (sem grants) também não acessa via papel anônimo.
+    -- ---------- Perfil B (reset de role + claims antes da troca) ----------
+    RESET ROLE;
+    PERFORM set_config(
+        'request.jwt.claims',
+        jsonb_build_object(
+            'role', 'authenticated',
+            'sub', '00000000-0000-4000-8000-0000000000a2',
+            'profile_id', v_p2
+        )::text,
+        true
+    );
+    SET LOCAL ROLE authenticated;
+
+    -- B só vê a própria conversa/mensagens; a conversa A (com 2 mensagens)
+    -- permanece totalmente invisível.
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_b;
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B nao enxerga a propria conversa'; END IF;
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_a;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B enxerga conversa do perfil A'; END IF;
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_b;
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B nao ve mensagens da propria conversa'; END IF;
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_a;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B ve mensagens da conversa do perfil A'; END IF;
+
+    -- B altera a própria conversa e não altera a de A.
+    UPDATE public.chat_conversations SET title = 'fixture-b2' WHERE id = v_conv_b;
+    SELECT count(*) INTO v_n FROM public.chat_conversations WHERE id = v_conv_b AND title = 'fixture-b2';
+    IF v_n <> 1 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B nao atualiza a propria conversa'; END IF;
+    UPDATE public.chat_conversations SET title = 'hack' WHERE id = v_conv_a;
+    GET DIAGNOSTICS v_linhas = ROW_COUNT;
+    IF v_linhas <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B alterou conversa do perfil A'; END IF;
+
+    -- B não apaga a conversa de A (0 linhas).
+    DELETE FROM public.chat_conversations WHERE id = v_conv_a;
+    GET DIAGNOSTICS v_linhas = ROW_COUNT;
+    IF v_linhas <> 0 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B apagou conversa do perfil A'; END IF;
+
+    -- B insere mensagem na PRÓPRIA conversa e é vedado de inserir na de A.
+    INSERT INTO public.chat_messages (id, conversation_id, role, status, content, client_request_id)
+    VALUES ('00000000-0000-4000-8000-0000000000d5', v_conv_b, 'assistant', 'completed', '', 'req-b2');
+    SELECT count(*) INTO v_n FROM public.chat_messages WHERE conversation_id = v_conv_b;
+    IF v_n <> 2 THEN RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B nao inseriu mensagem na propria conversa'; END IF;
+    v_blocked := false;
+    BEGIN
+        INSERT INTO public.chat_messages (id, conversation_id, role, status, content, client_request_id)
+        VALUES ('00000000-0000-4000-8000-0000000000d6', v_conv_a, 'assistant', 'completed', '', 'req-b-bad');
+        v_blocked := false;
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE;
+        IF v_state <> '42501' THEN RAISE; END IF;
+        v_blocked := true;
+    END;
+    IF NOT v_blocked THEN
+        RAISE EXCEPTION 'VERIFY 023 FAIL: perfil B inseriu mensagem na conversa do perfil A';
+    END IF;
+
+    -- DELETE individual de mensagem segue vedado para B (42501 exato).
+    v_blocked := false;
+    BEGIN
+        DELETE FROM public.chat_messages WHERE conversation_id = v_conv_b;
+        v_blocked := false;
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE;
+        IF v_state <> '42501' THEN RAISE; END IF;
+        v_blocked := true;
+    END;
+    IF NOT v_blocked THEN
+        RAISE EXCEPTION 'VERIFY 023 FAIL: authenticated (B) concluiu DELETE individual de mensagem';
+    END IF;
+    RAISE NOTICE 'VERIFY 023 OK: A e B isolados (SELECT/UPDATE/DELETE e mensagens)';
+
+    -- ---------- anon ----------
+    -- Sem grants nas tabelas de chat: leitura falha exatamente com 42501.
+    RESET ROLE;
     SET LOCAL ROLE anon;
     v_blocked := false;
     BEGIN
         PERFORM count(*) FROM public.chat_conversations;
         v_blocked := false;
-    EXCEPTION
-        WHEN OTHERS THEN
-            v_blocked := true;
+    EXCEPTION WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE;
+        IF v_state <> '42501' THEN RAISE; END IF;
+        v_blocked := true;
     END;
     IF NOT v_blocked THEN
-        RAISE EXCEPTION 'VERIFY 023 FAIL: anon conseguiu ler chat_conversations';
+        RAISE EXCEPTION 'VERIFY 023 FAIL: anon leu chat_conversations';
     END IF;
-    RAISE NOTICE 'VERIFY 023 OK: anon sem acesso a chat_conversations';
+    RAISE NOTICE 'VERIFY 023 OK: anon sem acesso a chat_conversations (42501)';
+
+    -- Reset limpo de role e claims antes do ROLLBACK.
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', '', true);
+    RAISE NOTICE 'VERIFY 023 OK: comportamento RLS validado (A/B/anon) — ROLLBACK a seguir';
 END $$;
 
 ROLLBACK;

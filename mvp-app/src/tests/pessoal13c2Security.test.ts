@@ -578,6 +578,23 @@ describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
     expect(v).not.toContain('GEMINI_API_KEY');
   });
 
+  it('VERIFY: nunca invoca helpers app.jwt_* sob authenticated/anon (regressão PESSOAL-13C2A.2 — 42501)', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql');
+    // Na Parte A (e na guarda da Parte B) os helpers só aparecem no CATÁLOGO
+    // (to_regprocedure), na sessão administrativa, antes de qualquer troca de
+    // role — isso é permitido. A REGRA é: DEPOIS do primeiro SET LOCAL ROLE
+    // (authenticated/anon) NENHUMA referência app.jwt_* pode existir: chamar
+    // o helper diretamente sob esses papeis exigiria USAGE no schema app →
+    // 42501. A RLS é provada pelo comportamento das tabelas, e os helpers são
+    // exercidos apenas pela própria política (como em produção).
+    const beginIdx = v.indexOf('BEGIN;');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    const roleSwitchIdx = v.indexOf('SET LOCAL ROLE authenticated;', beginIdx);
+    expect(roleSwitchIdx).toBeGreaterThan(beginIdx);
+    const sobRoleSimulada = v.slice(roleSwitchIdx);
+    expect(sobRoleSimulada).not.toMatch(/app\.jwt_(profile_id|role|sub)/);
+  });
+
   it('PREFLIGHT: leitura pura, apenas catálogo (sem DDL/DML/grants)', () => {
     const p = sqlAt('PREFLIGHT_CLOUD_023_CHAT_RLS_READONLY.sql');
     expect(p).toContain('SELECT');
