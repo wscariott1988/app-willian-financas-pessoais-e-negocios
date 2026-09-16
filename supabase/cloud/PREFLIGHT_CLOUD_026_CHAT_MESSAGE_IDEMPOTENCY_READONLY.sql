@@ -29,10 +29,9 @@ SELECT * FROM (
     UNION ALL
 
     SELECT 2 AS ord, 'stg_026_indice_anterior_ou_ja_aplicado' AS stage,
-           CASE WHEN (
-                     -- Estado ANTES da aplicação: índice antigo (2 colunas, sem role).
-                     EXISTS (
-                         SELECT 1
+           CASE WHEN EXISTS (
+                      -- Estado ANTES da aplicação: índice antigo (2 colunas, sem role).
+                      SELECT 1
                            FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
                           WHERE c.relname = 'uq_chat_messages_conversation_client_request'
                             AND i.indrelid = 'public.chat_messages'::regclass

@@ -564,6 +564,27 @@ function sqlStatements(migration: string): string[] {
     .filter((l) => l && !l.startsWith('--') && l.endsWith(';'));
 }
 
+// Balanceamento sintático mínimo — regressão do 42601 no PREFLIGHT 026: um
+// "CASE WHEN (" com parêntese externo aberto e nunca fechado antes do THEN.
+// Exige parênteses balanceados e CASE/WHEN com END/THEN correspondentes.
+function sqlSyntacticallyBalanced(sql: string): boolean {
+  const code = sql
+    .split('\n')
+    .map((l) => l.replace(/--.*$/, ''))
+    .join('\n');
+  let parens = 0;
+  for (const ch of code) {
+    if (ch === '(') parens += 1;
+    else if (ch === ')' && --parens < 0) return false;
+  }
+  if (parens !== 0) return false;
+  const count = (re: RegExp) => (code.match(re) ?? []).length;
+  return (
+    count(/\bCASE\b/g) === count(/\bEND\b/g) &&
+    count(/\bWHEN\b/g) === count(/\bTHEN\b/g)
+  );
+}
+
 describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
   it('023: grants só authenticated, sem DELETE de mensagens, RLS habilitada, políticas e tetos', () => {
     expect(MIGRATION_023).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON chat_conversations TO authenticated;');
@@ -832,5 +853,42 @@ describe('PESSOAL-13C2A.4 — auditoria estática do VERIFY final (025)', () => 
     const roleSwitchIdx = v.indexOf('SET LOCAL ROLE authenticated;', beginIdx);
     expect(roleSwitchIdx).toBeGreaterThan(beginIdx);
     expect(v.slice(roleSwitchIdx)).not.toMatch(/app\.jwt_(profile_id|role|sub)/);
+  });
+});
+
+// ── 8. PESSOAL-13C2B.3: PREFLIGHT 026 — sintaxe e leitura pura ────────────
+
+describe('PESSOAL-13C2B.3 — auditoria estática do PREFLIGHT 026', () => {
+  it('026: CASE WHEN EXISTS (...) OR EXISTS (...) — nunca a forma "CASE WHEN (" quebrada (42601)', () => {
+    const p = sqlAt('PREFLIGHT_CLOUD_026_CHAT_MESSAGE_IDEMPOTENCY_READONLY.sql');
+    // Regressão exata do 42601 no Supabase: parêntese externo aberto depois de
+    // CASE WHEN e nunca fechado antes do THEN.
+    expect(p).not.toMatch(/CASE WHEN\s+\(/);
+    // A construção preferencial: o EXISTS colado ao WHEN, com um OR entre os
+    // dois ramos (índice anterior presente OU índice novo final correto).
+    expect(p).toContain('CASE WHEN EXISTS (');
+    expect(p).toMatch(/CASE WHEN EXISTS \([\s\S]*OR[\s\S]*\)\s*THEN 'PASS' ELSE 'BLOCKED'/);
+    // Etapa com os nomes canônicos dos dois índices (estado ANTES/JA_APLICADO).
+    expect(p).toContain('stg_026_indice_anterior_ou_ja_aplicado');
+    expect(p).toContain('uq_chat_messages_conversation_client_request');
+    expect(p).toContain('uq_chat_messages_conversation_client_request_role');
+  });
+
+  it('026: parênteses e CASE/WHEN/THEN/END sintaticamente completos e uma única statement SELECT', () => {
+    const p = sqlAt('PREFLIGHT_CLOUD_026_CHAT_MESSAGE_IDEMPOTENCY_READONLY.sql');
+    expect(sqlSyntacticallyBalanced(p)).toBe(true);
+    expect(sqlStatements(p)).toEqual(['ORDER BY ord;']);
+  });
+
+  it('026: leitura pura, apenas catálogo (sem DDL/DML/grants)', () => {
+    const p = sqlAt('PREFLIGHT_CLOUD_026_CHAT_MESSAGE_IDEMPOTENCY_READONLY.sql');
+    expect(p).toContain('SELECT');
+    expect(p).not.toContain('DROP ');
+    expect(p).not.toContain('INSERT INTO');
+    expect(p).not.toContain('GRANT ');
+    expect(p).not.toContain('service_role');
+    expect(p).not.toContain('GEMINI_API_KEY');
+    expect(p).toContain("to_regclass('public.chat_messages')");
+    expect(p).toContain("to_regprocedure('app.jwt_profile_id()')");
   });
 });
