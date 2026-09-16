@@ -157,6 +157,12 @@ async function upsertUserMessage(
   cli: SupabaseClient,
   input: BeginTurnInput,
 ): Promise<void> {
+  // PESSOAL-13C2B.3: alvo de conflito TRIPLO (conversation_id,
+  // client_request_id, role) casando EXATAMENTE o índice único final
+  // uq_chat_messages_conversation_client_request_role do 026. A âncora
+  // assistant usa o MESMO client_request_id com role='assistant': sem a role
+  // no índice (023 antigo) a segunda linha violava 23505 e toda pergunta nova
+  // falhava com 502 genérico.
   const { error } = await cli.from('chat_messages').upsert(
     {
       conversation_id: input.conversationId,
@@ -165,7 +171,10 @@ async function upsertUserMessage(
       status: 'completed',
       content: input.question,
     },
-    { onConflict: 'conversation_id,client_request_id', ignoreDuplicates: true },
+    {
+      onConflict: 'conversation_id,client_request_id,role',
+      ignoreDuplicates: true,
+    },
   );
   if (error) throw error;
 }

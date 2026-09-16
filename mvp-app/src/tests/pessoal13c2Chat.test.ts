@@ -213,11 +213,23 @@ function uniqViolation(): Error & { code: string } {
   return e;
 }
 
+// Postgres 15+ (migrations 023/026): índices UNIQUE são NULLS DISTINCT por
+// padrão — NULL nunca colide com NULL. O FakeClient não pode considerar dois
+// valores NULL iguais, senão fingiria um conflito que o banco real não tem.
+function conflictKeyEqual(a: Row[keyof Row], b: Row[keyof Row]): boolean {
+  if (a === null || b === null) return false;
+  return a === b;
+}
+
+function dupCollides(a: Row, b: Row, keys: string[]): boolean {
+  return keys.every((k) => conflictKeyEqual(a[k], b[k]));
+}
+
 function execute(b: BuilderState): { data: unknown; count: number | null; error: unknown } {
   if (b.action === 'upsert') {
     const keySet = b.onConflict.split(',');
     for (const row of b.rows) {
-      const dup = rowsOf(b).some((r) => keySet.every((k) => r[k] === row[k]));
+      const dup = rowsOf(b).some((r) => dupCollides(r, row, keySet));
       if (dup && !b.ignoreDuplicates) return { data: null, count: null, error: uniqViolation() };
       if (!dup) rowsPush(b, row);
     }
@@ -228,12 +240,7 @@ function execute(b: BuilderState): { data: unknown; count: number | null; error:
     for (const row of b.rows) {
       if (
         b.table === 'chat_messages' &&
-        rowsOf(b).some(
-          (r) =>
-            r.conversation_id === row.conversation_id &&
-            r.client_request_id === row.client_request_id &&
-            r.role === row.role,
-        )
+        rowsOf(b).some((r) => dupCollides(r, row, ['conversation_id', 'client_request_id', 'role']))
       ) {
         return { data: null, count: null, error: uniqViolation() };
       }
@@ -1057,5 +1064,133 @@ describe('PESSOAL-13C2B.1 — BeginTurnResult: narrowing exaustivo sem leitura p
     expect(geminiCalls).toBe(1);
     expect(b2.engine).toBe('gemini');
     expect(b2.geminiCallCount).toBe(b1.geminiCallCount ?? 0);
+  });
+});
+
+// ── 8. PESSOAL-13C2B.3: idempotência user+assistant por client_request_id ───
+
+describe('PESSOAL-13C2B.3 — índice único triplo (conversation_id, client_request_id, role)', () => {
+  it('chatStore upserta a mensagem user com alvo de conflito TRIPLO e role user (nunca o alvo antigo de 2 colunas)', async () => {
+    const src = (await import('node:fs')).readFileSync(
+      new URL('../../server/chat/chatStore.ts', import.meta.url),
+      'utf8',
+    );
+    expect(src).toContain("onConflict: 'conversation_id,client_request_id,role'");
+    // O alvo antigo do 023 (sem role) precisa ter desaparecido do upsert.
+    expect(src).not.toContain("onConflict: 'conversation_id,client_request_id',");
+    expect(src).toContain("role: 'user',");
+  });
+
+  it('migration 026 define o índice UNIQUE com as 3 colunas e remove o índice antigo de 2 colunas', async () => {
+    const migrationSql = (await import('node:fs')).readFileSync(
+      new URL('../../../supabase/migrations/026_chat_message_idempotency_role.sql', import.meta.url),
+      'utf8',
+    );
+    expect(migrationSql).toContain('uq_chat_messages_conversation_client_request_role');
+    expect(migrationSql).toContain('(conversation_id, client_request_id, role)');
+    expect(migrationSql).toContain('DROP INDEX IF EXISTS public.uq_chat_messages_conversation_client_request');
+  });
+
+  it('FakeClient reproduz a unicidade FINAL: user+assistant do MESMO crid coexistem, duplicata da MESMA role é 23505, e a regra antiga de 2 colunas teria conflitado', async () => {
+    const c = setRef(new FakeClient());
+    c.state.chat_conversations = [{ ...CONV }];
+    const rUser = (await c.from('chat_messages').insert({
+      id: 'u1', conversation_id: 'conv-1', client_request_id: 'r1', role: 'user', status: 'completed', content: 'q',
+    })) as { error: unknown };
+    expect(rUser.error).toBeNull();
+    const rAnchor = (await c.from('chat_messages').insert({
+      id: 'a1', conversation_id: 'conv-1', client_request_id: 'r1', role: 'assistant', status: 'pending', content: '',
+    })) as { error: unknown };
+    expect(rAnchor.error).toBeNull();
+    expect(c.state.chat_messages).toHaveLength(2);
+
+    // Reenvio da user com ignoreDuplicates → nenhuma duplicata, nada lançado.
+    const re = (await c.from('chat_messages').upsert(
+      { id: 'u1', conversation_id: 'conv-1', client_request_id: 'r1', role: 'user', status: 'completed', content: 'q' },
+      { onConflict: 'conversation_id,client_request_id,role', ignoreDuplicates: true },
+    )) as { error: unknown };
+    expect(re.error).toBeNull();
+    expect(c.state.chat_messages.filter((m) => m.role === 'user' && m.client_request_id === 'r1')).toHaveLength(1);
+
+    // Duplicata da MESMA role (segunda âncora assistant idêntica) → exatamente 23505.
+    const dupSameRole = (await c.from('chat_messages').insert({
+      id: 'a2', conversation_id: 'conv-1', client_request_id: 'r1', role: 'assistant', status: 'pending', content: '',
+    })) as { error?: { code: string } };
+    expect(dupSameRole.error?.code).toBe('23505');
+
+    // Regra antiga (023, SEM role): a MESMA combinação conv+crid que o turno
+    // precisa gravar como user+assistant era um conflito — o bug de 502 que o
+    // índice triplo e o onConflict triplo corrigem. Este teste falha se o
+    // alvo de conflito voltar a ignorar a role.
+    const oldTwoCol = (await c.from('chat_messages').upsert(
+      { id: 'a1', conversation_id: 'conv-1', client_request_id: 'r1', role: 'assistant', status: 'pending', content: '' },
+      { onConflict: 'conversation_id,client_request_id' },
+    )) as { error?: { code: string } };
+    expect(oldTwoCol.error?.code).toBe('23505');
+  });
+
+  it('primeira pergunta persiste EXATAMENTE 1 user + 1 assistant (mesmo crid), determinístico com GeminiCallCount=0', async () => {
+    registerGeminiClient(neverGemini());
+    const c = detRows([
+      { transaction_kind: 'expense', amount: 90, occurred_on: '2026-05-08', deleted_at: null, categories: SUP },
+    ]);
+    c.state.categories = [...SUP_CATS];
+    c.state.chat_conversations = [
+      { ...CONV, context: { category: 'Supermercado', intent: 'category_total', period: APRIL2026, summaries: [] } },
+    ];
+    c.state.chat_messages = [];
+    authOk(c);
+    const res = await handler(
+      postRequest({
+        question: 'E em maio?',
+        period: { start: '2026-05-01', end: '2026-05-31' },
+        conversationId: 'conv-1',
+        clientRequestId: 'r1',
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; geminiCallCount?: number };
+    expect(body.engine).toBe('deterministic');
+    expect(body.geminiCallCount).toBe(0);
+    expect(c.state.chat_messages).toHaveLength(2);
+    expect(c.state.chat_messages.filter((m) => m.role === 'user' && m.client_request_id === 'r1')).toHaveLength(1);
+    expect(c.state.chat_messages.filter((m) => m.role === 'assistant' && m.client_request_id === 'r1')).toHaveLength(1);
+  });
+
+  it('reenvio durante pending → 409/in_flight, nada duplicado no store', async () => {
+    const c = withChat({ ...CONV }, [
+      { id: 'u1', conversation_id: 'conv-1', role: 'user', status: 'completed', client_request_id: 'r1', content: 'q' },
+      { id: 'a1', conversation_id: 'conv-1', role: 'assistant', status: 'pending', client_request_id: 'r1', content: '' },
+    ]);
+    authOk(c);
+    const res = await handler(postRequest({ question: 'q2', period: APRIL2026, conversationId: 'conv-1', clientRequestId: 'r1' }));
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe('in_flight');
+    expect(c.state.chat_messages).toHaveLength(2);
+  });
+
+  it('reenvio após completed → cache determinístico (GeminiCallCount=0), sem nova consulta/Gemini nem linha nova', async () => {
+    registerGeminiClient(neverGemini());
+    const c = withChat({ ...CONV }, [
+      { id: 'u1', conversation_id: 'conv-1', role: 'user', status: 'completed', client_request_id: 'r1', content: 'q' },
+      {
+        id: 'a1',
+        conversation_id: 'conv-1',
+        role: 'assistant',
+        status: 'completed',
+        client_request_id: 'r1',
+        content: 'ok',
+        payload: { engine: 'deterministic', geminiCallCount: 0 },
+      },
+    ]);
+    authOk(c);
+    const res = await handler(postRequest({ question: 'q', period: APRIL2026, conversationId: 'conv-1', clientRequestId: 'r1' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { engine?: string; geminiCallCount?: number; answer?: string };
+    expect(body.engine).toBe('deterministic');
+    expect(body.geminiCallCount).toBe(0);
+    expect(body.answer).toBe('ok');
+    expect(c.state.chat_messages).toHaveLength(2);
   });
 });
