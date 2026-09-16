@@ -353,6 +353,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
                   }
                   onClick={() => void openConversation(c.id)}
                   aria-label={`Abrir conversa: ${c.title || 'Sem título'}`}
+                  title={c.title || 'Sem título'}
                 >
                   {c.title || 'Sem título'}
                 </button>

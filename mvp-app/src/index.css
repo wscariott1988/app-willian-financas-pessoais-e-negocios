@@ -3407,6 +3407,12 @@ button.period-range-custom {
 }
 
 .finance-ai-chat-open {
+  /* PESSOAL-13C2B.8: display block anula o button{display:inline-flex;
+     justify-content:center} global, que centralizava o título longo e fazia o
+     navegador recortar o MEIO do texto em vez do começo. Com block, o
+     text-overflow:ellipsis passa a truncar com reticências no final. */
+  display: block;
+  width: 100%;
   flex: 1;
   min-width: 0;
   text-align: left;
