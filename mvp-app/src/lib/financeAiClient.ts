@@ -59,6 +59,10 @@ export interface AskFinanceParams {
   question: string;
   period?: { start: string; end: string };
   signal?: AbortSignal;
+  /** Chat persistente (PESSOAL-13C2): id da conversa; exige clientRequestId. */
+  conversationId?: string;
+  /** Idempotência por tentativa: mesmo id sob a mesma conversa não é reprocessado. */
+  clientRequestId?: string;
 }
 
 export async function askFinance(params: AskFinanceParams): Promise<AskApiResponse> {
@@ -79,6 +83,8 @@ export async function askFinance(params: AskFinanceParams): Promise<AskApiRespon
       body: JSON.stringify({
         question: params.question,
         period: params.period,
+        conversationId: params.conversationId,
+        clientRequestId: params.clientRequestId,
       }),
       signal: params.signal,
     });

@@ -58,6 +58,7 @@ import type { AnalyticsTxRow } from '../../src/lib/analytics.js';
 import { formatShortDate } from '../../src/lib/period.js';
 import { MAX_QUESTION_LENGTH } from './orchestrator.js';
 import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
+import type { ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
 
 export type DeterministicIntent =
   | 'total_expenses'
@@ -76,12 +77,16 @@ export interface DeterministicIntentResult {
 export interface DeterministicAnswer {
   intent: DeterministicIntent;
   response: AskResponse;
+  /** Lente de categoria efetivamente aplicada (matchTerm canônico), quando resolvida. */
+  category?: string;
 }
 
 export interface DeterministicRouterDeps {
   supabase: SupabaseClient;
   question: string;
   period?: { start: string; end: string };
+  /** Contexto de continuidade da conversa (PESSOAL-13C2). Opcional: sem contexto = comportamento atual. */
+  context?: ChatContextState;
 }
 
 // ── Helpers de formatação (pt-BR, sem Markdown) ───────────────
@@ -191,7 +196,7 @@ function monthNameOfYearMonth(key: string): string {
 
 // ── Período da pergunta ────────────────────────────────────────
 
-export type DetectedPeriodSource = 'month' | 'year' | 'screen' | 'current';
+export type DetectedPeriodSource = 'month' | 'year' | 'screen' | 'current' | 'context';
 
 export interface ResolvedQueryPeriod {
   start: string;
@@ -280,8 +285,122 @@ function isValidScreenPeriod(p: { start: string; end: string }): boolean {
   );
 }
 
+// ── Contexto de continuidade (PESSOAL-13C2) ────────────────────
+
+/** Prefixos de follow-up que indicam continuacao da conversa. */
+const CONTINUATION_RE =
+  /^(?:e|e\s+(?:em|no|na|com|para|ai|agora|depois|sobre)|e\s+se|entao|depois)\b/i;
+
+export interface AppliedContext {
+  /** Pergunta (possivelmente aumentada) para interpretacao. */
+  question: string;
+  /** Categoria herdada do contexto nesta pergunta (lens), ou null. */
+  inheritedCategory: string | null;
+  /**
+   * true = o periodo NÃO foi citado explicitamente na pergunta, logo o periodo
+   * do contexto prevalece sobre o periodo da tela (prioridade do briefing:
+   * explicito > contexto > tela).
+   */
+  contextPeriodFallback: boolean;
+}
+
+/**
+ * Aplica a continuidade da conversa a uma pergunta follow-up:
+ *   - "E em maio?"            => herda a categoria do contexto, mantem maio;
+ *   - "E aí?"/"E no período?"  => monta pergunta canonica com categoria+periodo
+ *                                  do contexto (e marca fallback de periodo);
+ *   - "E com combustível?"     => troca a lente (categoria nova); periodo herda
+ *                                  do contexto se nao citado;
+ *   - "E com combustível em junho?" => substitui ambos (nada herdado);
+ *   - pergunta SEM prefixo de continuacao => igual a hoje (sem contexto).
+ * Nunca injeta contexto em perguntas de conselho/analise (não canonizáveis).
+ */
+export function applyContextToQuestion(
+  question: string,
+  context: ChatContextState,
+): AppliedContext {
+  const q = (question ?? '').trim();
+  const fallback: AppliedContext = {
+    question: q,
+    inheritedCategory: null,
+    contextPeriodFallback: false,
+  };
+  if (!context || !q) return fallback;
+  const norm = normalizeText(q);
+  if (!CONTINUATION_RE.test(norm)) return fallback;
+
+  const tempResolved = resolveQueryPeriod(q, null);
+  const stripped = stripPeriodPhrases(norm, tempResolved);
+  const explicitCategory =
+    extractCategoryTerm(stripped) ?? extractContinuationCategory(stripped);
+  const explicitPeriod =
+    tempResolved.source === 'month' || tempResolved.source === 'year';
+
+  if (explicitCategory || (context.intent !== 'category_total' &&
+      context.intent !== 'month_most_spent' &&
+      context.intent !== 'total_expenses' &&
+      context.intent !== 'total_income' &&
+      context.intent !== 'period_balance' &&
+      context.intent !== 'expense_count')) {
+    // Lente nova explícita OU sem intencao canonizavel no contexto: apenas o
+    // período pode ser herdado quando nao citado ("E com combustível?").
+    return { question: q, inheritedCategory: null, contextPeriodFallback: !explicitPeriod };
+  }
+
+  if (!explicitPeriod) {
+    // "E aí?" / "E no período?" => pergunta canonica herda tudo (categoria menor).
+    let augmented: string | null = null;
+    if (context.category) {
+      augmented = `quanto gastei em ${context.category} no período`;
+    } else if (context.intent === 'total_expenses') {
+      augmented = 'quanto gastei no período';
+    } else if (context.intent === 'total_income') {
+      augmented = 'quanto recebi no período';
+    } else if (context.intent === 'period_balance') {
+      augmented = 'qual foi o resultado do período';
+    } else if (context.intent === 'expense_count') {
+      augmented = 'quantas despesas no período';
+    }
+    return {
+      question: augmented ?? q,
+      inheritedCategory: context.category,
+      contextPeriodFallback: true,
+    };
+  }
+
+  // "E em maio?" => herda a categoria (lens), mantem o periodo citado.
+  if (context.category) {
+    const phrase = tempResolved.monthLower ?? '';
+    return {
+      question: `quanto gastei em ${context.category} em ${phrase}`.trim(),
+      inheritedCategory: context.category,
+      contextPeriodFallback: false,
+    };
+  }
+  return { question: q, inheritedCategory: null, contextPeriodFallback: false };
+}
+
+/** Converte um período do contexto em ResolvedQueryPeriod (fonte 'context'). */
+function resolvedFromContextPeriod(p: ChatPeriod): ResolvedQueryPeriod {
+  const m = /^(\d{4})-(\d{2})-01$/.exec(p.start);
+  const fullMonth =
+    !!m && p.end === lastDayOf(m[1], Number(m[2]));
+  return fullMonth
+    ? {
+        start: p.start,
+        end: p.end,
+        source: 'context',
+        year: m[1],
+        month: `${m[1]}-${m[2]}`,
+        monthLower: `${MONTH_FULL[Number(m[2]) - 1] ?? ''} de ${m[1]}`,
+      }
+    : { start: p.start, end: p.end, source: 'context' };
+}
+
 function periodPhraseOf(p: ResolvedQueryPeriod): string {
-  if (p.source === 'month') return `em ${p.monthLower ?? ''}`.trim();
+  if (p.source === 'month' || (p.source === 'context' && p.monthLower)) {
+    return `em ${p.monthLower ?? ''}`.trim();
+  }
   if (p.source === 'year') return `em ${p.year ?? ''}`.trim();
   return 'no período';
 }
@@ -341,6 +460,37 @@ function extractCategoryTerm(stripped: string): string | null {
   const normTerm = normalizeText(term);
   if (
     /\b(?:quanto|qual|meses?|periodo|ano|informe|diga|mostre|retorne|responda)\b/.test(
+      normTerm,
+    )
+  ) {
+    return null;
+  }
+  const firstToken = normTerm.split(/\s+/)[0];
+  if (MONTH_BY_NORM[firstToken]) return null;
+  return term;
+}
+
+/**
+ * Follow-ups do tipo "E com <termo>?" (ou "E em <termo>?") trocam a lente de
+ * categoria: o termo após a preposição vira a categoria explícita da pergunta.
+ * Palavras de ligação/vazio ("aí", "agora", "depois", "no período") não contam
+ * como lente. Period refs já foram removidos de `stripped` (ver
+ * stripPeriodPhrases), então "E com combustível em junho?" cai aqui como
+ * "e com combustivel".
+ */
+const CONTINUATION_CATEGORY_RE = /^e\s+(?:com|em|na|no|de|para|sobre)\s+(.+)$/i;
+
+function extractContinuationCategory(stripped: string): string | null {
+  const t = (stripped ?? '').replace(/[?.!;]+$/g, '').trim();
+  if (!t) return null;
+  const m = CONTINUATION_CATEGORY_RE.exec(t);
+  if (!m) return null;
+  let term = m[1].replace(/\s{2,}/g, ' ').trim();
+  if (!term) return null;
+  const normTerm = normalizeText(term);
+  if (
+    !normTerm.includes('>') &&
+    /\b(?:quanto|qual|ai|agora|depois|meses?|periodo|ano|informe|diga|entao)\b/.test(
       normTerm,
     )
   ) {
@@ -820,6 +970,7 @@ async function buildCategoryTotal(
   return {
     intent: 'category_total',
     response: makeResponse(answer, resolved, ['expenses_by_category'], evidence),
+    category: label,
   };
 }
 
@@ -857,6 +1008,7 @@ async function buildMonthMost(
         { label: `${label}`, value: brl(0) },
         { label: 'Período analisado', value: periodDisplay(resolved) },
       ]),
+      category: label,
     };
   }
 
@@ -915,6 +1067,7 @@ async function buildMonthMost(
   return {
     intent: 'month_most_spent',
     response: makeResponse(answer, resolved, ['expense_monthly_aggregate'], evidence),
+    category: label,
   };
 }
 
@@ -992,13 +1145,32 @@ export async function runDeterministicAsk(
 
   // PESSOAL-13C1.1: interpreta apenas a pergunta principal (rótulos copiados,
   // instruções após '?'/quebra/verbos NUNCA participam da intenção/categoria).
-  const q = extractMainQuestion(raw);
+  let q = extractMainQuestion(raw);
   if (!q || q.length > MAX_QUESTION_LENGTH) return null;
 
   const screen =
     deps.period && isValidScreenPeriod(deps.period) ? deps.period : null;
-  const resolved = resolveQueryPeriod(q, screen);
-  const intent = detectIntent(q, resolved);
+
+  // PESSOAL-13C2: continuidade da conversa. Follow-ups ("E em maio?") herdam
+  // a lente de categoria e o período do contexto. Sem contexto = comportamento
+  // atual (o campo é opcional no deps).
+  let question = q;
+  let contextPeriodFallback = false;
+  if (deps.context) {
+    const applied = applyContextToQuestion(q, deps.context);
+    question = applied.question;
+    contextPeriodFallback = applied.contextPeriodFallback;
+  }
+
+  let resolved = resolveQueryPeriod(question, screen);
+  if (
+    contextPeriodFallback &&
+    deps.context?.period &&
+    (resolved.source === 'screen' || resolved.source === 'current')
+  ) {
+    resolved = resolvedFromContextPeriod(deps.context.period);
+  }
+  const intent = detectIntent(question, resolved);
   if (!intent) return null;
 
   // Capabilidade: paginação (`range`) é pré-requisito do fast-path. Sem ela,
@@ -1013,7 +1185,7 @@ export async function runDeterministicAsk(
       return await buildCategoryTotal(deps.supabase, resolved, intent.category);
     }
     if (intent.intent === 'monthly_comparison') {
-      return await buildMonthlyComparison(deps.supabase, q);
+      return await buildMonthlyComparison(deps.supabase, question);
     }
     if (
       intent.intent === 'total_expenses' ||

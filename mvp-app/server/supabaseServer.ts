@@ -27,7 +27,11 @@ export function resolveSupabaseEnv(env: Record<string, string | undefined>): Ser
 export async function createUserSupabaseClient(
   env: Record<string, string | undefined>,
   accessToken: string,
-): Promise<{ client: SupabaseClient; userId: string }> {
+): Promise<{
+  client: SupabaseClient;
+  userId: string;
+  user: NonNullable<Awaited<ReturnType<SupabaseClient['auth']['getUser']>>['data']['user']> | null;
+}> {
   const { url, anonKey } = resolveSupabaseEnv(env);
   const client = createClient(url, anonKey, {
     auth: {
@@ -45,7 +49,7 @@ export async function createUserSupabaseClient(
   if (error || !data.user) {
     throw new AuthTokenError();
   }
-  return { client, userId: data.user.id };
+  return { client, userId: data.user.id, user: data.user };
 }
 
 export class AuthTokenError extends Error {

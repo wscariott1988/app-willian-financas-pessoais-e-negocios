@@ -172,6 +172,10 @@ export interface GeminiClient {
 export interface AskRequest {
   question: string;
   period?: { start: string; end: string };
+  /** Chat persistente (PESSOAL-13C2): id da conversa; exige clientRequestId. */
+  conversationId?: string;
+  /** Idempotência por tentativa: mesmo id sob a mesma conversa não é reprocessado. */
+  clientRequestId?: string;
 }
 
 export interface EvidenceItem {

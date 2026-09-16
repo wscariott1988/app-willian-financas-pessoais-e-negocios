@@ -23,10 +23,27 @@ import {
   currentMonthPeriod,
   ORCHESTRATOR_TIMEOUT_MS,
 } from '../../server/finance-ai/orchestrator.js';
+import type { AskResponse } from '../../server/finance-ai/types.js';
 import { getRegisteredGeminiClient } from '../../server/finance-ai/geminiClient.js';
 import { createGeminiSdkClient } from '../../server/finance-ai/geminiSdkClient.js';
 import { createUserSupabaseClient, AuthTokenError } from '../../server/supabaseServer.js';
+import { trustedIdentityMissing } from '../../server/auth/identityGate.js';
 import { runDeterministicAsk } from '../../server/finance-ai/deterministicRouter.js';
+import {
+  beginChatTurn,
+  completeChatTurn,
+  failChatTurn,
+  ChatOwnershipError,
+  type BeginTurnResult,
+  type ChatConversationSnapshot,
+} from '../../server/chat/chatStore.js';
+import {
+  contextFromTurn,
+  geminiContextBlock,
+  titleFromQuestion,
+} from '../../server/chat/chatContext.js';
+import type { ChatMessagePayload } from '../../server/chat/chatTypes.js';
+import { CHAT_GEMINI_RECENT_MSGS } from '../../server/chat/chatTypes.js';
 import {
   AskError,
   buildFailureEvent,
@@ -238,11 +255,50 @@ function emitFailure(opts: {
   );
 }
 
+interface CachedTurn {
+  answer: string;
+  payload: ChatMessagePayload | null;
+  periodAnalyzed: { start: string; end: string } | null;
+}
+
+/** Reconstitui a AskResponse de uma resposta já concluída (clique duplo/reenvio). */
+function cachedResponseOf(turn: CachedTurn): AskResponse {
+  return {
+    answer: turn.answer,
+    period: turn.periodAnalyzed ?? null,
+    toolsUsed: turn.payload?.toolsUsed ?? [],
+    evidence: turn.payload?.evidence ?? [],
+    engine: turn.payload?.engine ?? 'deterministic',
+    geminiCallCount: turn.payload?.geminiCallCount ?? 0,
+    periodAnalyzed: turn.periodAnalyzed ?? undefined,
+  };
+}
+
+/** Últimas respostas concluídas da conversa (para o bloco de contexto do Gemini). */
+async function recentAssistantContents(
+  client: SupabaseClient,
+  conversationId: string,
+  limit: number,
+): Promise<string[]> {
+  const { data, error } = await client
+    .from('chat_messages')
+    .select('content')
+    .eq('conversation_id', conversationId)
+    .eq('role', 'assistant')
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{ content?: string }>;
+  return [...rows].reverse().map((r) => r.content ?? '');
+}
+
 export async function handler(req: Request): Promise<Response>;
 export async function handler(req: Request, res: NodeResponseLike): Promise<void>;
 export async function handler(req: Request, res?: NodeResponseLike): Promise<Response | void> {
   const requestId = newRequestId();
   const startedAt = Date.now();
+  const env = process.env as Record<string, string | undefined>;
 
   if (req.method !== 'POST') {
     return respond(res, 405, { error: 'method_not_allowed', message: 'Método não permitido. Use POST.' });
@@ -267,12 +323,26 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
   if (validation.ok !== true) {
     return respond(res, 400, { error: 'bad_request', message: error ?? 'Corpo da requisição inválido.' });
   }
-  const body = rawBody as { question: string; period?: { start: string; end: string } };
+  const body = rawBody as {
+    question: string;
+    period?: { start: string; end: string };
+    conversationId?: string;
+    clientRequestId?: string;
+  };
 
-  let userClient: { client: SupabaseClient; userId: string };
+  // PESSOAL-13C2: chat persistente. A persistência é ativada SOMENTE quando o
+  // cliente envia os DOIS ids (conversationId + clientRequestId). Sem eles o
+  // fluxo permanece 100% stateless (comportamento atual).
+  const persistenceEnabled = !!body.conversationId && !!body.clientRequestId;
+
+  let userClient: {
+    client: SupabaseClient;
+    userId: string;
+    user: { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> } | null;
+  };
   try {
     userClient = await createUserSupabaseClient(
-      process.env as Record<string, string | undefined>,
+      env,
       token,
     );
   } catch (err) {
@@ -305,6 +375,28 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
     return respond(res, 502, friendlyForOutcome('config'));
   }
 
+  // PESSOAL-13C2A.1 — identidade FAIL-CLOSED. O corpo da requisição NUNCA
+  // informa a identidade: ela vem exclusivamente do usuário autenticado
+  // (metadados verificados pelo JWT no supabaseServer). Sem identidade
+  // confiável — sem body, sem perfil padrão — a requisição falha com 403. O
+  // fallback legado só existe fora de produção (ver identityGate) e é
+  // IMPOSSÍVEL no runtime Vercel (environment estrito sempre).
+  if (userClient?.user && trustedIdentityMissing(userClient.user, env)) {
+    emitFailure({
+      requestId,
+      startedAt,
+      stage: 'auth',
+      category: 'supabase_auth_error',
+      errorName: 'profile_not_identified',
+      httpStatus: 403,
+      classification: { category: 'supabase_auth_error', retryable: false },
+    });
+    return respond(res, 403, {
+      error: 'profile_not_identified',
+      message: 'Perfil não identificado. Entre novamente para continuar.',
+    });
+  }
+
   // PESSOAL-13C1: rota determinística ANTES de qualquer Gemini — perguntas
   // simples (totais, categoria, mês com maior gasto) são respondidas direto dos
   // dados financeiros com custo Gemini zero. Quando a intenção não é de alta
@@ -312,13 +404,92 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ORCHESTRATOR_TIMEOUT_MS);
 
+  // PESSOAL-13C2: turno ativo da conversa (âncora assistant + contexto).
+  let activeTurn: BeginTurnResult | null = null;
+  let freshConversation: ChatConversationSnapshot | null = null;
+  let assistantCreated = false;
+
   try {
+    if (persistenceEnabled) {
+      const begun = await beginChatTurn(userClient.client, {
+        conversationId: body.conversationId as string,
+        clientRequestId: body.clientRequestId as string,
+        question: body.question,
+      });
+      // PESSOAL-13C2B.1: união discriminada tratada por switch exaustivo. O
+      // membro `conversation` SÓ existe no estado 'fresh' — nunca lemos o campo
+      // pela união crua (acesso assim quebrava o type-check do builder
+      // @vercel/node). Cada estado é tratado explicitamente; um novo `kind`
+      // sem case vira erro de compilação no default (nenhuma asserção insegura).
+      switch (begun.kind) {
+        case 'in_flight':
+          return respond(res, 409, {
+            error: 'in_flight',
+            message: 'Esta pergunta já está sendo processada.',
+          });
+        case 'cached':
+          emitSanitizedSuccessEvent(
+            buildSuccessEvent({
+              requestId,
+              engine: begun.payload?.engine ?? 'deterministic',
+              elapsedMs: Date.now() - startedAt,
+              geminiCallCount: begun.payload?.geminiCallCount ?? 0,
+            }),
+          );
+          return respond(res, 200, cachedResponseOf(begun));
+        case 'cached_failure':
+          return respond(res, 502, {
+            error: 'upstream',
+            message: begun.message,
+          });
+        case 'fresh':
+          freshConversation = begun.conversation;
+          activeTurn = begun;
+          assistantCreated = true;
+          break;
+        default: {
+          const exhaustive: never = begun;
+          void exhaustive;
+          throw new Error('Estado de turno inesperado (unreachable).');
+        }
+      }
+    }
+    const conversationContext = freshConversation?.context ?? null;
+    const conversationTitle = freshConversation?.title ?? '';
+
     const deterministic = await runDeterministicAsk({
       supabase: userClient.client,
       question: body.question,
       period: body.period,
+      context: conversationContext ?? undefined,
     });
     if (deterministic) {
+      if (activeTurn) {
+        await completeChatTurn(userClient.client, {
+          conversationId: body.conversationId as string,
+          clientRequestId: body.clientRequestId as string,
+          answer: deterministic.response.answer,
+          payload: {
+            engine: 'deterministic',
+            geminiCallCount: 0,
+            toolsUsed: deterministic.response.toolsUsed,
+            evidence: deterministic.response.evidence ?? [],
+          },
+          intent: deterministic.intent,
+          engine: 'deterministic',
+          periodAnalyzed:
+            deterministic.response.periodAnalyzed ?? deterministic.response.period,
+          context: contextFromTurn(conversationContext, {
+            intent: deterministic.intent,
+            category: deterministic.category ?? null,
+            periodAnalyzed:
+              deterministic.response.periodAnalyzed ?? deterministic.response.period,
+            answer: deterministic.response.answer,
+          }),
+          setTitle: !conversationTitle,
+          title: titleFromQuestion(body.question),
+        });
+      }
       emitSanitizedSuccessEvent(
         buildSuccessEvent({
           requestId,
@@ -335,9 +506,43 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
     // GEMINI_API_KEY → null (resposta controlada sem a chave).
     const gemini =
       getRegisteredGeminiClient() ??
-      createGeminiSdkClient(process.env as Record<string, string | undefined>);
+      createGeminiSdkClient(env);
     if (!gemini) {
       const current = currentMonthPeriod();
+      const canned: AskResponse = {
+        answer:
+          'A análise de inteligência financeira ainda não está configurada neste ambiente. ' +
+          'Por favor, tente novamente mais tarde.',
+        period: current,
+        toolsUsed: [],
+        evidence: [],
+        engine: 'gemini',
+        geminiCallCount: 0,
+        periodAnalyzed: current,
+      };
+      if (activeTurn) {
+        await completeChatTurn(userClient.client, {
+          conversationId: body.conversationId as string,
+          clientRequestId: body.clientRequestId as string,
+          answer: canned.answer,
+          payload: {
+            engine: 'gemini',
+            geminiCallCount: 0,
+            toolsUsed: [],
+          },
+          intent: null,
+          engine: 'gemini',
+          periodAnalyzed: current,
+          context: contextFromTurn(conversationContext, {
+            intent: null,
+            category: null,
+            periodAnalyzed: current,
+            answer: canned.answer,
+          }),
+          setTitle: !conversationTitle,
+          title: titleFromQuestion(body.question),
+        });
+      }
       emitSanitizedSuccessEvent(
         buildSuccessEvent({
           requestId,
@@ -346,16 +551,17 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
           geminiCallCount: 0,
         }),
       );
-      return respond(res, 200, {
-        answer:
-          'A análise de inteligência financeira ainda não está configurada neste ambiente. ' +
-          'Por favor, tente novamente mais tarde.',
-        period: current,
-        toolsUsed: [],
-        evidence: [],
-        ...{ engine: 'gemini', geminiCallCount: 0, periodAnalyzed: current },
-      });
+      return respond(res, 200, canned);
     }
+
+    // Bloco de contexto compacto para o Gemini (teto rígido em chatContext).
+    const recent = activeTurn
+      ? await recentAssistantContents(userClient.client, body.conversationId as string, CHAT_GEMINI_RECENT_MSGS)
+      : [];
+    const contextSummary =
+      activeTurn && conversationContext
+        ? geminiContextBlock(conversationContext, recent)
+        : undefined;
 
     const result = await runFinanceAsk({
       supabase: userClient.client,
@@ -363,7 +569,32 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
       question: body.question,
       period: body.period,
       signal: controller.signal,
+      contextSummary,
     });
+    if (activeTurn) {
+      await completeChatTurn(userClient.client, {
+        conversationId: body.conversationId as string,
+        clientRequestId: body.clientRequestId as string,
+        answer: result.answer,
+        payload: {
+          engine: 'gemini',
+          geminiCallCount: result.geminiCallCount ?? 0,
+          toolsUsed: result.toolsUsed,
+          evidence: result.evidence ?? [],
+        },
+        intent: null,
+        engine: 'gemini',
+        periodAnalyzed: result.periodAnalyzed ?? result.period,
+        context: contextFromTurn(conversationContext, {
+          intent: null,
+          category: null,
+          periodAnalyzed: result.periodAnalyzed ?? result.period,
+          answer: result.answer,
+        }),
+        setTitle: !conversationTitle,
+        title: titleFromQuestion(body.question),
+      });
+    }
     emitSanitizedSuccessEvent(
       buildSuccessEvent({
         requestId,
@@ -374,7 +605,24 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
     );
     return respond(res, 200, result);
   } catch (err) {
+    if (err instanceof ChatOwnershipError) {
+      return respond(res, 404, {
+        error: 'not_found',
+        message: 'Conversa não encontrada.',
+      });
+    }
     const failure = resolveFailure(err);
+    if (assistantCreated && activeTurn) {
+      try {
+        await failChatTurn(userClient.client, {
+          conversationId: body.conversationId as string,
+          clientRequestId: body.clientRequestId as string,
+          message: friendlyForOutcome(failure.outcome).message,
+        });
+      } catch {
+        // Persistência da falha é best-effort: a resposta de erro ao cliente é a prioridade.
+      }
+    }
     emitFailure({
       requestId,
       startedAt,

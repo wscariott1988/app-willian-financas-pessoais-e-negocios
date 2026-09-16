@@ -102,6 +102,17 @@ export function validateAskRequest(body: unknown): { ok: true } | { ok: false; e
       return { ok: false, error: 'A data inicial não pode ser posterior à data final.' };
     }
   }
+  if (req.conversationId !== undefined || req.clientRequestId !== undefined) {
+    if (
+      typeof req.conversationId !== 'string' ||
+      typeof req.clientRequestId !== 'string'
+    ) {
+      return { ok: false, error: 'Para continuar uma conversa, informe conversationId e clientRequestId.' };
+    }
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(req.clientRequestId)) {
+      return { ok: false, error: 'Identificador da tentativa inválido.' };
+    }
+  }
   return { ok: true };
 }
 
@@ -140,6 +151,8 @@ export interface OrchestratorDeps {
   period?: { start: string; end: string };
   signal?: AbortSignal;
   maxToolCalls?: number;
+  /** Bloco compacto de contexto da conversa (PESSOAL-13C2), com teto rígido. Opcional. */
+  contextSummary?: string;
 }
 
 async function sendGeminiStage(
@@ -180,8 +193,12 @@ export async function runFinanceAsk(deps: OrchestratorDeps): Promise<AskResponse
       ? { start: deps.period.start, end: deps.period.end }
       : currentMonthPeriod();
 
+  const userParts = deps.contextSummary
+    ? `Contexto da conversa anterior:\n${deps.contextSummary}\n\nPergunta atual: ${q}`
+    : q;
+
   const messages: GeminiMessage[] = [
-    { role: 'user', parts: q },
+    { role: 'user', parts: userParts },
   ];
   const toolsUsed: string[] = [];
   const evidence: EvidenceItem[] = [];
