@@ -54,6 +54,13 @@ export interface SentPayload {
 
 export type ChatAction =
   | { type: 'conversations_loaded'; conversations: ChatConversationItem[] }
+  | {
+      type: 'conversation_upserted';
+      // PESSOAL-13C2B.6: upsert de UMA conversa na lista (criada no browser ou
+      // movida para o topo após nova mensagem). Campos parciais fazem merge
+      // sobre o item existente (título preservado); id é sempre obrigatório.
+      conversation: Partial<Omit<ChatConversationItem, 'id'>> & { id: string };
+    }
   | { type: 'select'; id: string | null }
   | { type: 'new_chat' }
   | { type: 'messages_loaded'; messages: UiMessage[]; hasMore: boolean }
@@ -126,6 +133,34 @@ export function mergeServerMessages(
   return dedupeMessages([...kept, ...incoming]);
 }
 
+/**
+ * PESSOAL-13C2B.6 — merge de uma hidratação (lista do servidor) com itens
+ * criados localmente nesta sessão enquanto a leitura estava pendente.
+ * O servidor vence em ids duplicados (fonte canônica); itens SOMENTE locais
+ * são preservados (uma hidratação lenta nunca apaga a conversa que o usuário
+ * acabou de criar). ids em `removedIds` são descartados mesmo se ainda
+ * estiverem no snapshot do servidor (remoção enquanto a hidratação rodava).
+ * Resultado ordenado por lastMessageAt decrescente.
+ */
+export function mergeServerConversationList(
+  server: ChatConversationItem[],
+  local: ChatConversationItem[],
+  removedIds?: ReadonlySet<string>,
+): ChatConversationItem[] {
+  const byId = new Map<string, ChatConversationItem>();
+  for (const c of server) {
+    if (removedIds?.has(c.id)) continue;
+    byId.set(c.id, c);
+  }
+  for (const c of local) {
+    if (removedIds?.has(c.id)) continue;
+    if (!byId.has(c.id)) byId.set(c.id, c);
+  }
+  return [...byId.values()].sort((a, b) =>
+    b.lastMessageAt.localeCompare(a.lastMessageAt),
+  );
+}
+
 export function chatReducer(state: ChatUiState, action: ChatAction): ChatUiState {
   switch (action.type) {
     case 'conversations_loaded': {
@@ -152,6 +187,28 @@ export function chatReducer(state: ChatUiState, action: ChatAction): ChatUiState
         error: null,
         confirmDeleteId: null,
       };
+    case 'conversation_upserted': {
+      const c = action.conversation;
+      const idx = state.conversations.findIndex((x) => x.id === c.id);
+      const item =
+        idx === -1
+          ? { id: c.id, title: c.title ?? '', lastMessageAt: c.lastMessageAt ?? '' }
+          : {
+              ...state.conversations[idx],
+              title: c.title ?? state.conversations[idx].title,
+              lastMessageAt: c.lastMessageAt ?? state.conversations[idx].lastMessageAt,
+            };
+      const conversations = idx === -1
+        ? [...state.conversations, item]
+        : state.conversations.map((x, i) => (i === idx ? item : x));
+      return {
+        ...state,
+        conversations: [...conversations].sort((a, b) =>
+          b.lastMessageAt.localeCompare(a.lastMessageAt),
+        ),
+        error: null,
+      };
+    }
     case 'new_chat':
       return {
         ...state,

@@ -10,10 +10,23 @@
 //     servidor persistiu (UNIQUE(conversation_id, client_request_id));
 //   - a lógica de mudança de estado vive em src/lib/chatState (reducer puro).
 //
+// PESSOAL-13C2B.6:
+//   - hidratação real no mount: listConversations → conversations_loaded →
+//     auto-seleção da conversa mais recente → listMessages → messages_loaded;
+//   - corridas: a hidratação lenta nunca apaga conversa criada/selecionada pelo
+//     usuário no intervalo (merge com itens locais + guarda hydrateActedRef) e
+//     nunca despacha após unmount (mountedRef + AbortController no cleanup),
+//     com suporte a React StrictMode (dispatches cancelados no primeiro run);
+//   - conversa recém-criada entra na sidebar imediatamente (conversation_upserted
+//     com id canônico do servidor) e cada resposta atualiza lastMessageAt e move
+//     para o topo sem duplicar;
+//   - falha de LEITURA vira mensagem amigável de carregamento (nunca "lista
+//     vazia" nem "Serviço de inteligência indisponível").
+//
 // Regras invariantes mantidas: nunca expõe config técnica/secrets para o
 // usuário final; o perfil da conversa nunca vem do cliente (RLS decide).
 
-import { useReducer, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import {
   Sparkles,
   Send,
@@ -34,6 +47,8 @@ import {
   createChatState,
   shouldSendOnEnter,
   uiTitleFor,
+  mergeServerConversationList,
+  type ChatConversationItem,
   type ChatUiState,
   type SentPayload,
   type UiMessage,
@@ -77,15 +92,42 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PESSOAL-13C2B.6: true do mount até a hidratação assentar (sucesso ou falha).
+  // Em SSR não há efeitos → nasce false para manter o contrato da C1 (as
+  // sugestões visíveis no markup original); no browser nasce true e a
+  // hidratação destrava a UI.
+  const [hydrating, setHydrating] = useState(() => typeof window !== 'undefined');
   const inFlight = useRef(false);
   const pageRef = useRef(0);
   const cridSeq = useRef(0);
+  // Verdadeiro enquanto o componente está montado; impede despacho tardio.
+  const mountedRef = useRef(true);
+  // Verdadeiro quando o usuário já criou/selecionou/nova conversa enquanto a
+  // hidratação estava pendente — nesse caso a auto-seleção é abandonada.
+  const hydrateActedRef = useRef(false);
+  // Itens confirmados nesta sessão (criados no browser) e ids removidos:
+  // evitam que um snapshot lento da hidratação apague/re-adicione essas linhas.
+  const sessionLocalsRef = useRef<Map<string, ChatConversationItem>>(new Map());
+  const sessionRemovedRef = useRef<Set<string>>(new Set());
 
-  const loadMessages = async (conversationId: string, page: number) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadMessages = async (
+    conversationId: string,
+    page: number,
+    signal?: AbortSignal,
+  ) => {
     const { messages, hasMore } = await chatApi.listMessages(
       conversationId,
       page,
+      signal,
     );
+    if (!mountedRef.current) return;
     dispatch(
       page === 0
         ? { type: 'messages_loaded', messages, hasMore }
@@ -93,17 +135,20 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
     );
   };
 
-  const openConversation = async (id: string) => {
+  const openConversation = async (id: string, signal?: AbortSignal) => {
+    hydrateActedRef.current = true;
     pageRef.current = 0;
     dispatch({ type: 'select', id });
     try {
-      await loadMessages(id, 0);
+      await loadMessages(id, 0, signal);
     } catch (err) {
+      if (!mountedRef.current || signal?.aborted) return;
       dispatch({ type: 'fail', message: messageError(err) });
     }
   };
 
   const handleNewChat = () => {
+    hydrateActedRef.current = true;
     pageRef.current = 0;
     dispatch({ type: 'new_chat' });
     setQuestion('');
@@ -116,6 +161,8 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
   const handleDeleteConfirm = async (id: string) => {
     try {
       await chatApi.deleteConversation(id);
+      sessionLocalsRef.current.delete(id);
+      sessionRemovedRef.current.add(id);
       dispatch({ type: 'deleted', id });
       if (chat.activeId === id) setQuestion('');
     } catch (err) {
@@ -126,6 +173,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
   const send = async (text: string) => {
     const q = text.trim();
     if (!q || inFlight.current) return;
+    hydrateActedRef.current = true;
     inFlight.current = true;
     setLoading(true);
     setError(null);
@@ -134,6 +182,15 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
     try {
       if (targetId === null) {
         const created = await chatApi.createConversation();
+        // PESSOAL-13C2B.6: a conversa recém-criada entra na sidebar imediatamente
+        // (id canônico retornado pelo servidor), antes mesmo da resposta chegar.
+        const item: ChatConversationItem = {
+          id: created.id,
+          title: uiTitleFor(q),
+          lastMessageAt: new Date().toISOString(),
+        };
+        sessionLocalsRef.current.set(created.id, item);
+        dispatch({ type: 'conversation_upserted', conversation: item });
         dispatch({ type: 'select', id: created.id });
         targetId = created.id;
       }
@@ -161,6 +218,19 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       payload.periodAnalyzed = response.periodAnalyzed ?? response.period ?? undefined;
       payload.evidence = response.evidence ?? undefined;
       dispatch({ type: 'send_success', clientRequestId: crid, payload });
+      // PESSOAL-13C2B.6: resposta concluída → atualiza lastMessageAt e move a
+      // conversa para o topo da sidebar (título é PRESERVADO pelo reducer).
+      const now = new Date().toISOString();
+      const previous = sessionLocalsRef.current.get(targetId);
+      sessionLocalsRef.current.set(targetId, {
+        id: targetId,
+        title: previous?.title ?? uiTitleFor(q),
+        lastMessageAt: now,
+      });
+      dispatch({
+        type: 'conversation_upserted',
+        conversation: { id: targetId, lastMessageAt: now },
+      });
     } catch (err) {
       dispatch({
         type: 'send_error',
@@ -208,6 +278,47 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
     void loadMessages(chat.activeId, next);
   };
 
+  // PESSOAL-13C2B.6 — hidratação real no mount/remount (F5, login, troca de
+  // perfil via key={profileId}). Cleanup aborta a leitura e guards impedem
+  // despacho pós-unmount (mountedRef) e sobrescrita de trabalho do usuário
+  // (merge com itens locais + hydrateActedRef + sessionRemovedRef).
+  useEffect(() => {
+    const ac = new AbortController();
+    const run = async () => {
+      let convs: ChatConversationItem[];
+      try {
+        convs = await chatApi.listConversations(ac.signal);
+      } catch {
+        if (!mountedRef.current || ac.signal.aborted) return;
+        const msg =
+          'Não foi possível carregar suas conversas. Verifique sua conexão e tente novamente.';
+        setError(msg);
+        dispatch({ type: 'fail', message: msg });
+        setHydrating(false);
+        return;
+      }
+      if (!mountedRef.current || ac.signal.aborted) return;
+
+      const local = [...sessionLocalsRef.current.values()];
+      const merged =
+        local.length > 0 || sessionRemovedRef.current.size > 0
+          ? mergeServerConversationList(convs, local, sessionRemovedRef.current)
+          : convs;
+      dispatch({ type: 'conversations_loaded', conversations: merged });
+
+      if (hydrateActedRef.current || merged.length === 0) {
+        if (mountedRef.current) setHydrating(false);
+        return;
+      }
+      await openConversation(merged[0].id, ac.signal);
+      if (mountedRef.current) setHydrating(false);
+    };
+    void run();
+    return () => {
+      ac.abort();
+    };
+  }, []);
+
   return (
     <section className="analytics-section finance-ai-section" aria-label="Pergunte às suas finanças">
       <h2 className="analytics-section-title">
@@ -224,6 +335,12 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
           >
             <Plus size={15} /> Nova conversa
           </button>
+          {hydrating && (
+            <div className="finance-ai-chat-loading" role="status">
+              <Loader2 size={13} className="spin-animation" /> Carregando
+              conversas…
+            </div>
+          )}
           <ul className="finance-ai-chat-list">
             {chat.conversations.map((c) => (
               <li key={c.id} className="finance-ai-chat-item">
@@ -278,6 +395,16 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
                 <Bot size={16} /> Carregando conversa…
               </div>
             )}
+
+            {hydrating &&
+              chat.activeId === null &&
+              chat.messages.length === 0 &&
+              !error && (
+                <div className="analytics-state finance-ai-loading">
+                  <Loader2 size={16} className="spin-animation" /> Carregando suas
+                  conversas…
+                </div>
+              )}
 
             {chat.hasMore && chat.activeId !== null && chat.messages.length > 0 && (
               <button type="button" className="finance-ai-chip finance-ai-older" onClick={loadOlder}>
@@ -354,8 +481,15 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
             })}
           </div>
 
-          {chat.activeId === null && chat.messages.length === 0 && !error && (
-            <div className="finance-ai-suggestions" role="group" aria-label="Sugestões de perguntas">
+          {chat.activeId === null &&
+            chat.messages.length === 0 &&
+            !error &&
+            !hydrating && (
+              <div
+                className="finance-ai-suggestions"
+                role="group"
+                aria-label="Sugestões de perguntas"
+              >
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}

@@ -3389,6 +3389,17 @@ button.period-range-custom {
   gap: 2px;
 }
 
+.finance-ai-chat-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .finance-ai-chat-item {
   display: flex;
   align-items: center;

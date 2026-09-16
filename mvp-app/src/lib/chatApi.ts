@@ -80,12 +80,14 @@ function toUiMessage(row: RawMessageRow): UiMessage {
   };
 }
 
-export async function listConversations(): Promise<ChatConversationItem[]> {
-  const { data, error } = await supabase
+export async function listConversations(signal?: AbortSignal): Promise<ChatConversationItem[]> {
+  let q = supabase
     .from('chat_conversations')
     .select('id, title, last_message_at')
     .order('last_message_at', { ascending: false })
     .limit(30);
+  if (signal) q = q.abortSignal(signal);
+  const { data, error } = await q;
   if (error) {
     throw new ChatApiError('Não foi possível carregar o histórico de conversas.');
   }
@@ -129,10 +131,11 @@ export interface MessagesPage {
 export async function listMessages(
   conversationId: string,
   page: number,
+  signal?: AbortSignal,
 ): Promise<MessagesPage> {
   const from = page * CHAT_PAGE_SIZE;
   const to = from + CHAT_PAGE_SIZE - 1;
-  const { data, error } = await supabase
+  let q = supabase
     .from('chat_messages')
     .select(
       'id, role, status, content, payload, engine, period_analyzed, client_request_id, error, created_at',
@@ -140,6 +143,8 @@ export async function listMessages(
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .range(from, to);
+  if (signal) q = q.abortSignal(signal);
+  const { data, error } = await q;
   if (error) {
     throw new ChatApiError('Não foi possível carregar as mensagens.');
   }
