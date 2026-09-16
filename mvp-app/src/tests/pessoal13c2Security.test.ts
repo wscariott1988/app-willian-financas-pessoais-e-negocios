@@ -549,9 +549,19 @@ function sqlAt(rel: string): string {
 
 const MIGRATION_023 = readFileSync(new URL('../../../supabase/migrations/023_chat_persistence.sql', import.meta.url), 'utf8');
 const MIGRATION_024 = readFileSync(new URL('../../../supabase/migrations/024_chat_acl_least_privilege.sql', import.meta.url), 'utf8');
+const MIGRATION_025 = readFileSync(new URL('../../../supabase/migrations/025_remove_chat_message_delete_policy.sql', import.meta.url), 'utf8');
 
 function aclStatements(migration: string): string[] {
   return migration.split('\n').filter((l) => /^\s*(GRANT|REVOKE) /.test(l));
+}
+
+// Todas as STATEMENTS reais (linhas terminadas em ';' fora de comentário) —
+// permite exigir a lista EXATA de comandos de uma migration.
+function sqlStatements(migration: string): string[] {
+  return migration
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('--') && l.endsWith(';'));
 }
 
 describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
@@ -628,7 +638,13 @@ describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
   });
 
   it('nenhum dos scripts exige service_role nem transporta secrets', () => {
-    for (const rel of ['VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql', 'VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql', 'PREFLIGHT_CLOUD_023_CHAT_RLS_READONLY.sql', 'ROLLBACK_TEST_ONLY_023_CHAT_PERSISTENCE.sql']) {
+    for (const rel of [
+      'VERIFY_POST_CLOUD_023_CHAT_RLS_READONLY.sql',
+      'VERIFY_POST_CLOUD_024_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql',
+      'VERIFY_POST_CLOUD_025_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql',
+      'PREFLIGHT_CLOUD_023_CHAT_RLS_READONLY.sql',
+      'ROLLBACK_TEST_ONLY_023_CHAT_PERSISTENCE.sql',
+    ]) {
       expect(sqlAt(rel)).not.toContain('service_role');
     }
   });
@@ -744,5 +760,77 @@ describe('PESSOAL-13C2A.3 — auditoria estática do VERIFY 024 (ACL + comportam
     expect(roleSwitchIdx).toBeGreaterThan(beginIdx);
     const sobRoleSimulada = v.slice(roleSwitchIdx);
     expect(sobRoleSimulada).not.toMatch(/app\.jwt_(profile_id|role|sub)/);
+  });
+});
+
+// ── 7. PESSOAL-13C2A.4: policy latente removida (025) ─────────────────────
+
+describe('PESSOAL-13C2A.4 — auditoria estática do 025 (policy DELETE removida)', () => {
+  it('025: remove SOMENTE chat_messages_delete_own, em transação, idempotente, sem novos grants nem alteração de dados', () => {
+    // Lista EXATA de statements: BEGIN, único DROP POLICY, COMMIT — nada além.
+    const stmts = sqlStatements(MIGRATION_025);
+    expect(stmts).toEqual([
+      'BEGIN;',
+      'DROP POLICY IF EXISTS chat_messages_delete_own ON public.chat_messages;',
+      'COMMIT;',
+    ]);
+    // Sem statements de ACL (nenhum grant/revoke novo).
+    expect(aclStatements(MIGRATION_025)).toEqual([]);
+    // Sem DDL de tabela/constraint e sem DML (cascade e dados preservados).
+    expect(MIGRATION_025).not.toContain('DROP TABLE');
+    expect(MIGRATION_025).not.toContain('DROP CONSTRAINT');
+    expect(MIGRATION_025).not.toContain('ALTER TABLE');
+    expect(MIGRATION_025).not.toMatch(/\bINSERT INTO\b/);
+    expect(MIGRATION_025).not.toMatch(/\bDELETE FROM\b/);
+    expect(MIGRATION_025).not.toMatch(/\bUPDATE\b/i);
+    expect(MIGRATION_025).not.toMatch(/(service_role|postgres)/i);
+    expect(MIGRATION_025).not.toContain('app.');
+  });
+});
+
+describe('PESSOAL-13C2A.4 — auditoria estática do VERIFY final (025)', () => {
+  it('VERIFY final: exige ausência de policy DELETE em chat_messages e mantém policies SELECT/INSERT/UPDATE', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_025_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    // Stage A_sem_policy_delete_em_mensagens: explicitamente proíbe cmd='DELETE'
+    // e o nome antigo da policy.
+    expect(v).toContain('A_sem_policy_delete_em_mensagens');
+    expect(v).toContain("cmd = 'DELETE'");
+    expect(v).toContain('chat_messages_delete_own');
+    // Conversas mantêm as 4 policies (inclui DELETE da conversa).
+    expect(v).toContain("cmd IN ('SELECT','INSERT','UPDATE','DELETE')) = 4");
+    // Mensagens ficam com somente 3 policies (SELECT/INSERT/UPDATE).
+    expect(v).toContain("cmd IN ('SELECT','INSERT','UPDATE')) = 3");
+    expect(v).toContain("cmd = 'DELETE') = 0");
+  });
+
+  it('VERIFY final: comportamento em BEGIN/ROLLBACK exigindo 42501 EXATO no DELETE direto de mensagem', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_025_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    expect(v).toContain('BEGIN;');
+    expect(v).toContain('ROLLBACK;');
+    expect(v).toContain('SET LOCAL ROLE authenticated');
+    expect(v).toContain('set_config(');
+    expect(v).toContain('request.jwt.claims');
+    expect(v).toContain('to_regprocedure(');
+    expect(v).toContain('DELETE FROM public.chat_messages WHERE conversation_id = v_conv_a');
+    expect(v).toContain('GET STACKED DIAGNOSTICS');
+    expect(v).toContain('RETURNED_SQLSTATE');
+    expect(v).toContain("v_state <> '42501'");
+    expect(v).toContain('authenticated concluiu DELETE individual de mensagem');
+    expect(v).toContain('cascade');
+    expect(v).toMatch(/chat_messages WHERE conversation_id = v_conv_b/);
+    expect(v).not.toContain('INSERT INTO public.profiles');
+    expect(v).not.toContain('GRANT ');
+    expect(v).not.toContain('DROP ');
+    expect(v).not.toContain('service_role');
+    expect(v).not.toContain('GEMINI_API_KEY');
+  });
+
+  it('VERIFY final: nunca invoca helpers app.jwt_* sob authenticated/anon', () => {
+    const v = sqlAt('VERIFY_POST_CLOUD_025_CHAT_ACL_LEAST_PRIVILEGE_READONLY.sql');
+    const beginIdx = v.indexOf('BEGIN;');
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    const roleSwitchIdx = v.indexOf('SET LOCAL ROLE authenticated;', beginIdx);
+    expect(roleSwitchIdx).toBeGreaterThan(beginIdx);
+    expect(v.slice(roleSwitchIdx)).not.toMatch(/app\.jwt_(profile_id|role|sub)/);
   });
 });
