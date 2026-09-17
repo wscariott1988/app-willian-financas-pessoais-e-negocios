@@ -46,7 +46,7 @@
 // os contratos existentes. O comportamento completo (paginação) vale em produção.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AskResponse, EvidenceItem } from './types.js';
+import type { AskResponse, EvidenceItem, TrendCard } from './types.js';
 import {
   summaryByPeriod,
   expenseMonthlyAggregate,
@@ -56,6 +56,16 @@ import {
 } from '../../src/lib/analyticsInsights.js';
 import type { AnalyticsTxRow } from '../../src/lib/analytics.js';
 import { formatShortDate } from '../../src/lib/period.js';
+import {
+  analyzeCategoryGrowth,
+  buildTrendWindow,
+  savingsOpportunities,
+  type GrowthCategoryResult,
+  type GrowthClassification,
+  type SavingsOpportunity,
+  type TrendWindow,
+  type TrendWindowStyle,
+} from '../../src/lib/analyticsTrends.js';
 import { MAX_QUESTION_LENGTH } from './orchestrator.js';
 import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
 import type { ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
@@ -67,11 +77,19 @@ export type DeterministicIntent =
   | 'expense_count'
   | 'category_total'
   | 'month_most_spent'
-  | 'monthly_comparison';
+  | 'monthly_comparison'
+  | 'growth_categories'
+  | 'savings_opportunities';
 
 export interface DeterministicIntentResult {
   intent: DeterministicIntent;
   category?: string;
+  /** Janela de tendência detectada (PESSOAL-13C3B-E2); padrão six_complete. */
+  trendWindow?: TrendWindowStyle;
+  /** Percentual de simulação (PESSOAL-13C3B-E2); padrão 10. */
+  percent?: number;
+  /** true quando o percentual explícito é inválido (0/negativo/>100). */
+  percentInvalid?: boolean;
 }
 
 export interface DeterministicAnswer {
@@ -87,6 +105,12 @@ export interface DeterministicRouterDeps {
   period?: { start: string; end: string };
   /** Contexto de continuidade da conversa (PESSOAL-13C2). Opcional: sem contexto = comportamento atual. */
   context?: ChatContextState;
+  /**
+   * Relógio local injetável (YYYY-MM-DD, America/Sao_Paulo) para as janelas de
+   * tendência (PESSOAL-13C3B-E2). Sem ele usa a data de hoje — nunca
+   * recomenda período por extrapolação.
+   */
+  nowISO?: string;
 }
 
 // ── Helpers de formatação (pt-BR, sem Markdown) ───────────────
@@ -605,6 +629,103 @@ function isMonthlyComparison(norm: string): boolean {
   return /\b(comp[aá]r[aã]|comparacao|diferenc|vs\b|versus|se comparado)\b/.test(norm);
 }
 
+// ── Tendências / oportunidades (PESSOAL-13C3B-E2) ──────────────
+//
+// Dois intents determinísticos NOVOS, detectados ANTES do isAdviceQuestion e
+// do contexto (nunca deixam a simulação "E se eu reduzisse 10%?" ser reescrita
+// como follow-up canônico de categoria).
+//   - growth_categories:      "Onde/quais + gastos/categorias + aumentar/crescer"
+//   - savings_opportunities:  "onde/quais + (economizar|oportunidade)" ou
+//                             "e se eu reduzisse meus gastos em X%" /
+//                             "quanto eu economizaria reduzindo X%?"
+// Devem continuar caindo no Gemini (conselho/opinião): "Devo economizar mais?",
+// "É melhor cortar gastos ou investir?", "Você acha que estou gastando demais?",
+// "Como devo organizar minha vida financeira?" — nenhum desses sinais.
+
+function isGrowthCategoriesQuestion(norm: string): boolean {
+  const growthVerb = /\b(?:aument[a-z]*|cresc[a-z]*|subir[a-z]*|elev[a-z]*)\b/.test(norm);
+  if (!growthVerb) return false;
+  const target = /\b(?:gastos?|despesas?|categorias?)\b/.test(norm);
+  if (!target) return false;
+  return /\b(?:onde|quais)\b/.test(norm);
+}
+
+function isSavingsOpportunitiesQuestion(norm: string): boolean {
+  if (
+    /\bonde\b/.test(norm) &&
+    /\b(?:oportunidade|posso|possa|consigo)\b/.test(norm) &&
+    /\b(?:economiz[a-z]*|poupar[a-z]*)\b/.test(norm)
+  ) {
+    return true;
+  }
+  if (/\bquanto\b/.test(norm) && /\beconomizaria\b/.test(norm)) return true;
+  const reduce = /\b(?:reduziss[a-z]*|reduzindo|reduzir|cortand[a-z]*|cortass[a-z]*|cortar)\b/.test(norm);
+  const gasto = /\b(?:gastos?|despesas?)\b/.test(norm);
+  if (reduce && gasto) {
+    if (/\d+\s*%/.test(norm)) return true;
+    if (/\b(?:e se|se (?:eu )?reduziss|quanto\s+economizaria|eu\s+economizaria)\b/.test(norm)) return true;
+  }
+  return false;
+}
+
+/**
+ * Janela de tendência a partir da pergunta (PESSOAL-13C3B-E2).
+ *   - "últimos 6 meses" (sem marcador)                    → six_complete (padrão)
+ *   - "incluindo este mês / até hoje / com o mês atual"   → five_plus_current
+ *   - "seis meses completos mais este mês" explícito      → six_plus_current
+ * Sempre reusa buildTrendWindow (mesma definição do motor puro).
+ */
+function trendWindowStyleOf(norm: string): TrendWindowStyle {
+  if (
+    /\b(?:seis\s*meses|6\s*meses)\s+completos\b\s+(?:mais|e)\s+(?:o\s+mes\s+(?:atual|corrente)|este\s+mes|esse\s+mes)\b/i.test(
+      norm,
+    )
+  ) {
+    return 'six_plus_current';
+  }
+  if (
+    /\b(?:incluindo|considerando|contando)\s+(?:este|esse|o\s+mes\s+(?:atual|corrente)|mes\s+atual)\b/i.test(norm) ||
+    /\b(?:ate|com\s+o)\s*(?:mes\s+(?:atual|corrente)|hoje|agora)\b/i.test(norm) ||
+    /\bneste\s+mes\b/i.test(norm)
+  ) {
+    return 'five_plus_current';
+  }
+  return 'six_complete';
+}
+
+const PERCENT_RE = /(-?\d+(?:[.,]\d+)?)\s*%/i;
+
+interface PercentResult {
+  value: number;
+  invalid: boolean;
+}
+
+/** Percentual de simulação: padrão 10; inválido => invalid=true (nunca erro). */
+function extractPercent(norm: string): PercentResult {
+  const m = PERCENT_RE.exec(norm);
+  if (!m) return { value: 10, invalid: false };
+  const raw = Number(m[1].replace(',', '.'));
+  if (!Number.isFinite(raw) || raw <= 0 || raw > 100) return { value: raw, invalid: true };
+  return { value: raw, invalid: false };
+}
+
+function detectTrendIntent(norm: string): DeterministicIntentResult | null {
+  if (!norm) return null;
+  if (isGrowthCategoriesQuestion(norm)) {
+    return { intent: 'growth_categories', trendWindow: trendWindowStyleOf(norm) };
+  }
+  if (isSavingsOpportunitiesQuestion(norm)) {
+    const pct = extractPercent(norm);
+    return {
+      intent: 'savings_opportunities',
+      trendWindow: trendWindowStyleOf(norm),
+      percent: pct.value,
+      percentInvalid: pct.invalid,
+    };
+  }
+  return null;
+}
+
 function detectIntent(question: string, resolved: ResolvedQueryPeriod): DeterministicIntentResult | null {
   const norm = normalizeText(question);
   if (!norm || norm.length > MAX_QUESTION_LENGTH) return null;
@@ -640,13 +761,14 @@ function detectIntent(question: string, resolved: ResolvedQueryPeriod): Determin
 // ── Consulta enxuta e paginada (sem truncamento) ───────────────
 
 const DETERMINISTIC_SELECT =
-  'transaction_kind, amount, occurred_on, categories(display_name, canonical_path)';
+  'transaction_kind, amount, occurred_on, category_id, categories(display_name, canonical_path)';
 const DETERMINISTIC_PAGE_SIZE = 1000;
 
 interface LeanTx {
   transaction_kind?: string | null;
   amount?: number | string | null;
   occurred_on?: string | null;
+  category_id?: string | null;
   categories?:
     | { display_name: string; canonical_path: string | null }
     | Array<{ display_name: string; canonical_path: string | null }>
@@ -659,7 +781,7 @@ function toAnalyticsRows(rows: LeanTx[]): AnalyticsTxRow[] {
     transaction_kind: r.transaction_kind === 'expense' || r.transaction_kind === 'transfer' ? r.transaction_kind : 'income',
     amount: r.amount ?? 0,
     account_id: '',
-    category_id: null,
+    category_id: typeof r.category_id === 'string' ? r.category_id : null,
     occurred_on: typeof r.occurred_on === 'string' ? r.occurred_on : '',
     status: null,
     raw_description: '',
@@ -1130,6 +1252,204 @@ async function buildMonthlyComparison(
   };
 }
 
+// ── Tendências / oportunidades — builders (PESSOAL-13C3B-E2) ───
+
+function resolvidoAPartirDaJanela(w: TrendWindow): ResolvedQueryPeriod {
+  return { start: w.start, end: w.end, source: 'screen' };
+}
+
+function windowDisplay(w: TrendWindow): string {
+  const first = w.months[0];
+  const last = w.months[w.months.length - 1];
+  if (!first || !last) return 'período analisado';
+  return `de ${first.label} a ${last.label}`;
+}
+
+function brlCents(cents: number): string {
+  return brl(cents / 100);
+}
+
+function signedBrlCents(cents: number): string {
+  return signedBrl(cents / 100);
+}
+
+function classificationLabel(cls: GrowthClassification): string {
+  switch (cls) {
+    case 'growth':
+      return 'crescimento';
+    case 'new':
+      return 'novo';
+    case 'spike':
+      return 'pico';
+    default:
+      return 'sem tendência';
+  }
+}
+
+function formatPctRatio(v: number): string {
+  return `${(v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+}
+
+function growthCardOf(
+  r: GrowthCategoryResult,
+  w: TrendWindow,
+): TrendCard {
+  return {
+    kind: r.classification === 'new' ? 'new' : r.classification === 'spike' ? 'spike' : 'growth',
+    title: r.label,
+    subtitle: 'Crescimento identificado por comparação entre médias mensais',
+    rows: [
+      { label: 'Média anterior (por mês)', value: brlCents(r.meanACents) },
+      { label: 'Média recente (por mês)', value: brlCents(r.meanRCents) },
+      { label: 'Variação mensal', value: signedBrlCents(r.deltaCents) },
+      {
+        label: 'Variação relativa',
+        value: r.growthPct != null ? formatPctRatio(r.growthPct) : 'categoria nova',
+      },
+      { label: 'Despesas recentes', value: String(r.transactionCount) },
+      { label: 'Classificação', value: classificationLabel(r.classification) },
+      { label: 'Período analisado', value: windowDisplay(w) },
+    ],
+  };
+}
+
+function savingCardOf(
+  s: SavingsOpportunity,
+  w: TrendWindow,
+): TrendCard {
+  const regularity = `${s.monthsRecentWithSpend} de 3 meses recentes`;
+  const variability =
+    s.variability === 'low' ? 'Baixa' : s.variability === 'medium' ? 'Média' : 'Alta';
+  const share = formatPctRatio(s.share);
+  return {
+    kind: 'savings' as const,
+    title: s.label,
+    subtitle: 'Oportunidade potencial para revisar',
+    rows: [
+      { label: 'Média mensal recente', value: brlCents(s.meanRCents) },
+      { label: `Economia mensal (cenário ${formatPercent(s.percent)})`, value: brlCents(s.economyMonthlyCents) },
+      { label: 'Projeção anual (simulação)', value: brlCents(s.economyAnnualCents) },
+      { label: 'Participação no total recente', value: share },
+      { label: 'Regularidade', value: regularity },
+      { label: 'Variabilidade', value: variability },
+      { label: 'Período analisado', value: windowDisplay(w) },
+    ],
+  };
+}
+
+function formatPercent(v: number): string {
+  return `${String(v).replace('.', ',')}%`;
+}
+
+function savingsNotice(pct: number): string {
+  return (
+    `Simulação com redução de ${formatPercent(pct)} sobre a média mensal recente. ` +
+    'Os valores são apenas cenários e não consideram metas mínimas pessoais, nem compromissos fixos.'
+  );
+}
+
+const NO_GROWTH_MESSAGE =
+  'Comparando as médias dos últimos 6 meses, não identifiquei categoria com crescimento significativo nos seus gastos.';
+
+const INSUFFICIENT_SAVINGS_MESSAGE =
+  'Não há dados suficientes de despesas recorrentes nos últimos 6 meses para estimar uma simulação de economia.';
+
+const INVALID_PERCENT_MESSAGE =
+  'Informe um percentual entre 0 e 100 para a simulação (por exemplo, "em 10%" ou "em 12,5%").';
+
+async function buildGrowthCategories(
+  supabase: SupabaseClient,
+  style: TrendWindowStyle,
+  nowISO?: string,
+): Promise<DeterministicAnswer> {
+  const w = buildTrendWindow(nowISO ?? todayISO(), style);
+  const rows = await fetchPeriodRows(supabase, w.start, w.end);
+  const analysis = analyzeCategoryGrowth(rows, w);
+
+  const evidence: EvidenceItem[] = [
+    { label: 'Aumento identificado', value: analysis.insufficientData ? 'nenhum' : String(analysis.top.length) },
+    { label: 'Período analisado', value: windowDisplay(w) },
+  ];
+
+  if (analysis.insufficientData || analysis.top.length === 0) {
+    const response = makeResponse(
+      NO_GROWTH_MESSAGE,
+      resolvidoAPartirDaJanela(w),
+      ['trend_growth'],
+      evidence,
+    );
+    response.cards = [];
+    response.notice = 'Nenhuma categoria apresentou crescimento significativo.';
+    return {
+      intent: 'growth_categories',
+      response,
+    };
+  }
+
+  const cards: TrendCard[] = analysis.top.map((r) => growthCardOf(r, w));
+
+  const topNames = analysis.top
+    .map((r) => `${r.label} (${signedBrlCents(r.deltaCents)} por mês)`)
+    .join('; ');
+  const answer =
+    `Sim, identifiquei crescimento significativo em ${analysis.top.length} ` +
+    `${analysis.top.length === 1 ? 'categoria' : 'categorias'}: ${topNames}. ` +
+    'Considere revisar esses itens para entender o motivo do aumento.';
+
+  const response = makeResponse(answer, resolvidoAPartirDaJanela(w), ['trend_growth'], evidence);
+  response.cards = cards;
+  return { intent: 'growth_categories', response };
+}
+
+async function buildSavingsOpportunities(
+  supabase: SupabaseClient,
+  style: TrendWindowStyle,
+  percent: number,
+  percentInvalid: boolean,
+  nowISO?: string,
+): Promise<DeterministicAnswer> {
+  const w = buildTrendWindow(nowISO ?? todayISO(), style);
+  if (percentInvalid) {
+    const response = makeResponse(
+      INVALID_PERCENT_MESSAGE,
+      resolvidoAPartirDaJanela(w),
+      ['trend_savings'],
+      [],
+    );
+    response.cards = [];
+    response.notice = 'Valores de simulação não foram calculados.';
+    return { intent: 'savings_opportunities', response };
+  }
+
+  const rows = await fetchPeriodRows(supabase, w.start, w.end);
+  const result = savingsOpportunities(rows, w, percent);
+
+  if (result.insufficientData || result.top.length === 0) {
+    const response = makeResponse(
+      INSUFFICIENT_SAVINGS_MESSAGE,
+      resolvidoAPartirDaJanela(w),
+      ['trend_savings'],
+      [{ label: 'Período analisado', value: windowDisplay(w) }],
+    );
+    response.cards = [];
+    response.notice = 'Nenhuma simulação de economia foi calculada.';
+    return { intent: 'savings_opportunities', response };
+  }
+
+  const cards: TrendCard[] = result.top.map((s) => savingCardOf(s, w));
+  const topNames = result.top.map((s) => s.label).join('; ');
+  const answer =
+    `Com uma redução de ${formatPercent(percent)} sobre as médias mensais recentes, ` +
+    `as maiores oportunidades potenciais para revisar estão em: ${topNames}.`;
+
+  const response = makeResponse(answer, resolvidoAPartirDaJanela(w), ['trend_savings'], [
+    { label: 'Período analisado', value: windowDisplay(w) },
+  ]);
+  response.cards = cards;
+  response.notice = savingsNotice(percent);
+  return { intent: 'savings_opportunities', response };
+}
+
 // ── Entrada pública ────────────────────────────────────────────
 
 /**
@@ -1147,6 +1467,33 @@ export async function runDeterministicAsk(
   // instruções após '?'/quebra/verbos NUNCA participam da intenção/categoria).
   let q = extractMainQuestion(raw);
   if (!q || q.length > MAX_QUESTION_LENGTH) return null;
+
+  // PESSOAL-13C3B-E2: tendências e oportunidades têm precedência sobre o
+  // contexto e sobre o isAdviceQuestion. A detecção ocorre na pergunta crua —
+  // "E se eu reduzisse 10%?" nunca é reescrita como follow-up de categoria.
+  const trendIntent = detectTrendIntent(normalizeText(q));
+  if (trendIntent) {
+    if (!supportsPaginableAsync(deps.supabase)) return null;
+    try {
+      if (trendIntent.intent === 'growth_categories') {
+        return await buildGrowthCategories(
+          deps.supabase,
+          trendIntent.trendWindow ?? 'six_complete',
+          deps.nowISO,
+        );
+      }
+      return await buildSavingsOpportunities(
+        deps.supabase,
+        trendIntent.trendWindow ?? 'six_complete',
+        trendIntent.percent ?? 10,
+        trendIntent.percentInvalid ?? false,
+        deps.nowISO,
+      );
+    } catch (err) {
+      if (err instanceof AskError) throw err;
+      throw toAskSupabaseError(err);
+    }
+  }
 
   const screen =
     deps.period && isValidScreenPeriod(deps.period) ? deps.period : null;
