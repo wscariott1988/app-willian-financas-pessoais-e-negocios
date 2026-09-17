@@ -6,6 +6,8 @@
 // app.jwt_profile_id(). Nenhum profile_id atravessa estas interfaces: a
 // identidade vem exclusivamente do JWT do usuário em cada requisição.
 
+import type { TrendCard } from '../finance-ai/types.js';
+
 export type ChatRole = 'user' | 'assistant';
 
 export type ChatMessageStatus = 'pending' | 'completed' | 'failed';
@@ -82,6 +84,13 @@ export interface ChatMessagePayload {
   toolsUsed?: string[];
   evidence?: Array<{ label: string; value: string }>;
   notice?: string;
+  /**
+   * Cards temáticos (tendências/oportunidades) já sanitizados em
+   * payloadSanitize.ts (PESSOAL-13C3B-E4): somente fields mapeados, nunca a
+   * resposta bruta do router/Gemini. `cards: []` significa "houve cards, mas
+   * vazios"; ausente significa "turno sem cards" (retrocompatível).
+   */
+  cards?: TrendCard[];
 }
 
 export interface ChatConversationRow {

@@ -359,6 +359,10 @@ export function setSanitizedEventSink(sink: SanitizedEventSink | null): void {
   eventSink = sink;
 }
 
+// PESSOAL-13C3B-E4: nome canônico do sink de FALHA (alias para o sink histórico
+// de eventos sanitizados — ambos válidos, mesma instância).
+export const setSanitizedFailureSink = setSanitizedEventSink;
+
 export function getSanitizedEventSink(): SanitizedEventSink | null {
   return eventSink;
 }
@@ -389,6 +393,10 @@ export const OBSERVABILITY_FIELDS = [
   'retryable',
   'elapsedMs',
 ] as const;
+
+// PESSOAL-13C3B-E4: nome canônico do conjunto FECHADO do evento de FALHA
+// (alias retrocompatível do histórico OBSERVABILITY_FIELDS — ambos válidos).
+export const OBSERVABILITY_FAILURE_FIELDS = OBSERVABILITY_FIELDS;
 
 // ── Evento de SUCESSO sanitizado (PESSOAL-13C1) ────────────────
 // Permite comprovar custo Gemini zero na rota determinística sem expor nenhum

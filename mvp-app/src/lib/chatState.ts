@@ -19,6 +19,21 @@ export interface ChatConversationItem {
 
 export type UiMessageStatus = 'sent' | 'pending' | 'completed' | 'failed';
 
+export type UiTrendCardKind = 'growth' | 'new' | 'spike' | 'savings';
+
+export interface UiTrendCardRow {
+  label: string;
+  value: string;
+}
+
+/** Card temático já no formato de UI (PESSOAL-13C3B-E4). Renderização futura. */
+export interface UiTrendCard {
+  kind: UiTrendCardKind;
+  title: string;
+  subtitle: string;
+  rows: UiTrendCardRow[];
+}
+
 export interface UiMessage {
   key: string;
   role: 'user' | 'assistant';
@@ -31,6 +46,10 @@ export interface UiMessage {
   engine?: 'deterministic' | 'gemini';
   periodAnalyzed?: { start: string; end: string } | null;
   evidence?: Array<{ label: string; value: string }>;
+  /** Cards temáticos persistidos (F5/remount via listMessages). */
+  cards?: UiTrendCard[];
+  /** Aviso adicional sanitizado (ex.: simulação de redução). */
+  notice?: string;
   error?: string | null;
 }
 
@@ -50,6 +69,8 @@ export interface SentPayload {
   engine?: 'deterministic' | 'gemini';
   periodAnalyzed?: { start: string; end: string } | null;
   evidence?: Array<{ label: string; value: string }>;
+  cards?: UiTrendCard[];
+  notice?: string;
 }
 
 export type ChatAction =
@@ -281,6 +302,8 @@ export function chatReducer(state: ChatUiState, action: ChatAction): ChatUiState
                 engine: p.engine,
                 periodAnalyzed: p.periodAnalyzed ?? undefined,
                 evidence: p.evidence ?? undefined,
+                cards: p.cards ?? undefined,
+                notice: p.notice ?? undefined,
                 error: null,
               }
             : m,

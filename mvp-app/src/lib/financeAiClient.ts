@@ -4,6 +4,7 @@
 // token no console.
 
 import { supabase } from '../supabaseClient';
+import type { UiTrendCard } from './chatState';
 
 export interface AskApiResponse {
   answer: string;
@@ -13,6 +14,10 @@ export interface AskApiResponse {
   geminiCallCount?: number;
   toolsUsed: string[];
   evidence?: Array<{ label: string; value: string }>;
+  /** Cards temáticos (tendências/oportunidades) — PESSOAL-13C3B-E4. */
+  cards?: UiTrendCard[];
+  /** Aviso adicional sanitizado (ex.: simulação de redução). */
+  notice?: string;
 }
 
 /**

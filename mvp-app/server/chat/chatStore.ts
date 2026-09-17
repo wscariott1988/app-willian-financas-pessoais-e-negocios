@@ -25,6 +25,7 @@ import type {
   ChatPeriod,
 } from './chatTypes.js';
 import { CHAT_CONTENT_MAX_CHARS } from './chatTypes.js';
+import { sanitizeChatPayload } from './payloadSanitize.js';
 
 const PGRST_ROW_MISSING = 'PGRST116';
 const PG_UNIQUE_VIOLATION = '23505';
@@ -51,6 +52,9 @@ export type BeginTurnResult =
       answer: string;
       payload: ChatMessagePayload | null;
       periodAnalyzed: ChatPeriod | null;
+      /** Reconstitui o evento de sucesso sanitizado do clique duplo (PESSOAL-13C3B-E4). */
+      intent: string | null;
+      engine: 'deterministic' | 'gemini' | null;
     }
   | { kind: 'cached_failure'; message: string };
 
@@ -112,6 +116,8 @@ interface AssistantRowLite {
   payload: ChatMessagePayload | null;
   period_analyzed: ChatPeriod | null;
   error: string | null;
+  intent: string | null;
+  engine: string | null;
 }
 
 async function findAssistantByRequestId(
@@ -121,7 +127,7 @@ async function findAssistantByRequestId(
 ): Promise<AssistantRowLite | null> {
   const { data, error } = await cli
     .from('chat_messages')
-    .select('status, content, payload, period_analyzed, error')
+    .select('status, content, payload, period_analyzed, error, intent, engine')
     .eq('conversation_id', conversationId)
     .eq('client_request_id', clientRequestId)
     .eq('role', 'assistant')
@@ -142,6 +148,11 @@ function resolveExisting(row: AssistantRowLite): BeginTurnResult {
       answer: row.content ?? '',
       payload: row.payload ?? null,
       periodAnalyzed: row.period_analyzed ?? null,
+      intent: row.intent ?? null,
+      engine:
+        row.engine === 'deterministic' || row.engine === 'gemini'
+          ? row.engine
+          : null,
     };
   }
   return {
@@ -234,7 +245,9 @@ export async function completeChatTurn(
     .update({
       status: 'completed',
       content: input.answer.slice(0, CHAT_CONTENT_MAX_CHARS),
-      payload: input.payload,
+      // PESSOAL-13C3B-E4: única fronteira de persistência do payload — toda
+      // gravação passa pelo sanitizador (cards/notice/evidências limitados).
+      payload: sanitizeChatPayload(input.payload),
       intent: input.intent,
       engine: input.engine,
       period_analyzed: input.periodAnalyzed ?? null,
