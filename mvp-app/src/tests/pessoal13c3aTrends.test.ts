@@ -315,6 +315,44 @@ describe('PESSOAL-13C3B-E1: análise de crescimento', () => {
     expect(tres.rows[0].significant).toBe(true);
   });
 
+  it('categoria base zero com presença em apenas 1 mês não é tendência (nem "new")', () => {
+    const rows = [tx(days(6, 5), 900.0)];
+    const a = analyzeCategoryGrowth(rows, W);
+    expect(a.rows[0].meanACents).toBe(0);
+    expect(a.rows[0].monthsRecentWithSpend).toBe(1);
+    expect(a.rows[0].classification).toBe('none');
+    expect(a.rows[0].significant).toBe(false);
+  });
+
+  it('M usa a média mensal total da janela recente (global), não a da categoria', () => {
+    const rows = [
+      // Moradia é grande e eleva meanRecentTotal acima do delta da categoria pequena.
+      tx(days(3, 1), 1000.0, MORADIA),
+      tx(days(4, 1), 1000.0, MORADIA),
+      tx(days(5, 1), 1000.0, MORADIA),
+      tx(days(6, 1), 5000.0, MORADIA),
+      tx(days(7, 1), 5000.0, MORADIA),
+      tx(days(8, 1), 5000.0, MORADIA),
+      tx(days(3, 5), 400.0, SUPER),
+      tx(days(4, 5), 400.0, SUPER),
+      tx(days(5, 5), 400.0, SUPER),
+      tx(days(6, 5), 500.0, SUPER),
+      tx(days(7, 5), 500.0, SUPER),
+      tx(days(8, 5), 500.0, SUPER),
+    ];
+    const a = analyzeCategoryGrowth(rows, W);
+    const superRow = a.rows.find((r) => r.label === 'Alimentação > Supermercado');
+    const moradiaRow = a.rows.find((r) => r.label === 'Moradia > Aluguel');
+    // meanRecentTotal = (500000*3 + 50000*3)/3 = 550000 → 2% = 11000 > R$50
+    expect(a.meanRecentTotalCents).toBe(550000);
+    expect(a.materialityCents).toBe(11000);
+    expect(superRow!.deltaCents).toBe(10000);
+    expect(superRow!.deltaCents).toBeLessThan(a.materialityCents);
+    expect(superRow!.significant).toBe(false);
+    expect(moradiaRow!.deltaCents).toBe(400000);
+    expect(moradiaRow!.significant).toBe(true);
+  });
+
   it('spikeShare exatamente 0,65 classifica como spike', () => {
     const rows = [
       tx(days(6, 5), 6500.0),
