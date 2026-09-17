@@ -137,6 +137,10 @@ export async function askFinance(params: AskFinanceParams): Promise<AskApiRespon
               typeof (e as { value?: unknown }).value === 'string',
           )
         : undefined,
+      cards: Array.isArray(payload.cards)
+        ? (payload.cards as UiTrendCard[])
+        : undefined,
+      notice: typeof payload.notice === 'string' ? payload.notice : undefined,
     };
   }
 

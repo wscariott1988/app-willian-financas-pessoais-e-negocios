@@ -87,6 +87,21 @@ function engineLabel(m: UiMessage): string | null {
   return null;
 }
 
+function kindLabel(kind: string): string {
+  switch (kind) {
+    case 'growth':
+      return 'Crescimento';
+    case 'new':
+      return 'Novo gasto';
+    case 'spike':
+      return 'Pico pontual';
+    case 'savings':
+      return 'Oportunidade potencial para revisar';
+    default:
+      return kind;
+  }
+}
+
 export function FinanceAiSection({ period }: FinanceAiSectionProps) {
   const [chat, dispatch] = useReducer(chatReducer, undefined, createChatState);
   const [question, setQuestion] = useState('');
@@ -217,6 +232,8 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       payload.engine = response.engine;
       payload.periodAnalyzed = response.periodAnalyzed ?? response.period ?? undefined;
       payload.evidence = response.evidence ?? undefined;
+      payload.cards = response.cards ?? undefined;
+      payload.notice = response.notice ?? undefined;
       dispatch({ type: 'send_success', clientRequestId: crid, payload });
       // PESSOAL-13C2B.6: resposta concluída → atualiza lastMessageAt e move a
       // conversa para o topo da sidebar (título é PRESERVADO pelo reducer).
@@ -453,24 +470,56 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
                         {formatPeriod(m.periodAnalyzed)}
                       </div>
                     )}
-                    {m.status === 'pending' ? (
-                      <p className="finance-ai-answer finance-ai-pending-text">
-                        <Loader2 size={15} className="spin-animation" /> Consultando
-                        suas finanças…
-                      </p>
-                    ) : (
-                      <p className="finance-ai-answer">{m.text}</p>
-                    )}
-                    {m.evidence && m.evidence.length > 0 && m.status === 'completed' && (
-                      <ul className="finance-ai-evidence">
-                        {m.evidence.map((item, i) => (
-                          <li key={`${item.label}-${i}`}>
-                            <span className="finance-ai-evidence-label">{item.label}</span>
-                            <span className="finance-ai-evidence-value">{item.value}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                     {m.status === 'pending' ? (
+                       <p className="finance-ai-answer finance-ai-pending-text">
+                         <Loader2 size={15} className="spin-animation" /> Consultando
+                         suas finanças…
+                       </p>
+                     ) : (
+                       <p className="finance-ai-answer">{m.text}</p>
+                     )}
+                     {m.cards && m.cards.length > 0 && m.status === 'completed' && (
+                       <section className="finance-ai-cards-section" aria-label="Cards analíticos de tendências e oportunidades">
+                         <ul className="finance-ai-cards-list">
+                           {m.cards.map((card, ci) => (
+                             <li key={`${card.kind}-${card.title}-${ci}`} className="finance-ai-card-item">
+                               <article className={`finance-ai-trend-card finance-ai-card-${card.kind}`}>
+                                 <div className="finance-ai-card-badge">{kindLabel(card.kind)}</div>
+                                 <h3 className="finance-ai-card-title">{card.title}</h3>
+                                 {card.subtitle ? (
+                                   <p className="finance-ai-card-subtitle">{card.subtitle}</p>
+                                 ) : null}
+                                 {card.rows && card.rows.length > 0 ? (
+                                   <dl className="finance-ai-card-dl">
+                                     {card.rows.map((row, ri) => (
+                                       <div key={`${row.label}-${ri}`} className="finance-ai-card-row">
+                                         <dt className="finance-ai-card-dt">{row.label}</dt>
+                                         <dd className="finance-ai-card-dd">{row.value}</dd>
+                                       </div>
+                                     ))}
+                                   </dl>
+                                 ) : null}
+                               </article>
+                             </li>
+                           ))}
+                         </ul>
+                       </section>
+                     )}
+                     {(!m.cards || m.cards.length === 0) && m.evidence && m.evidence.length > 0 && m.status === 'completed' && (
+                       <ul className="finance-ai-evidence">
+                         {m.evidence.map((item, i) => (
+                           <li key={`${item.label}-${i}`}>
+                             <span className="finance-ai-evidence-label">{item.label}</span>
+                             <span className="finance-ai-evidence-value">{item.value}</span>
+                           </li>
+                         ))}
+                       </ul>
+                     )}
+                     {m.notice && m.notice.trim() !== '' && m.status === 'completed' && (
+                       <div className="finance-ai-notice" role="note">
+                         {m.notice}
+                       </div>
+                     )}
                     {engineLabel(m) && m.status === 'completed' && (
                       <p className="finance-ai-engine" data-engine={m.engine}>
                         {engineLabel(m)}
