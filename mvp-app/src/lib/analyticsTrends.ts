@@ -314,7 +314,7 @@ function resolveOptions(opts: TrendAnalysisOptions) {
     minRecentMonths: opts.minRecentMonths ?? MIN_RECENT_MONTHS,
     baseEpsilonCents: opts.baseEpsilonCents ?? BASE_EPSILON_CENTS,
     spikeShare: opts.spikeShare ?? SPIKE_SHARE,
-    maxResults: Math.max(1, Math.min(opts.maxResults ?? TREND_MAX_RESULTS, 1000)),
+    maxResults: Math.max(1, Math.min(opts.maxResults ?? TREND_MAX_RESULTS, TREND_MAX_RESULTS)),
     topLimit: Math.max(1, opts.topLimit ?? TREND_TOP_DEFAULT),
   };
 }

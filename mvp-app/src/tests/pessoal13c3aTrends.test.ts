@@ -448,6 +448,33 @@ describe('PESSOAL-13C3B-E1: análise de crescimento', () => {
     expect(capped.top).toHaveLength(2);
   });
 
+  it('teto rígido de 100 resultados mesmo quando maxResults pedir mais', () => {
+    // 120 categorias todas significativas; um pedido de 1000 deve ser
+    // frustrado pelo teto público TREND_MAX_RESULTS=100.
+    const rows: AnalyticsTxRow[] = [];
+    const cats: Cat[] = [];
+    for (let i = 1; i <= 120; i++) {
+      cats.push({ display_name: `Categoria ${i}`, canonical_path: `Grupo > Categoria ${i}` });
+    }
+    const base: AnalyticsTxRow[] = [];
+    const rec: AnalyticsTxRow[] = [];
+    for (const c of cats) {
+      base.push(tx(days(3, 5), 1000.0, c));
+      base.push(tx(days(4, 5), 1000.0, c));
+      base.push(tx(days(5, 5), 1000.0, c));
+      rec.push(tx(days(6, 5), 3000.0, c));
+      rec.push(tx(days(7, 5), 3000.0, c));
+      rec.push(tx(days(8, 5), 3000.0, c));
+    }
+    rows.push(...base, ...rec);
+    const capped = analyzeCategoryGrowth(rows, W, { maxResults: 1000, materialityShare: 0 });
+    expect(capped.significant).toHaveLength(100);
+    expect(capped.top).toHaveLength(3);
+    const savings = savingsOpportunities(rows, W, 10, { maxResults: 1000 });
+    expect(savings.items).toHaveLength(100);
+    expect(savings.top).toHaveLength(3);
+  });
+
   it('entradas não são mutadas e resultados são determinísticos', () => {
     const rows: AnalyticsTxRow[] = [
       tx(days(3, 5), 1000.0),
