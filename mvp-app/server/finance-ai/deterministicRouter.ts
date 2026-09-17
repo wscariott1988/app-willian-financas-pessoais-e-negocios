@@ -68,7 +68,7 @@ import {
 } from '../../src/lib/analyticsTrends.js';
 import { MAX_QUESTION_LENGTH } from './orchestrator.js';
 import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
-import type { ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
+import type { ChatAnalysisContext, ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
 
 export type DeterministicIntent =
   | 'total_expenses'
@@ -97,6 +97,12 @@ export interface DeterministicAnswer {
   response: AskResponse;
   /** Lente de categoria efetivamente aplicada (matchTerm canônico), quando resolvida. */
   category?: string;
+  /**
+   * Contexto analítico persistível (PESSOAL-13C3B-E3): apenas intent/datas/
+   * estilo/percentual/path canônico — nunca valores monetários. Ausente em
+   * turnos tradicionais (o endpoint então limpa o contexto analítico).
+   */
+  analysis?: ChatAnalysisContext;
 }
 
 export interface DeterministicRouterDeps {
@@ -1252,6 +1258,177 @@ async function buildMonthlyComparison(
   };
 }
 
+// ── Contexto analítico persistente + follow-ups (PESSOAL-13C3B-E3) ──
+
+/**
+ * Restringe um resultado de tendência à lente canônica persistida (matchTerm de
+ * resolveCategory). Um descendente ("Alimentação > Supermercado > X") continua
+ * pertencente à mesma lente do segmento casado.
+ */
+function matchesCategoryPath(label: string, categoryPath: string): boolean {
+  return label === categoryPath || label.startsWith(`${categoryPath} >`);
+}
+
+function analysisWindowOf(w: TrendWindow): ChatAnalysisContext['window'] {
+  return {
+    start: w.start,
+    end: w.end,
+    baseStart: w.baseStart,
+    baseEnd: w.baseEnd,
+    recentStart: w.recentStart,
+    recentEnd: w.recentEnd,
+  };
+}
+
+/**
+ * Contexto analítico persistível do turno (fonte dos follow-ups). JAMAIS
+ * valores monetários, médias, deltas, cards, linhas/descrições ou UUIDs:
+ * somente intent, datas, estilo de janela, percentual e path canônico.
+ */
+function analysisOf(opts: {
+  intent: 'growth_categories' | 'savings_opportunities';
+  w: TrendWindow;
+  anchorISO: string;
+  simulationPct?: number;
+  categoryPath?: string;
+}): ChatAnalysisContext {
+  return {
+    version: 1,
+    intent: opts.intent,
+    windowStyle: opts.w.style,
+    anchorDate: opts.anchorISO,
+    window: analysisWindowOf(opts.w),
+    includeCurrentMonth: opts.w.style !== 'six_complete',
+    isPartialCurrent: opts.w.isPartialCurrent,
+    simulationPct: opts.simulationPct,
+    categoryPath: opts.categoryPath,
+  };
+}
+
+/** "E incluindo este mês?"/"E até hoje?" → five_plus_current; "E sem incluir este mês?" → six_complete; "E considerando seis meses completos mais este mês?" → six_plus_current. */
+function detectAnalysisWindowFollowUp(norm: string): TrendWindowStyle | null {
+  if (!CONTINUATION_RE.test(norm)) return null;
+  if (
+    /\b(?:seis\s*meses|6\s*meses)\s+completos\b\s+(?:mais|e)\s+(?:o\s+mes\s+(?:atual|corrente)|este\s+mes|esse\s+mes)\b/i.test(
+      norm,
+    )
+  ) {
+    return 'six_plus_current';
+  }
+  if (
+    /\b(?:incluindo|considerando|contando)\s+(?:este|esse|o\s+mes\s+(?:atual|corrente)|mes\s+atual)\b/i.test(
+      norm,
+    ) ||
+    /\b(?:ate|com\s+o)\s*(?:mes\s+(?:atual|corrente)|hoje|agora)\b/i.test(norm) ||
+    /\bneste\s+mes\b/i.test(norm)
+  ) {
+    return 'five_plus_current';
+  }
+  if (
+    /\b(?:sem\s+incluir|excluindo|sem\s+considerar)\s*(?:este|esse|o\s+)?\s*mes(?:es)?(?:\s+(?:atual|corrente))?\b/i.test(
+      norm,
+    )
+  ) {
+    return 'six_complete';
+  }
+  return null;
+}
+
+const ANALYSIS_CONTINUATION_CATEGORY_RE =
+  /^e\s+(?:so\s+|somente\s+|apenas\s+)?(?:em|com|na|no|de|para|sobre)\s+(.+)$/i;
+
+/** Termo de categoria de um follow-up tipo "E só em alimentação?", "E em supermercado?" ou "E com combustível?". */
+function extractAnalysisCategoryTerm(norm: string): string | null {
+  if (!CONTINUATION_RE.test(norm)) return null;
+  const m = ANALYSIS_CONTINUATION_CATEGORY_RE.exec(norm);
+  if (!m) return null;
+  let term = m[1].replace(/\s{2,}/g, ' ').replace(/[?.!;]+$/g, '').trim();
+  if (!term) return null;
+  const normTerm = normalizeText(term);
+  if (
+    !normTerm.includes('>') &&
+    /\b(?:quanto|qual|ai|agora|depois|meses?|periodo|ano|informe|diga|entao|incluindo|ate|hoje|atual|corrente)\b/.test(
+      normTerm,
+    )
+  ) {
+    return null;
+  }
+  const firstToken = normTerm.split(/\s+/)[0];
+  if (MONTH_BY_NORM[firstToken]) return null;
+  return term;
+}
+
+interface ResolvedAnalysisFollowUp {
+  intent: 'growth_categories' | 'savings_opportunities';
+  style: TrendWindowStyle;
+  /** Âncora preservada quando a janela NÃO muda (estável entre turnos e F5/remount). */
+  anchorDate?: string;
+  percent?: number;
+  percentInvalid?: boolean;
+  /** Lente canônica já resolvida (matchTerm de resolveCategory). */
+  categoryPath?: string;
+  /** true = termo de categoria não reconhecido → responde com esclarecimento amigável. */
+  unknownCategory?: boolean;
+}
+
+/**
+ * Follow-up elíptico compatível com o contexto analítico (prioridade 3 do
+ * contrato PESSOAL-13C3B-E3: analítico explícito → determinístico tradicional →
+ * elíptico de análise → herança tradicional → Gemini). Ordem interna:
+ * percentual → janela → categoria. Percentual SÓ em savings_opportunities
+ * ("após crescimento, 'E 5%?' é ambíguo e não é capturado"). Um follow-up de
+ * categoria preserva intent/janela/percentual e troca apenas a lente para o
+ * path canônico. Toda janela é re-derivada e o executor SEMPRE consulta os
+ * dados de novo (nunca "recalcula sem consulta").
+ */
+async function resolveAnalysisFollowUp(
+  q: string,
+  analysis: ChatAnalysisContext | null | undefined,
+  supabase: SupabaseClient,
+): Promise<ResolvedAnalysisFollowUp | null> {
+  if (!analysis) return null;
+  const norm = normalizeText(q);
+  if (!norm || !CONTINUATION_RE.test(norm)) return null;
+
+  if (analysis.intent === 'savings_opportunities') {
+    // "E 5%?" | "E com 12,5%?" | "E se fosse 20%?"
+    const m = /^e\s+(?:se\s+fosse\s+|com\s+)?(-?\d+(?:[.,]\d+)?)\s*%/.exec(norm);
+    if (m) {
+      const raw = Number(m[1].replace(',', '.'));
+      return {
+        intent: 'savings_opportunities',
+        style: analysis.windowStyle,
+        anchorDate: analysis.anchorDate,
+        percent: raw,
+        percentInvalid: !Number.isFinite(raw) || raw <= 0 || raw > 100,
+      };
+    }
+  }
+
+  // Mudança de janela → re-deriva com o relógio local injetável (novo âmbito).
+  const style = detectAnalysisWindowFollowUp(norm);
+  if (style) {
+    return { intent: analysis.intent, style };
+  }
+
+  // Troca de lente de categoria, preservando intent/janela/percentual.
+  const term = extractAnalysisCategoryTerm(norm);
+  if (term) {
+    const cats = await fetchExpenseCategories(supabase);
+    const resolvedCat = resolveCategory(cats, term);
+    return {
+      intent: analysis.intent,
+      style: analysis.windowStyle,
+      anchorDate: analysis.anchorDate,
+      categoryPath: resolvedCat?.matchTerm,
+      percent: analysis.simulationPct,
+      unknownCategory: !resolvedCat,
+    };
+  }
+
+  return null;
+}
+
 // ── Tendências / oportunidades — builders (PESSOAL-13C3B-E2) ───
 
 function resolvidoAPartirDaJanela(w: TrendWindow): ResolvedQueryPeriod {
@@ -1357,23 +1534,39 @@ const INSUFFICIENT_SAVINGS_MESSAGE =
 const INVALID_PERCENT_MESSAGE =
   'Informe um percentual entre 0 e 100 para a simulação (por exemplo, "em 10%" ou "em 12,5%").';
 
+interface TrendBuildOptions {
+  /** Lente canônica (matchTerm de resolveCategory) para restringir o resultado. */
+  categoryPath?: string;
+}
+
 async function buildGrowthCategories(
   supabase: SupabaseClient,
   style: TrendWindowStyle,
   nowISO?: string,
+  opts: TrendBuildOptions = {},
+  anchorDate?: string,
 ): Promise<DeterministicAnswer> {
-  const w = buildTrendWindow(nowISO ?? todayISO(), style);
+  const anchor = anchorDate ?? nowISO ?? todayISO();
+  const w = buildTrendWindow(anchor, style);
   const rows = await fetchPeriodRows(supabase, w.start, w.end);
   const analysis = analyzeCategoryGrowth(rows, w);
 
+  let top = analysis.top;
+  if (opts.categoryPath) {
+    top = top.filter((r) => matchesCategoryPath(r.label, opts.categoryPath as string));
+  }
+
   const evidence: EvidenceItem[] = [
-    { label: 'Aumento identificado', value: analysis.insufficientData ? 'nenhum' : String(analysis.top.length) },
+    { label: 'Aumento identificado', value: analysis.insufficientData ? 'nenhum' : String(top.length) },
     { label: 'Período analisado', value: windowDisplay(w) },
   ];
 
-  if (analysis.insufficientData || analysis.top.length === 0) {
+  if (analysis.insufficientData || top.length === 0) {
+    const answer = opts.categoryPath
+      ? `Não identifiquei crescimento significativo em ${opts.categoryPath} no período analisado.`
+      : NO_GROWTH_MESSAGE;
     const response = makeResponse(
-      NO_GROWTH_MESSAGE,
+      answer,
       resolvidoAPartirDaJanela(w),
       ['trend_growth'],
       evidence,
@@ -1383,22 +1576,37 @@ async function buildGrowthCategories(
     return {
       intent: 'growth_categories',
       response,
+      analysis: analysisOf({
+        intent: 'growth_categories',
+        w,
+        anchorISO: anchor,
+        categoryPath: opts.categoryPath,
+      }),
     };
   }
 
-  const cards: TrendCard[] = analysis.top.map((r) => growthCardOf(r, w));
+  const cards: TrendCard[] = top.map((r) => growthCardOf(r, w));
 
-  const topNames = analysis.top
+  const topNames = top
     .map((r) => `${r.label} (${signedBrlCents(r.deltaCents)} por mês)`)
     .join('; ');
   const answer =
-    `Sim, identifiquei crescimento significativo em ${analysis.top.length} ` +
-    `${analysis.top.length === 1 ? 'categoria' : 'categorias'}: ${topNames}. ` +
+    `Sim, identifiquei crescimento significativo em ${top.length} ` +
+    `${top.length === 1 ? 'categoria' : 'categorias'}: ${topNames}. ` +
     'Considere revisar esses itens para entender o motivo do aumento.';
 
   const response = makeResponse(answer, resolvidoAPartirDaJanela(w), ['trend_growth'], evidence);
   response.cards = cards;
-  return { intent: 'growth_categories', response };
+  return {
+    intent: 'growth_categories',
+    response,
+    analysis: analysisOf({
+      intent: 'growth_categories',
+      w,
+      anchorISO: anchor,
+      categoryPath: opts.categoryPath,
+    }),
+  };
 }
 
 async function buildSavingsOpportunities(
@@ -1407,8 +1615,11 @@ async function buildSavingsOpportunities(
   percent: number,
   percentInvalid: boolean,
   nowISO?: string,
+  opts: TrendBuildOptions = {},
+  anchorDate?: string,
 ): Promise<DeterministicAnswer> {
-  const w = buildTrendWindow(nowISO ?? todayISO(), style);
+  const anchor = anchorDate ?? nowISO ?? todayISO();
+  const w = buildTrendWindow(anchor, style);
   if (percentInvalid) {
     const response = makeResponse(
       INVALID_PERCENT_MESSAGE,
@@ -1418,26 +1629,53 @@ async function buildSavingsOpportunities(
     );
     response.cards = [];
     response.notice = 'Valores de simulação não foram calculados.';
-    return { intent: 'savings_opportunities', response };
+    return {
+      intent: 'savings_opportunities',
+      response,
+      analysis: analysisOf({
+        intent: 'savings_opportunities',
+        w,
+        anchorISO: anchor,
+        categoryPath: opts.categoryPath,
+      }),
+    };
   }
 
   const rows = await fetchPeriodRows(supabase, w.start, w.end);
   const result = savingsOpportunities(rows, w, percent);
 
-  if (result.insufficientData || result.top.length === 0) {
+  let top = result.top;
+  if (opts.categoryPath) {
+    top = top.filter((s) => matchesCategoryPath(s.label, opts.categoryPath as string));
+  }
+
+  if (result.insufficientData || top.length === 0) {
+    const answer = opts.categoryPath
+      ? `Não encontrei dados suficientes de despesas recorrentes em ${opts.categoryPath} para estimar a simulação.`
+      : INSUFFICIENT_SAVINGS_MESSAGE;
     const response = makeResponse(
-      INSUFFICIENT_SAVINGS_MESSAGE,
+      answer,
       resolvidoAPartirDaJanela(w),
       ['trend_savings'],
       [{ label: 'Período analisado', value: windowDisplay(w) }],
     );
     response.cards = [];
     response.notice = 'Nenhuma simulação de economia foi calculada.';
-    return { intent: 'savings_opportunities', response };
+    return {
+      intent: 'savings_opportunities',
+      response,
+      analysis: analysisOf({
+        intent: 'savings_opportunities',
+        w,
+        anchorISO: anchor,
+        simulationPct: percent,
+        categoryPath: opts.categoryPath,
+      }),
+    };
   }
 
-  const cards: TrendCard[] = result.top.map((s) => savingCardOf(s, w));
-  const topNames = result.top.map((s) => s.label).join('; ');
+  const cards: TrendCard[] = top.map((s) => savingCardOf(s, w));
+  const topNames = top.map((s) => s.label).join('; ');
   const answer =
     `Com uma redução de ${formatPercent(percent)} sobre as médias mensais recentes, ` +
     `as maiores oportunidades potenciais para revisar estão em: ${topNames}.`;
@@ -1447,7 +1685,17 @@ async function buildSavingsOpportunities(
   ]);
   response.cards = cards;
   response.notice = savingsNotice(percent);
-  return { intent: 'savings_opportunities', response };
+  return {
+    intent: 'savings_opportunities',
+    response,
+    analysis: analysisOf({
+      intent: 'savings_opportunities',
+      w,
+      anchorISO: anchor,
+      simulationPct: percent,
+      categoryPath: opts.categoryPath,
+    }),
+  };
 }
 
 // ── Entrada pública ────────────────────────────────────────────
@@ -1518,7 +1766,59 @@ export async function runDeterministicAsk(
     resolved = resolvedFromContextPeriod(deps.context.period);
   }
   const intent = detectIntent(question, resolved);
-  if (!intent) return null;
+
+  if (!intent) {
+    // PESSOAL-13C3B-E3: follow-up analítico elíptico compatível com o
+    // contexto (percentual/categoria/janela). Dispara SOMENTE quando o turno
+    // anterior foi analítico (context.analysis presente) e NENHUM intent
+    // determinístico tradicional explícito casou acima.
+    if (deps.context?.analysis) {
+      const followUp = await resolveAnalysisFollowUp(q, deps.context.analysis, deps.supabase);
+      if (followUp) {
+        if (!supportsPaginableAsync(deps.supabase)) return null;
+        try {
+          if (followUp.unknownCategory) {
+            const w = buildTrendWindow(
+              followUp.anchorDate ?? deps.nowISO ?? todayISO(),
+              followUp.style,
+            );
+            const tool = followUp.intent === 'growth_categories' ? 'trend_growth' : 'trend_savings';
+            const response = makeResponse(
+              CATEGORY_CLARIFICATION,
+              resolvidoAPartirDaJanela(w),
+              [tool],
+              [{ label: 'Período analisado', value: windowDisplay(w) }],
+            );
+            response.cards = [];
+            // Preserva a análise anterior: não sobrescreve com contexto incorreto.
+            return { intent: followUp.intent, response, analysis: deps.context.analysis };
+          }
+          if (followUp.intent === 'growth_categories') {
+            return await buildGrowthCategories(
+              deps.supabase,
+              followUp.style,
+              deps.nowISO,
+              { categoryPath: followUp.categoryPath },
+              followUp.anchorDate,
+            );
+          }
+          return await buildSavingsOpportunities(
+            deps.supabase,
+            followUp.style,
+            followUp.percent ?? 10,
+            followUp.percentInvalid ?? false,
+            deps.nowISO,
+            { categoryPath: followUp.categoryPath },
+            followUp.anchorDate,
+          );
+        } catch (err) {
+          if (err instanceof AskError) throw err;
+          throw toAskSupabaseError(err);
+        }
+      }
+    }
+    return null;
+  }
 
   // Capabilidade: paginação (`range`) é pré-requisito do fast-path. Sem ela,
   // devolve null e o endpoint mantém o fluxo Gemini (degradação segura).

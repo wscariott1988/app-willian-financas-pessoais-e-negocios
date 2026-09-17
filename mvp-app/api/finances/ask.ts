@@ -485,6 +485,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
             periodAnalyzed:
               deterministic.response.periodAnalyzed ?? deterministic.response.period,
             answer: deterministic.response.answer,
+            analysis: deterministic.analysis,
           }),
           setTitle: !conversationTitle,
           title: titleFromQuestion(body.question),
