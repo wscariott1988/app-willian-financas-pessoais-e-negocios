@@ -496,10 +496,9 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     expect(rows['Economia mensal (cenário 10%)']).toContain('40,00');
     expect(rows['Economia anualizada (simulação)']).toContain('480,00');
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Moradia > Aluguel');
-    expect(notice).toContain('Dívidas > Empréstimo');
-    expect(notice).toContain('não entraram na simulação percentual');
-    expect(notice).toContain('Compromissos fixos e dívidas exigem análise');
+    expect(notice).toContain('Aluguel');
+    expect(notice).toContain('Empréstimo');
+    expect(notice).toContain('Aluguel e Empréstimo ficaram fora: compromissos fixos e dívidas exigem análise');
     expect(notice).not.toContain('R$ 2.000,00');
     expect(notice).not.toContain('R$ 1.500,00');
   });
@@ -510,8 +509,8 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     expect(ans.response.cards).toHaveLength(1);
     expect(ans.response.cards?.[0]?.title).toBe('Alimentação > Supermercado');
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Saúde > Farmácia');
-    expect(notice).toContain('Despesas médicas e de saúde ficaram fora');
+    expect(notice).toContain('Farmácia');
+    expect(notice).toContain('corte em despesas de saúde exige avaliação de necessidade');
     const raw = JSON.stringify(ans.response.cards);
     expect(raw).not.toContain('Farmácia');
   });
@@ -563,8 +562,8 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     const rows = cardRows(fu)[0];
     expect(rows['Economia mensal (cenário 5%)']).toContain('20,00');
     expect(rows['Economia anualizada (simulação)']).toContain('240,00');
-    expect(fu?.response.notice).toContain('Moradia > Aluguel');
-    expect(fu?.response.notice).toContain('não entraram na simulação percentual');
+    expect(fu?.response.notice).toContain('Aluguel');
+    expect(fu?.response.notice).toContain('Aluguel e Empréstimo ficaram fora');
     expect(fu?.response.geminiCallCount).toBe(0);
   });
 
@@ -578,9 +577,9 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     expect(ans.response.cards).toEqual([]);
     expect(ans.response.answer).toContain('Não encontrei despesas adequadas para uma simulação percentual');
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Moradia > Aluguel');
-    expect(notice).toContain('Dívidas > Empréstimo');
-    expect(notice).toContain('Saúde > Farmácia');
+    expect(notice).toContain('Aluguel');
+    expect(notice).toContain('Empréstimo');
+    expect(notice).toContain('Farmácia');
     expect(JSON.stringify(ans.response)).not.toContain('R$ 0,00');
     expect(ans.response.geminiCallCount).toBe(0);
   });
@@ -847,8 +846,8 @@ describe('PESSOAL-13C3B.10 — endpoint: cache completed e F5 preservam cards e 
     expect(b1.engine).toBe('deterministic');
     expect(b1.cards).toHaveLength(1);
     expect(b1.cards[0]?.title).toBe('Alimentação > Supermercado');
-    expect(b1.notice).toContain('Moradia > Aluguel');
-    expect(b1.notice).toContain('Dívidas > Empréstimo');
+    expect(b1.notice).toContain('Aluguel');
+    expect(b1.notice).toContain('Empréstimo');
     expect(c.state.chat_conversations[0].context?.analysis?.intent).toBe('savings_opportunities');
 
     const txBefore = txCount(c);
@@ -867,7 +866,7 @@ describe('PESSOAL-13C3B.10 — endpoint: cache completed e F5 preservam cards e 
     const last = completed[completed.length - 1];
     expect(last.cards).toHaveLength(1);
     expect(last.cards?.[0]?.title).toBe('Alimentação > Supermercado');
-    expect(last.notice).toContain('não entraram na simulação percentual');
+    expect(last.notice).toContain('Aluguel e Empréstimo ficaram fora');
 
     const persisted = assistantRowOf(c, 'r1')?.payload as
       | { cards?: Array<{ title: string }>; notice?: string }

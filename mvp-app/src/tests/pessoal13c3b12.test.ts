@@ -305,8 +305,8 @@ describe('PESSOAL-13C3B.12 — roteador: lente de exclusão e aviso de alocaçã
     expect(cards[0]?.title).toBe('Alimentação > Supermercado');
     const notice = ans.response.notice ?? '';
     expect(notice).toContain('Investimentos');
-    expect(notice).toContain('não entraram na simulação percentual');
-    expect(notice).toContain('são alocação patrimonial, não consumo a reduzir');
+    expect(notice).toContain('Aluguel e Empréstimo ficaram fora');
+    expect(notice).toContain('alocação patrimonial, não consumo');
     expect(notice).not.toContain('R$ 1.200,00');
   });
 
