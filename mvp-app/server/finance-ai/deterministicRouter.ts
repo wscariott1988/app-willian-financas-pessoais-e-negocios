@@ -1337,17 +1337,35 @@ function detectAnalysisWindowFollowUp(norm: string): TrendWindowStyle | null {
   return null;
 }
 
-const ANALYSIS_CONTINUATION_CATEGORY_RE =
-  /^e\s+(?:so\s+|somente\s+|apenas\s+)?(?:em|com|na|no|de|para|sobre)\s+(.+)$/i;
+/** Prefixos de continuidade analítica, incluindo elipse inicial "só/somente/apenas" (PESSOAL-13C3B.12). */
+const ANALYSIS_ELISION_PREFIX_RE =
+  /^(?:e\b|entao\b|depois\b|so\b|somente\b|apenas\b)/i;
 
-/** Termo de categoria de um follow-up tipo "E só em alimentação?", "E em supermercado?" ou "E com combustível?". */
+/**
+ * Intro consumível de um follow-up de categoria. Exige "e" SEGUIDO de
+ * modificador/preposição, ou início DIRETO por modificador. Isso preserva
+ * "E o que você acha disso?"/"E como ficaria?"/"E depois disso?" como
+ * não-categoria e admite "E apenas investimentos?", "Só em aluguel?" e
+ * "Somente em combustível?".
+ */
+const ANALYSIS_CATEGORY_INTRO_RE =
+  /^(?:e\s+(?:(?:so\s+|somente\s+|apenas\s+)(?:(?:em|com|na|no|de|para|sobre)\s+)?|(?:em|com|na|no|de|para|sobre)\s+)|(?:so\s+|somente\s+|apenas\s+)(?:(?:em|com|na|no|de|para|sobre)\s+)?)/i;
+
+/** Termo de categoria de um follow-up tipo "E só em alimentação?", "E em supermercado?", "E com combustível?" ou "Só em aluguel?". */
 function extractAnalysisCategoryTerm(norm: string): string | null {
-  if (!CONTINUATION_RE.test(norm)) return null;
-  const m = ANALYSIS_CONTINUATION_CATEGORY_RE.exec(norm);
-  if (!m) return null;
-  let term = m[1].replace(/\s{2,}/g, ' ').replace(/[?.!;]+$/g, '').trim();
+  if (!ANALYSIS_ELISION_PREFIX_RE.test(norm)) return null;
+  const m = ANALYSIS_CATEGORY_INTRO_RE.exec(norm);
+  if (!m || !m[0]) return null;
+  let term = norm
+    .slice(m[0].length)
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[?.!;]+$/g, '')
+    .trim();
   if (!term) return null;
   const normTerm = normalizeText(term);
+  // Sovraproteção numérica: "só 5%?" nunca vira lente de categoria (o
+  // percentual de simulação exige prefixo "e", tratado antes).
+  if (/^[-+]?\d+(?:[.,]\d+)?\s*%?$/.test(normTerm)) return null;
   if (
     !normTerm.includes('>') &&
     /\b(?:quanto|qual|ai|agora|depois|meses?|periodo|ano|informe|diga|entao|incluindo|ate|hoje|atual|corrente)\b/.test(
@@ -1391,7 +1409,7 @@ async function resolveAnalysisFollowUp(
 ): Promise<ResolvedAnalysisFollowUp | null> {
   if (!analysis) return null;
   const norm = normalizeText(q);
-  if (!norm || !CONTINUATION_RE.test(norm)) return null;
+  if (!norm || !ANALYSIS_ELISION_PREFIX_RE.test(norm)) return null;
 
   if (analysis.intent === 'savings_opportunities') {
     // "E 5%?" | "E com 12,5%?" | "E se fosse 20%?"
@@ -1428,7 +1446,22 @@ async function resolveAnalysisFollowUp(
   const term = extractAnalysisCategoryTerm(norm);
   if (term) {
     const cats = await fetchExpenseCategories(supabase);
-    const resolvedCat = resolveCategory(cats, term);
+    let resolvedCat = resolveCategory(cats, term);
+    if (!resolvedCat) {
+      // Lente virtual conservadora (PESSOAL-13C3B.12): a categoria excluída
+      // pode NÃO existir na tabela categories (ex.: "investimentos" sem
+      // categoria lançável no catálogo). Nesses casos o termo também é uma
+      // classe excluída → respondemos com a política; nunca inovamos em
+      // categoria percentual desconhecida (mantém o esclarecimento atual).
+      const virtualLabel = cap(term);
+      const virtualClass = classifySavingsCategory(virtualLabel);
+      if (virtualClass !== 'percentage_candidate') {
+        resolvedCat = {
+          label: { display_name: virtualLabel, canonical_path: virtualLabel },
+          matchTerm: virtualLabel,
+        };
+      }
+    }
     return {
       intent: analysis.intent,
       style: analysis.windowStyle,
@@ -1568,6 +1601,7 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
   const hasFixed = excluded.some((e) => e.classification === 'fixed_contract');
   const hasDebt = excluded.some((e) => e.classification === 'debt_commitment');
   const hasProtected = excluded.some((e) => e.classification === 'protected_essential');
+  const hasAsset = excluded.some((e) => e.classification === 'asset_allocation');
 
   let text = `${listed} não entraram na simulação percentual.`;
   if (hasFixed && hasDebt) {
@@ -1584,6 +1618,10 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
     text +=
       ' Despesas médicas e de saúde ficaram fora: não é prudente sugerir corte sem avaliação de necessidade.';
   }
+  if (hasAsset) {
+    text +=
+      ' Investimentos e aportes ficaram fora: são alocação patrimonial, não consumo a reduzir, e por isso não recebem simulação de economia.';
+  }
   return text;
 }
 
@@ -1594,6 +1632,9 @@ function excludedLensMessage(label: string, classification: SavingsClassificatio
   }
   if (classification === 'debt_commitment') {
     return `${label} é uma dívida e não entra na simulação percentual: qualquer refinanciamento exigiria saldo, prazo, taxa e CET, e o histórico de pagamentos sozinho não permite estimar uma economia real.`;
+  }
+  if (classification === 'asset_allocation') {
+    return `${label} é uma alocação patrimonial, não um consumo a reduzir, e por isso não entra na simulação percentual: os valores investidos ou aplicados representam direcionamento de recursos, e o histórico de movimentações sozinho não permite estimar uma economia no dia a dia.`;
   }
   return `${label} é uma despesa essencial de saúde e não entra na simulação percentual: não é prudente sugerir corte sem avaliação de necessidade.`;
 }
@@ -1742,7 +1783,7 @@ async function buildSavingsOpportunities(
       }
     } else if (excluded.length > 0) {
       answer =
-        'Não encontrei despesas adequadas para uma simulação percentual: as categorias com despesas recorrentes são compromissos fixos, dívidas ou despesas de saúde.';
+        'Não encontrei despesas adequadas para uma simulação percentual: as categorias com despesas recorrentes são compromissos fixos, dívidas, despesas de saúde ou alocação patrimonial.';
       notice = exclusionNotice || 'Nenhuma simulação de economia foi calculada.';
     } else {
       answer = INSUFFICIENT_SAVINGS_MESSAGE;

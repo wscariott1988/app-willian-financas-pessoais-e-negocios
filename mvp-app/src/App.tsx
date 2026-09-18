@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { Login } from './components/Login';
-import { AppShell } from './components/AppShell';
+import { AppShell, readPersistedView } from './components/AppShell';
 import { resolveProfileCode, resolveProfileId } from './lib/profileIdentity';
 import './index.css';
 
@@ -110,6 +110,7 @@ function App() {
         onProfileSwitch={handleProfileSwitch}
         onLogout={handleLogout}
         onProfileSwitchRequest={handleProfileSwitchRequest}
+        initialView={readPersistedView(profileId) ?? 'inicio'}
       />
     </div>
   );

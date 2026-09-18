@@ -26,7 +26,7 @@
 // Regras invariantes mantidas: nunca expõe config técnica/secrets para o
 // usuário final; o perfil da conversa nunca vem do cliente (RLS decide).
 
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import {
   Sparkles,
   Send,
@@ -87,6 +87,15 @@ function engineLabel(m: UiMessage): string | null {
   return null;
 }
 
+/** true quando o usuário pede menos movimento (prefers-reduced-motion). */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 function kindLabel(kind: string): string {
   switch (kind) {
     case 'growth':
@@ -124,6 +133,34 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
   // evitam que um snapshot lento da hidratação apague/re-adicione essas linhas.
   const sessionLocalsRef = useRef<Map<string, ChatConversationItem>>(new Map());
   const sessionRemovedRef = useRef<Set<string>>(new Set());
+  // PESSOAL-13C3B.12: timeline sempre visível até a última mensagem. Após
+  // hidratar/trocar de conversa (imediato) ou enviar/perguntar (smooth, salvo
+  // prefers-reduced-motion), rola o contêiner até o rodapé — sem timers e SEM
+  // rolar quando o usuário carrega mensagens antigas.
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const pendingScrollRef = useRef<'immediate' | 'smooth' | null>(null);
+
+  useLayoutEffect(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const intent = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    if (!intent) return;
+    const top = el.scrollHeight;
+    if (
+      intent === 'smooth' &&
+      typeof el.scrollTo === 'function' &&
+      !prefersReducedMotion()
+    ) {
+      try {
+        el.scrollTo({ top, behavior: 'smooth' });
+        return;
+      } catch {
+        // scrollTo indisponível/opcional: cai no posicionamento direto abaixo.
+      }
+    }
+    el.scrollTop = top;
+  }, [chat.messages, chat.activeId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -143,6 +180,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       signal,
     );
     if (!mountedRef.current) return;
+    if (page === 0) pendingScrollRef.current = 'immediate';
     dispatch(
       page === 0
         ? { type: 'messages_loaded', messages, hasMore }
@@ -217,6 +255,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
     }
 
     const crid = `c${Date.now()}-${++cridSeq.current}`;
+    pendingScrollRef.current = 'smooth';
     dispatch({ type: 'send_start', clientRequestId: crid, question: q });
     setQuestion('');
 
@@ -234,6 +273,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       payload.evidence = response.evidence ?? undefined;
       payload.cards = response.cards ?? undefined;
       payload.notice = response.notice ?? undefined;
+      pendingScrollRef.current = 'smooth';
       dispatch({ type: 'send_success', clientRequestId: crid, payload });
       // PESSOAL-13C2B.6: resposta concluída → atualiza lastMessageAt e move a
       // conversa para o topo da sidebar (título é PRESERVADO pelo reducer).
@@ -249,6 +289,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
         conversation: { id: targetId, lastMessageAt: now },
       });
     } catch (err) {
+      pendingScrollRef.current = 'smooth';
       dispatch({
         type: 'send_error',
         clientRequestId: crid,
@@ -407,7 +448,7 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
         </aside>
 
         <div className="finance-ai-main">
-          <div className="finance-ai-messages" aria-live="polite">
+          <div className="finance-ai-messages" aria-live="polite" ref={messagesRef}>
             {chat.status === 'loading' && chat.messages.length === 0 && (
               <div className="analytics-state finance-ai-loading">
                 <Bot size={16} /> Carregando conversa…

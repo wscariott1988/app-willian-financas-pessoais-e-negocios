@@ -428,7 +428,8 @@ export type SavingsClassification =
   | 'percentage_candidate'
   | 'fixed_contract'
   | 'debt_commitment'
-  | 'protected_essential';
+  | 'protected_essential'
+  | 'asset_allocation';
 
 export interface ExcludedSavingsOpportunity {
   categoryId: string | null;
@@ -475,6 +476,23 @@ const PROTECTED_ESSENTIAL_TERMS = [
   'tratamento medico',
 ] as const;
 
+// Alocação patrimonial PESSOAL-13C3B.12: investimentos, aportes, poupança,
+// aplicações e reserva de emergência são direcionamento de recursos — NÃO um
+// consumo a reduzir. Aqui o casamento é por IGUALDADE do segmento (nunca
+// prefixo): "Investimento em você" não pode virar alocação, ao contrário do
+// prefixo intencional de "Seguro do carro" (termos genéricos de investimento
+// são ambíguos demais para prefixo).
+const ASSET_ALLOCATION_TERMS = [
+  'investimento',
+  'investimentos',
+  'aporte',
+  'aportes',
+  'poupanca',
+  'aplicacao',
+  'aplicacoes',
+  'reserva de emergencia',
+] as const;
+
 /**
  * Casamento por SEGMENTO do canonical_path, nunca por substring solta: o termo
  * precisa fechar a frase do segmento ("plano de saude" ≠ "plano alimentar";
@@ -496,11 +514,17 @@ function segmentsContainTerm(segments: readonly string[], terms: readonly string
   return terms.some((term) => segments.some((segment) => segmentStartsWithTerm(segment, term)));
 }
 
+/** Igualdade EXATA de segmento (usada pela alocação patrimonial, sem prefixo). */
+function segmentsMatchTermExactly(segments: readonly string[], terms: readonly string[]): boolean {
+  return terms.some((term) => segments.includes(term));
+}
+
 /**
  * Classificação PURA de um rótulo canônico (canonical_path/display_name) para
- * a simulação de economia. Compromissos fixos, dívidas e despesas protegidas de
- * saúde NÃO recebem simulação percentual: o histórico de pagamentos sozinho não
- * permite estimar uma economia real. Tratamento conservador e documentado:
+ * a simulação de economia. Compromissos fixos, dívidas, despesas protegidas de
+ * saúde e alocação patrimonial NÃO recebem simulação percentual: o histórico de
+ * pagamentos sozinho não permite estimar uma economia real. Tratamento
+ * conservador e documentado:
  * somente os termos explícitos acima excluem; categorias não reconhecidas
  * mantêm o comportamento existente (percentage_candidate) para não quebrar o
  * catálogo variável atual ("Alimentação > Supermercado", "Transporte >
@@ -511,6 +535,7 @@ export function classifySavingsCategory(canonicalLabel: string): SavingsClassifi
   if (segmentsContainTerm(segments, FIXED_CONTRACT_TERMS)) return 'fixed_contract';
   if (segmentsContainTerm(segments, DEBT_COMMITMENT_TERMS)) return 'debt_commitment';
   if (segmentsContainTerm(segments, PROTECTED_ESSENTIAL_TERMS)) return 'protected_essential';
+  if (segmentsMatchTermExactly(segments, ASSET_ALLOCATION_TERMS)) return 'asset_allocation';
   return 'percentage_candidate';
 }
 
@@ -544,8 +569,9 @@ export interface SavingsResult {
   /**
    * Categorias que TINHAM gasto recorrente elegível pela regra de dados, mas
    * ficaram FORA da simulação percentual pela política conservadora
-   * (PESSOAL-13C3B.10): compromissos fixos, dívidas e despesas protegidas de
-   * saúde. Nunca anunciam/estimam economia. Ordenadas por meanR desc.
+   * (PESSOAL-13C3B.10/.12): compromissos fixos, dívidas, despesas protegidas de
+   * saúde e alocação patrimonial. Nunca anunciam/estimam economia. Ordenadas
+   * por meanR desc.
    */
   excluded: ExcludedSavingsOpportunity[];
 }
@@ -556,7 +582,8 @@ export interface SavingsResult {
  * somente quando 0 < percent <= 100 (caso contrário lança RangeError). Elegibilidade: presença em >= 2 meses recentes e
  * meanR > 0. Política conservadora (PESSOAL-13C3B.10): somente categorias
  * 'percentage_candidate' entram no ranking percentual; compromissos fixos,
- * dívidas e despesas protegidas são segregados em `excluded` e NÃO consomem o
+ * dívidas, despesas protegidas e alocação patrimonial são segregados em
+ * `excluded` e NÃO consomem o
  * limite de 3 cards nem recebem valor de economia inventado. Ranking: economia
  * mensal desc → participação desc → path alfabético.
  * CV: <= 0,25 baixa; <= 0,75 média; > 0,75 alta. Sem categoria elegível ou sem

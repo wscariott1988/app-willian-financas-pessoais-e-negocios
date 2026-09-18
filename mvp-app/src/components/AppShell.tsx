@@ -5,13 +5,39 @@ import { Dashboard } from './Dashboard';
 import { TransactionsView, type TxMode } from '../views/TransactionsView';
 import { SettingsView } from '../views/SettingsView';
 import { AnalyticsView } from '../views/AnalyticsView';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type PendingFilter } from '../lib/txList';
 import { usePeriodController } from '../hooks/usePeriodController';
 import { PERIOD_DEFAULT_MODES } from '../lib/periodController';
 import { PeriodPicker } from './PeriodPicker';
 
 export type ViewId = 'inicio' | 'transacoes' | 'contas' | 'analises' | 'configuracoes';
+
+// Persistência da aba ativa por perfil na SESSÃO (PESSOAL-13C3B.12). Grava
+// SOMENTE o id da view — nenhum dado financeiro. Chave por perfil: trocar de
+// perfil nunca restaura uma aba incompatível.
+const SESSION_VIEW_KEY_PREFIX = 'wf:active-view:';
+const VALID_VIEW_IDS: ReadonlySet<string> = new Set([
+  'inicio',
+  'transacoes',
+  'contas',
+  'analises',
+  'configuracoes',
+]);
+
+/**
+ * Lê a aba persistida da sessão do perfil. Falha silenciosa (storage
+ * indisponível/SSR) e valores inválidos caem no padrão 'inicio' via null.
+ */
+export function readPersistedView(profileId: string): ViewId | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(`${SESSION_VIEW_KEY_PREFIX}${profileId}`);
+    return raw !== null && VALID_VIEW_IDS.has(raw) ? (raw as ViewId) : null;
+  } catch {
+    return null;
+  }
+}
 
 // O contrato do seletor de período vive em lib/periodController.ts; mantemos o
 // re-export para não quebrar os imports existentes (Dashboard/Views).
@@ -54,6 +80,17 @@ export const AppShell: React.FC<AppShellProps> = ({
   // Modo da view Transações preservado durante a navegação interna (sessão ativa)
   const [txMode, setTxMode] = useState<TxMode>('period');
   const [txPendingFilter, setTxPendingFilter] = useState<PendingFilter>('all');
+
+  // PESSOAL-13C3B.12: F5 (remount) restaura a aba ativa da sessão por perfil.
+  // Só grava o id da view (nunca dados financeiros); falha silenciosa em modo
+  // privado/SSR. A restauração em si acontece no App via readPersistedView.
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(`${SESSION_VIEW_KEY_PREFIX}${profileId}`, view);
+    } catch {
+      // Storage indisponível: a navegação segue normal.
+    }
+  }, [profileId, view]);
 
   // O picker de período personalizado é único na tela; ele opera sobre o estado
   // do contexto ativo (a única view visível), respeitando o período de cada aba.
