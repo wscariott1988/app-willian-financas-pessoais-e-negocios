@@ -174,7 +174,7 @@ describe('PESSOAL-13C3B-E2 — growth_categories (determinístico)', () => {
     expect(ans?.response.cards?.length).toBeGreaterThan(0);
   });
 
-  it('rank top 3 com média/delta/percentual/classificação e período analisado', async () => {
+  it('rank top 3 com média/delta/percentual claros (sem classificação interna no card)', async () => {
     const { fake } = mkClient(growingRows());
     const ans = await runDeterministicAsk({
       supabase: fake as never,
@@ -190,8 +190,8 @@ describe('PESSOAL-13C3B-E2 — growth_categories (determinístico)', () => {
     expect(rows['Variação mensal']).toBeTruthy();
     expect(rows['Variação relativa']).toBe('300%');
     expect(rows['Despesas recentes']).toBe('3');
-    expect(rows['Classificação']).toBe('crescimento');
-    expect(rows['Período analisado']).toContain('de');
+    expect(rows['Classificação']).toBeUndefined();
+    expect(rows['Período analisado']).toBeUndefined();
     expect(ans?.response.period).toEqual({ start: '2026-01-01', end: '2026-06-30' });
   });
 

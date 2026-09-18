@@ -92,7 +92,7 @@ function kindLabel(kind: string): string {
     case 'growth':
       return 'Crescimento';
     case 'new':
-      return 'Novo gasto';
+      return 'Novo no período recente';
     case 'spike':
       return 'Pico pontual';
     case 'savings':

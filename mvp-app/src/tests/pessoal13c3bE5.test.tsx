@@ -100,7 +100,7 @@ describe('PESSOAL-13C3B-E5 — Renderização de cards analíticos e notice', ()
     expect(screen.getByText('R$ 1.000,00')).toBeDefined();
   });
 
-  it('2. new imediato exibe rótulo "Novo gasto"', async () => {
+  it('2. new imediato exibe rótulo "Novo no período recente"', async () => {
     const messages: UiMessage[] = [
       msg({ key: 'm1', role: 'user', text: 'Quais os novos gastos?' }),
       msg({
@@ -121,7 +121,7 @@ describe('PESSOAL-13C3B-E5 — Renderização de cards analíticos e notice', ()
 
     render(<FinanceAiSection />);
 
-    expect(await screen.findByText('Novo gasto')).toBeDefined();
+    expect(await screen.findByText('Novo no período recente')).toBeDefined();
     expect(screen.getByText('Educação > English School')).toBeDefined();
     expect(screen.getByText('Primeiro registro em abril')).toBeDefined();
     expect(screen.getByText('R$ 450,00')).toBeDefined();

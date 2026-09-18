@@ -46,7 +46,7 @@
 // os contratos existentes. O comportamento completo (paginação) vale em produção.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AskResponse, EvidenceItem, TrendCard } from './types.js';
+import type { AskResponse, EvidenceItem, TrendCard, TrendCardRow } from './types.js';
 import {
   summaryByPeriod,
   expenseMonthlyAggregate,
@@ -659,8 +659,8 @@ function isGrowthCategoriesQuestion(norm: string): boolean {
 function isSavingsOpportunitiesQuestion(norm: string): boolean {
   if (
     /\bonde\b/.test(norm) &&
-    /\b(?:oportunidade|posso|possa|consigo)\b/.test(norm) &&
-    /\b(?:economiz[a-z]*|poupar[a-z]*)\b/.test(norm)
+    /\b(?:oportunidades?|posso|possa|consigo)\b/.test(norm) &&
+    /\b(?:economiz[a-z]*|economias?|poupar[a-z]*|poupanc[a-z]*)\b/.test(norm)
   ) {
     return true;
   }
@@ -1408,7 +1408,17 @@ async function resolveAnalysisFollowUp(
   // Mudança de janela → re-deriva com o relógio local injetável (novo âmbito).
   const style = detectAnalysisWindowFollowUp(norm);
   if (style) {
-    return { intent: analysis.intent, style };
+    const pct =
+      analysis.intent === 'savings_opportunities'
+        ? analysis.simulationPct
+        : undefined;
+    return {
+      intent: analysis.intent,
+      style,
+      percent: pct,
+      percentInvalid:
+        pct != null && !(Number.isFinite(pct) && pct > 0 && pct <= 100),
+    };
   }
 
   // Troca de lente de categoria, preservando intent/janela/percentual.
@@ -1450,43 +1460,54 @@ function signedBrlCents(cents: number): string {
   return signedBrl(cents / 100);
 }
 
-function classificationLabel(cls: GrowthClassification): string {
-  switch (cls) {
-    case 'growth':
-      return 'crescimento';
-    case 'new':
-      return 'novo';
-    case 'spike':
-      return 'pico';
-    default:
-      return 'sem tendência';
-  }
-}
-
 function formatPctRatio(v: number): string {
   return `${(v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+}
+
+function growthSummarySentence(results: GrowthCategoryResult[]): string {
+  const total = results.length;
+  const growth = results.filter((r) => r.classification === 'growth').length;
+  const newly = results.filter((r) => r.classification === 'new').length;
+  const spikes = results.filter((r) => r.classification === 'spike').length;
+  const parts: string[] = [];
+  if (growth > 0) {
+    parts.push(`${growth} ${growth === 1 ? 'categoria' : 'categorias'} com aumento de gasto`);
+  }
+  if (newly > 0) {
+    parts.push(
+      `${newly} ${newly === 1 ? 'categoria' : 'categorias'} que ${newly === 1 ? 'passou' : 'passaram'} a aparecer no período recente`,
+    );
+  }
+  if (spikes > 0) {
+    parts.push(`${spikes} ${spikes === 1 ? 'pico' : 'picos'} ${spikes === 1 ? 'pontual' : 'pontuais'} de gasto`);
+  }
+  if (parts.length === 0) return 'Nenhuma mudança relevante neste período.';
+  return `Encontrei ${total} ${total === 1 ? 'mudança relevante' : 'mudanças relevantes'} neste período: ${parts.join('; ')}.`;
 }
 
 function growthCardOf(
   r: GrowthCategoryResult,
   w: TrendWindow,
 ): TrendCard {
+  const isNew = r.classification === 'new';
+  const rows: TrendCardRow[] = isNew
+    ? [
+        { label: 'Média mensal (período recente)', value: brlCents(r.meanRCents) },
+        { label: 'Aumento mensal observado', value: signedBrlCents(r.deltaCents) },
+        { label: 'Despesas recentes', value: String(r.transactionCount) },
+      ]
+    : [
+        { label: 'Média anterior (por mês)', value: brlCents(r.meanACents) },
+        { label: 'Média recente (por mês)', value: brlCents(r.meanRCents) },
+        { label: 'Variação mensal', value: signedBrlCents(r.deltaCents) },
+        { label: 'Variação relativa', value: formatPctRatio(r.growthPct ?? 0) },
+        { label: 'Despesas recentes', value: String(r.transactionCount) },
+      ];
   return {
     kind: r.classification === 'new' ? 'new' : r.classification === 'spike' ? 'spike' : 'growth',
     title: r.label,
     subtitle: 'Crescimento identificado por comparação entre médias mensais',
-    rows: [
-      { label: 'Média anterior (por mês)', value: brlCents(r.meanACents) },
-      { label: 'Média recente (por mês)', value: brlCents(r.meanRCents) },
-      { label: 'Variação mensal', value: signedBrlCents(r.deltaCents) },
-      {
-        label: 'Variação relativa',
-        value: r.growthPct != null ? formatPctRatio(r.growthPct) : 'categoria nova',
-      },
-      { label: 'Despesas recentes', value: String(r.transactionCount) },
-      { label: 'Classificação', value: classificationLabel(r.classification) },
-      { label: 'Período analisado', value: windowDisplay(w) },
-    ],
+    rows,
   };
 }
 
@@ -1509,7 +1530,6 @@ function savingCardOf(
       { label: 'Participação no total recente', value: share },
       { label: 'Regularidade', value: regularity },
       { label: 'Variabilidade', value: variability },
-      { label: 'Período analisado', value: windowDisplay(w) },
     ],
   };
 }
@@ -1593,6 +1613,7 @@ async function buildGrowthCategories(
   const answer =
     `Sim, identifiquei crescimento significativo em ${top.length} ` +
     `${top.length === 1 ? 'categoria' : 'categorias'}: ${topNames}. ` +
+    `${growthSummarySentence(top)} ` +
     'Considere revisar esses itens para entender o motivo do aumento.';
 
   const response = makeResponse(answer, resolvidoAPartirDaJanela(w), ['trend_growth'], evidence);
