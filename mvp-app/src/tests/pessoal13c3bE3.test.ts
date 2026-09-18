@@ -404,7 +404,7 @@ describe('PESSOAL-13C3B-E3 — follow-up elíptico de percentual', () => {
     const fu = await runDeterministicAsk({ supabase: fake as never, question: 'E 5%?', context, nowISO: NOW });
     const rows = Object.fromEntries((fu?.response.cards?.[0]?.rows ?? []).map((r) => [r.label, r.value]));
     expect(rows['Economia mensal (cenário 5%)']).toContain('20,00');
-    expect(rows['Projeção anual (simulação)']).toContain('240,00');
+    expect(rows['Economia anualizada (simulação)']).toContain('240,00');
   });
 
   it('"E com 0%?" responde amigável (nunca 500), cards vazios e análise sem parcela de percentual', async () => {

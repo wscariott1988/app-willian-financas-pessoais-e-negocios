@@ -573,6 +573,7 @@ describe('PESSOAL-13C3B-E1: oportunidades de economia', () => {
   it('ranking: economia mensal desc → participação desc → path alfabético', () => {
     // SUPER: meanR 40000 (10% = 4000); MORADIA: meanR 20000 (10% = 2000)
     // SUPER maior economia; empate de economia não se configura aqui.
+    // PESSOAL-13C3B.10: Moradia > Aluguel é compromisso fixo → fora do ranking.
     const rows = [
       tx(days(6, 5), 400.0, SUPER),
       tx(days(7, 5), 400.0, SUPER),
@@ -582,7 +583,9 @@ describe('PESSOAL-13C3B-E1: oportunidades de economia', () => {
       tx(days(8, 5), 200.0, MORADIA),
     ];
     const s = savingsOpportunities(rows, W);
-    expect(s.items.map((i) => i.label)).toEqual(['Alimentação > Supermercado', 'Moradia > Aluguel']);
+    expect(s.items.map((i) => i.label)).toEqual(['Alimentação > Supermercado']);
+    expect(s.excluded.map((e) => e.label)).toEqual(['Moradia > Aluguel']);
+    expect(s.excluded[0].classification).toBe('fixed_contract');
   });
 
   it('regularidade mensal = meses com gasto / 3', () => {

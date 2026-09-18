@@ -24,7 +24,7 @@
 //     6 completos + mês atual parcial em preview (fora de base/recent).
 
 import { categoryLabel, type AnalyticsTxRow } from './analytics.js';
-import { MONTH_FULL } from './analyticsInsights.js';
+import { MONTH_FULL, normalizeCategoryTerm } from './analyticsInsights.js';
 import { addMonths, daysInMonth, toLocalISODate } from './period.js';
 
 // ============ Constantes de materialidade/crescimento ============
@@ -422,6 +422,98 @@ export function topGrowingCategories(
   return analyzeCategoryGrowth(rows, window, opts);
 }
 
+// ============ Classificação conservadora para economia (PESSOAL-13C3B.10) ============
+
+export type SavingsClassification =
+  | 'percentage_candidate'
+  | 'fixed_contract'
+  | 'debt_commitment'
+  | 'protected_essential';
+
+export interface ExcludedSavingsOpportunity {
+  categoryId: string | null;
+  label: string;
+  classification: Exclude<SavingsClassification, 'percentage_candidate'>;
+  meanRCents: number;
+}
+
+// Termos em minúsculas e SEM acentos (norma de normalizeCategoryTerm), com
+// singular/plural e variantes do catálogo real ("Moradia > Aluguel", "Aluguel").
+const FIXED_CONTRACT_TERMS = [
+  'aluguel',
+  'alugueis',
+  'condominio',
+  'condominios',
+  'seguro',
+  'seguros',
+  'plano de saude',
+  'planos de saude',
+  'mensalidade escolar',
+  'mensalidades escolares',
+] as const;
+
+const DEBT_COMMITMENT_TERMS = [
+  'emprestimo',
+  'emprestimos',
+  'financiamento',
+  'financiamentos',
+  'divida',
+  'dividas',
+  'parcelamento',
+  'parcelamentos',
+] as const;
+
+const PROTECTED_ESSENTIAL_TERMS = [
+  'farmacia',
+  'farmacias',
+  'medicamento',
+  'medicamentos',
+  'consulta',
+  'consultas',
+  'hospital',
+  'hospitais',
+  'tratamento medico',
+] as const;
+
+/**
+ * Casamento por SEGMENTO do canonical_path, nunca por substring solta: o termo
+ * precisa fechar a frase do segmento ("plano de saude" ≠ "plano alimentar";
+ * "seguro" ≠ "manutenção"). Um segmento instala o termo quando é EXATAMENTE o
+ * termo ou começa com ele seguido de espaço (ex.: "Seguro do carro").
+ */
+function segmentStartsWithTerm(segment: string, term: string): boolean {
+  return segment === term || segment.startsWith(`${term} `);
+}
+
+function canonicalSegments(label: string): string[] {
+  return normalizeCategoryTerm(label)
+    .split('>')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function segmentsContainTerm(segments: readonly string[], terms: readonly string[]): boolean {
+  return terms.some((term) => segments.some((segment) => segmentStartsWithTerm(segment, term)));
+}
+
+/**
+ * Classificação PURA de um rótulo canônico (canonical_path/display_name) para
+ * a simulação de economia. Compromissos fixos, dívidas e despesas protegidas de
+ * saúde NÃO recebem simulação percentual: o histórico de pagamentos sozinho não
+ * permite estimar uma economia real. Tratamento conservador e documentado:
+ * somente os termos explícitos acima excluem; categorias não reconhecidas
+ * mantêm o comportamento existente (percentage_candidate) para não quebrar o
+ * catálogo variável atual ("Alimentação > Supermercado", "Transporte >
+ * Combustível", "Educação > English School", ...).
+ */
+export function classifySavingsCategory(canonicalLabel: string): SavingsClassification {
+  const segments = canonicalSegments(canonicalLabel);
+  if (segmentsContainTerm(segments, FIXED_CONTRACT_TERMS)) return 'fixed_contract';
+  if (segmentsContainTerm(segments, DEBT_COMMITMENT_TERMS)) return 'debt_commitment';
+  if (segmentsContainTerm(segments, PROTECTED_ESSENTIAL_TERMS)) return 'protected_essential';
+  return 'percentage_candidate';
+}
+
 // ============ Oportunidades de economia ============
 
 export type VariabilityBand = 'low' | 'medium' | 'high';
@@ -449,13 +541,24 @@ export interface SavingsResult {
   top: SavingsOpportunity[];
   insufficientData: boolean;
   meanRecentTotalCents: number;
+  /**
+   * Categorias que TINHAM gasto recorrente elegível pela regra de dados, mas
+   * ficaram FORA da simulação percentual pela política conservadora
+   * (PESSOAL-13C3B.10): compromissos fixos, dívidas e despesas protegidas de
+   * saúde. Nunca anunciam/estimam economia. Ordenadas por meanR desc.
+   */
+  excluded: ExcludedSavingsOpportunity[];
 }
 
 /**
  * "Oportunidades potenciais para revisar" — NUNCA uma promessa de economia e
  * nunca qualifica a categoria; cenário padrão 10%. Percentual custom válido
  * somente quando 0 < percent <= 100 (caso contrário lança RangeError). Elegibilidade: presença em >= 2 meses recentes e
- * meanR > 0. Ranking: economia mensal desc → participação desc → path alfabético.
+ * meanR > 0. Política conservadora (PESSOAL-13C3B.10): somente categorias
+ * 'percentage_candidate' entram no ranking percentual; compromissos fixos,
+ * dívidas e despesas protegidas são segregados em `excluded` e NÃO consomem o
+ * limite de 3 cards nem recebem valor de economia inventado. Ranking: economia
+ * mensal desc → participação desc → path alfabético.
  * CV: <= 0,25 baixa; <= 0,75 média; > 0,75 alta. Sem categoria elegível ou sem
  * gasto recente → insufficientData=true (saída explícita, jamais cards vazios).
  */
@@ -474,10 +577,24 @@ export function savingsOpportunities(
   const meanRecentTotalCents = roundCents(totalRecentCents / 3);
 
   const items: SavingsOpportunity[] = [];
+  const excluded: ExcludedSavingsOpportunity[] = [];
   for (const b of buckets.values()) {
     const meanR = meanCents(b.recent);
     const monthsRecentWithSpend = b.recent.filter((v) => v > 0).length;
-    if (monthsRecentWithSpend < cfg.minRecentMonths || meanR <= 0) continue;
+    const eligibleByData = monthsRecentWithSpend >= cfg.minRecentMonths && meanR > 0;
+    const classification = classifySavingsCategory(b.label);
+    if (classification !== 'percentage_candidate') {
+      if (eligibleByData) {
+        excluded.push({
+          categoryId: b.categoryId,
+          label: b.label,
+          classification,
+          meanRCents: meanR,
+        });
+      }
+      continue;
+    }
+    if (!eligibleByData) continue;
 
     const economyMonthlyCents = roundCents((meanR * percent) / 100);
     const meanA = meanCents(b.base);
@@ -517,11 +634,16 @@ export function savingsOpportunities(
     return a.label.localeCompare(b.label);
   });
 
+  excluded.sort(
+    (a, b) => b.meanRCents - a.meanRCents || a.label.localeCompare(b.label),
+  );
+
   const capped = items.slice(0, cfg.maxResults);
   return {
     items: capped,
     top: capped.slice(0, cfg.topLimit),
     insufficientData: capped.length === 0,
     meanRecentTotalCents,
+    excluded,
   };
 }

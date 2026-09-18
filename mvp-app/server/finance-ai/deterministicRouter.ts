@@ -60,8 +60,11 @@ import {
   analyzeCategoryGrowth,
   buildTrendWindow,
   savingsOpportunities,
+  classifySavingsCategory,
+  type ExcludedSavingsOpportunity,
   type GrowthCategoryResult,
   type GrowthClassification,
+  type SavingsClassification,
   type SavingsOpportunity,
   type TrendWindow,
   type TrendWindowStyle,
@@ -1526,7 +1529,7 @@ function savingCardOf(
     rows: [
       { label: 'Média mensal recente', value: brlCents(s.meanRCents) },
       { label: `Economia mensal (cenário ${formatPercent(s.percent)})`, value: brlCents(s.economyMonthlyCents) },
-      { label: 'Projeção anual (simulação)', value: brlCents(s.economyAnnualCents) },
+      { label: 'Economia anualizada (simulação)', value: brlCents(s.economyAnnualCents) },
       { label: 'Participação no total recente', value: share },
       { label: 'Regularidade', value: regularity },
       { label: 'Variabilidade', value: variability },
@@ -1541,8 +1544,58 @@ function formatPercent(v: number): string {
 function savingsNotice(pct: number): string {
   return (
     `Simulação com redução de ${formatPercent(pct)} sobre a média mensal recente. ` +
-    'Os valores são apenas cenários e não consideram metas mínimas pessoais, nem compromissos fixos.'
+    'A economia anualizada equivale à economia mensal × 12 e não constitui previsão financeira: os valores são apenas cenários, não uma recomendação automática.'
   );
+}
+
+function joinEn(w: string[]): string {
+  if (w.length === 0) return '';
+  if (w.length === 1) return w[0];
+  if (w.length === 2) return `${w[0]} e ${w[1]}`;
+  return `${w.slice(0, -1).join(', ')} e ${w[w.length - 1]}`;
+}
+
+/**
+ * Aviso curto (PESSOAL-13C3B.10) sobre categorias excluídas da simulação
+ * percentual. Nunca inventa valores de economia e jamais recomenda corte em
+ * débitos ou despesas protegidas sem análise de contrato/condições.
+ */
+function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportunity>): string {
+  if (excluded.length === 0) return '';
+  const names = excluded.map((e) => e.label);
+  const listed =
+    names.length > 3 ? `${names.slice(0, 3).join(', ')} e outras` : joinEn(names);
+  const hasFixed = excluded.some((e) => e.classification === 'fixed_contract');
+  const hasDebt = excluded.some((e) => e.classification === 'debt_commitment');
+  const hasProtected = excluded.some((e) => e.classification === 'protected_essential');
+
+  let text = `${listed} não entraram na simulação percentual.`;
+  if (hasFixed && hasDebt) {
+    text +=
+      ' Compromissos fixos e dívidas exigem análise de contrato, taxas e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
+  } else if (hasFixed) {
+    text +=
+      ' Compromissos fixos exigem análise de contrato e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
+  } else if (hasDebt) {
+    text +=
+      ' Dívidas exigem análise de saldo, prazo, taxa e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
+  }
+  if (hasProtected) {
+    text +=
+      ' Despesas médicas e de saúde ficaram fora: não é prudente sugerir corte sem avaliação de necessidade.';
+  }
+  return text;
+}
+
+/** Resposta de lente quando a categoria pedida é excluída da simulação. */
+function excludedLensMessage(label: string, classification: SavingsClassification): string {
+  if (classification === 'fixed_contract') {
+    return `${label} é um compromisso fixo e não entra na simulação percentual: exige análise de contrato, e o histórico de pagamentos sozinho não permite estimar uma economia real.`;
+  }
+  if (classification === 'debt_commitment') {
+    return `${label} é uma dívida e não entra na simulação percentual: qualquer refinanciamento exigiria saldo, prazo, taxa e CET, e o histórico de pagamentos sozinho não permite estimar uma economia real.`;
+  }
+  return `${label} é uma despesa essencial de saúde e não entra na simulação percentual: não é prudente sugerir corte sem avaliação de necessidade.`;
 }
 
 const NO_GROWTH_MESSAGE =
@@ -1666,14 +1719,35 @@ async function buildSavingsOpportunities(
   const result = savingsOpportunities(rows, w, percent);
 
   let top = result.top;
+  let excluded = result.excluded;
   if (opts.categoryPath) {
     top = top.filter((s) => matchesCategoryPath(s.label, opts.categoryPath as string));
+    excluded = excluded.filter((e) => matchesCategoryPath(e.label, opts.categoryPath as string));
   }
 
+  const exclusionNotice = savingsExclusionNotice(excluded);
+
   if (result.insufficientData || top.length === 0) {
-    const answer = opts.categoryPath
-      ? `Não encontrei dados suficientes de despesas recorrentes em ${opts.categoryPath} para estimar a simulação.`
-      : INSUFFICIENT_SAVINGS_MESSAGE;
+    let answer: string;
+    let notice: string;
+    if (opts.categoryPath) {
+      const lensClass = classifySavingsCategory(opts.categoryPath);
+      if (lensClass !== 'percentage_candidate') {
+        answer = excludedLensMessage(opts.categoryPath, lensClass);
+        notice = exclusionNotice || `Nenhuma simulação de economia foi calculada para ${opts.categoryPath}.`;
+      } else {
+        answer =
+          `Não encontrei dados suficientes de despesas recorrentes em ${opts.categoryPath} para estimar a simulação.`;
+        notice = exclusionNotice || 'Nenhuma simulação de economia foi calculada.';
+      }
+    } else if (excluded.length > 0) {
+      answer =
+        'Não encontrei despesas adequadas para uma simulação percentual: as categorias com despesas recorrentes são compromissos fixos, dívidas ou despesas de saúde.';
+      notice = exclusionNotice || 'Nenhuma simulação de economia foi calculada.';
+    } else {
+      answer = INSUFFICIENT_SAVINGS_MESSAGE;
+      notice = 'Nenhuma simulação de economia foi calculada.';
+    }
     const response = makeResponse(
       answer,
       resolvidoAPartirDaJanela(w),
@@ -1681,7 +1755,7 @@ async function buildSavingsOpportunities(
       [{ label: 'Período analisado', value: windowDisplay(w) }],
     );
     response.cards = [];
-    response.notice = 'Nenhuma simulação de economia foi calculada.';
+    response.notice = notice;
     return {
       intent: 'savings_opportunities',
       response,
@@ -1705,7 +1779,9 @@ async function buildSavingsOpportunities(
     { label: 'Período analisado', value: windowDisplay(w) },
   ]);
   response.cards = cards;
-  response.notice = savingsNotice(percent);
+  response.notice = exclusionNotice
+    ? `${savingsNotice(percent)} ${exclusionNotice}`
+    : savingsNotice(percent);
   return {
     intent: 'savings_opportunities',
     response,

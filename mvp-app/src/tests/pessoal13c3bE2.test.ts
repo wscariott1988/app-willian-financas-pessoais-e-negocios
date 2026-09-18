@@ -241,7 +241,7 @@ describe('PESSOAL-13C3B-E2 — savings_opportunities (determinístico)', () => {
     expect(ans?.response.notice).toBeTruthy();
   });
 
-  it('cards com oportunidade potencial para revisar e projeção como simulação', async () => {
+  it('cards com oportunidade potencial para revisar e economia anualizada como simulação', async () => {
     const { fake } = mkClient(growingRows());
     const ans = await runDeterministicAsk({
       supabase: fake as never,
@@ -253,13 +253,13 @@ describe('PESSOAL-13C3B-E2 — savings_opportunities (determinístico)', () => {
     expect(card?.subtitle).toBe('Oportunidade potencial para revisar');
     const rows = Object.fromEntries((card?.rows ?? []).map((r) => [r.label, r.value]));
     expect(rows['Economia mensal (cenário 10%)']).toBeTruthy();
-    expect(rows['Projeção anual (simulação)']).toBeTruthy();
+    expect(rows['Economia anualizada (simulação)']).toBeTruthy();
     expect(rows['Participação no total recente']).toBeTruthy();
     expect(rows['Regularidade']).toBe('3 de 3 meses recentes');
     expect(rows['Variabilidade']).toBe('Baixa');
     // SUPER: média 400 → 10% = 40/mês → 480/ano.
     expect(rows['Economia mensal (cenário 10%)']).toContain('40,00');
-    expect(rows['Projeção anual (simulação)']).toContain('480,00');
+    expect(rows['Economia anualizada (simulação)']).toContain('480,00');
     expect(ans?.response.notice).toContain('Simulação com redução de 10%');
   });
 
@@ -273,7 +273,7 @@ describe('PESSOAL-13C3B-E2 — savings_opportunities (determinístico)', () => {
     const rows = Object.fromEntries((ans?.response.cards?.[0]?.rows ?? []).map((r) => [r.label, r.value]));
     // SUPER média 400 → 12,5% = 50/mês → 600/ano.
     expect(rows['Economia mensal (cenário 12,5%)']).toContain('50,00');
-    expect(rows['Projeção anual (simulação)']).toContain('600,00');
+    expect(rows['Economia anualizada (simulação)']).toContain('600,00');
   });
 
   it('dados insuficientes → determinístico, cards vazios e notice amigável', async () => {
