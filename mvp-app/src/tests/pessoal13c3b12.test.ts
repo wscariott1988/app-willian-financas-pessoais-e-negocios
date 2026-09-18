@@ -321,7 +321,7 @@ describe('PESSOAL-13C3B.12 — roteador: lente de exclusão e aviso de alocaçã
     expect(fu?.intent).toBe('savings_opportunities');
     expect(fu?.analysis?.categoryPath).toBe('Investimentos');
     expect(fu?.response.cards).toEqual([]);
-    expect(fu?.response.answer).toContain('é uma alocação patrimonial, não um consumo a reduzir');
+    expect(fu?.response.answer).toContain('representa alocação patrimonial, não consumo reduzível');
     expect(fu?.response.answer).toContain('não entra na simulação percentual');
     expect(fu?.response.geminiCallCount).toBe(0);
   });
@@ -350,7 +350,7 @@ describe('PESSOAL-13C3B.12 — roteador: lente de exclusão e aviso de alocaçã
       nowISO: NOW,
     });
     expect(aluguel?.analysis?.categoryPath).toBe('Moradia > Aluguel');
-    expect(aluguel?.response.answer).toContain('é um compromisso fixo e não entra na simulação percentual');
+    expect(aluguel?.response.answer).toContain('representa um compromisso fixo e não entra na simulação percentual');
     expect(aluguel?.response.geminiCallCount).toBe(0);
 
     const emprestimo = await runDeterministicAsk({
@@ -360,7 +360,7 @@ describe('PESSOAL-13C3B.12 — roteador: lente de exclusão e aviso de alocaçã
       nowISO: NOW,
     });
     expect(emprestimo?.analysis?.categoryPath).toBe('Dívidas > Empréstimo');
-    expect(emprestimo?.response.answer).toContain('é uma dívida');
+    expect(emprestimo?.response.answer).toContain('representa uma dívida');
     expect(emprestimo?.response.answer).toContain('saldo, prazo, taxa e CET');
     expect(emprestimo?.response.geminiCallCount).toBe(0);
   });

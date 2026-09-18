@@ -1603,7 +1603,8 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
   const hasProtected = excluded.some((e) => e.classification === 'protected_essential');
   const hasAsset = excluded.some((e) => e.classification === 'asset_allocation');
 
-  let text = `${listed} não entraram na simulação percentual.`;
+  const agreement = names.length === 1 ? 'não entrou' : 'não entraram';
+  let text = `${listed} ${agreement} na simulação percentual.`;
   if (hasFixed && hasDebt) {
     text +=
       ' Compromissos fixos e dívidas exigem análise de contrato, taxas e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
@@ -1628,15 +1629,15 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
 /** Resposta de lente quando a categoria pedida é excluída da simulação. */
 function excludedLensMessage(label: string, classification: SavingsClassification): string {
   if (classification === 'fixed_contract') {
-    return `${label} é um compromisso fixo e não entra na simulação percentual: exige análise de contrato, e o histórico de pagamentos sozinho não permite estimar uma economia real.`;
+    return `A categoria ${label} representa um compromisso fixo e não entra na simulação percentual. O histórico de pagamentos sozinho não permite estimar uma economia real; seria necessário avaliar o contrato e suas condições.`;
   }
   if (classification === 'debt_commitment') {
-    return `${label} é uma dívida e não entra na simulação percentual: qualquer refinanciamento exigiria saldo, prazo, taxa e CET, e o histórico de pagamentos sozinho não permite estimar uma economia real.`;
+    return `A categoria ${label} representa uma dívida e não entra na simulação percentual. Para estimar uma possível redução, seriam necessários saldo, prazo, taxa e CET.`;
   }
   if (classification === 'asset_allocation') {
-    return `${label} é uma alocação patrimonial, não um consumo a reduzir, e por isso não entra na simulação percentual: os valores investidos ou aplicados representam direcionamento de recursos, e o histórico de movimentações sozinho não permite estimar uma economia no dia a dia.`;
+    return `A categoria ${label} representa alocação patrimonial, não consumo reduzível, e por isso não entra na simulação percentual.`;
   }
-  return `${label} é uma despesa essencial de saúde e não entra na simulação percentual: não é prudente sugerir corte sem avaliação de necessidade.`;
+  return `A categoria ${label} representa uma despesa essencial de saúde e não entra na simulação percentual; não é prudente sugerir corte sem avaliação de necessidade.`;
 }
 
 const NO_GROWTH_MESSAGE =
@@ -1771,11 +1772,13 @@ async function buildSavingsOpportunities(
   if (result.insufficientData || top.length === 0) {
     let answer: string;
     let notice: string;
+    let evidence: EvidenceItem[] = [{ label: 'Período analisado', value: windowDisplay(w) }];
     if (opts.categoryPath) {
       const lensClass = classifySavingsCategory(opts.categoryPath);
       if (lensClass !== 'percentage_candidate') {
         answer = excludedLensMessage(opts.categoryPath, lensClass);
-        notice = exclusionNotice || `Nenhuma simulação de economia foi calculada para ${opts.categoryPath}.`;
+        notice = '';
+        evidence = [];
       } else {
         answer =
           `Não encontrei dados suficientes de despesas recorrentes em ${opts.categoryPath} para estimar a simulação.`;
@@ -1793,10 +1796,10 @@ async function buildSavingsOpportunities(
       answer,
       resolvidoAPartirDaJanela(w),
       ['trend_savings'],
-      [{ label: 'Período analisado', value: windowDisplay(w) }],
+      evidence,
     );
     response.cards = [];
-    response.notice = notice;
+    if (notice) response.notice = notice;
     return {
       intent: 'savings_opportunities',
       response,

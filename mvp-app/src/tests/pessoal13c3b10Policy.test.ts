@@ -527,7 +527,7 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     expect(fu?.intent).toBe('savings_opportunities');
     expect(fu?.response.cards).toEqual([]);
     expect(fu?.analysis?.categoryPath).toBe('Dívidas > Empréstimo');
-    expect(fu?.response.answer).toContain('é uma dívida e não entra na simulação percentual');
+    expect(fu?.response.answer).toContain('representa uma dívida e não entra na simulação percentual');
     expect(fu?.response.answer).toContain('saldo, prazo, taxa e CET');
     expect(fu?.response.geminiCallCount).toBe(0);
   });
@@ -542,9 +542,10 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     });
     expect(fu?.analysis?.categoryPath).toBe('Moradia > Aluguel');
     expect(fu?.response.cards).toEqual([]);
-    expect(fu?.response.answer).toContain('é um compromisso fixo e não entra na simulação percentual');
-    expect(fu?.response.answer).toContain('análise de contrato');
-    expect(fu?.response.notice).toContain('não entraram na simulação percentual');
+    expect(fu?.response.answer).toContain('representa um compromisso fixo e não entra na simulação percentual');
+    expect(fu?.response.answer).toContain('avaliar o contrato');
+    expect(fu?.response.notice).toBeUndefined();
+    expect(fu?.response.evidence ?? []).toEqual([]);
   });
 
   it('follow-up percentual "E 5%?" preserva a política e mantém o aviso de exclusão', async () => {
