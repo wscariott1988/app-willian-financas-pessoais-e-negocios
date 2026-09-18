@@ -499,6 +499,10 @@ describe('PESSOAL-13C2 — chatStore: ownership e veredito do turno', () => {
       answer: 'Total: R$ 10,00.',
       payload: { engine: 'deterministic', toolsUsed: ['financial_summary'] },
       periodAnalyzed: APRIL2026,
+      // PESSOAL-13C3B-E4: o resultado cached reconstitui intent/engine para o
+      // evento de sucesso sanitizado (null quando a linha não os tem).
+      intent: null,
+      engine: null,
     });
   });
 

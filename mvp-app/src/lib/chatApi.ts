@@ -12,6 +12,7 @@ import {
   CHAT_PAGE_SIZE,
   type ChatConversationItem,
   type UiMessage,
+  type UiTrendCard,
 } from './chatState';
 
 interface RawChatRow {
@@ -28,6 +29,8 @@ interface RawMessageRow {
   payload: {
     engine?: 'deterministic' | 'gemini';
     evidence?: Array<{ label: string; value: string }>;
+    cards?: UiTrendCard[];
+    notice?: string;
   } | null;
   engine: string | null;
   period_analyzed: { start: string; end: string } | null;
@@ -76,6 +79,8 @@ function toUiMessage(row: RawMessageRow): UiMessage {
     engine,
     periodAnalyzed: row.period_analyzed ?? undefined,
     evidence: row.payload?.evidence,
+    cards: row.payload?.cards,
+    notice: row.payload?.notice,
     error: status === 'failed' ? (row.error ?? 'Não foi possível responder agora.') : null,
   };
 }

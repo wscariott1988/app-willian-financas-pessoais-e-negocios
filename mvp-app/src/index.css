@@ -3719,12 +3719,131 @@ button.period-range-custom {
   width: fit-content;
 }
 
-.finance-ai-answer {
+.finance-ai-cards-section {
+  width: 100%;
+}
+
+.finance-ai-cards-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.finance-ai-card-item {
+  width: 100%;
+}
+
+.finance-ai-trend-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.finance-ai-card-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--color-text-muted);
+}
+
+.finance-ai-card-growth .finance-ai-card-badge {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.finance-ai-card-new .finance-ai-card-badge {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.finance-ai-card-spike .finance-ai-card-badge {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.finance-ai-card-savings .finance-ai-card-badge {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+
+.finance-ai-card-title {
   margin: 0;
   font-size: 14px;
-  line-height: 1.6;
+  font-weight: 600;
   color: var(--color-text);
-  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.finance-ai-card-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.finance-ai-card-dl {
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.finance-ai-card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.finance-ai-card-dt {
+  margin: 0;
+  color: var(--color-text-muted);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.finance-ai-card-dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.finance-ai-notice {
+  padding: 10px 12px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .finance-ai-evidence {

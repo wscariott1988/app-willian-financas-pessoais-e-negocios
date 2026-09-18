@@ -259,11 +259,17 @@ interface CachedTurn {
   answer: string;
   payload: ChatMessagePayload | null;
   periodAnalyzed: { start: string; end: string } | null;
+  intent?: string | null;
+  engine?: 'deterministic' | 'gemini' | null;
 }
 
-/** Reconstitui a AskResponse de uma resposta já concluída (clique duplo/reenvio). */
+/**
+ * Reconstitui a AskResponse de uma resposta já concluída (clique duplo/reenvio).
+ * Os cards/notice são incluídos SOMENTE quando presentes no payload persistido:
+ * um payload legado (sem cards) volta sem os campos — contrato retrocompatível.
+ */
 function cachedResponseOf(turn: CachedTurn): AskResponse {
-  return {
+  const reply: AskResponse = {
     answer: turn.answer,
     period: turn.periodAnalyzed ?? null,
     toolsUsed: turn.payload?.toolsUsed ?? [],
@@ -272,6 +278,13 @@ function cachedResponseOf(turn: CachedTurn): AskResponse {
     geminiCallCount: turn.payload?.geminiCallCount ?? 0,
     periodAnalyzed: turn.periodAnalyzed ?? undefined,
   };
+  if (Array.isArray(turn.payload?.cards)) {
+    reply.cards = turn.payload.cards;
+  }
+  if (typeof turn.payload?.notice === 'string') {
+    reply.notice = turn.payload.notice;
+  }
+  return reply;
 }
 
 /** Últimas respostas concluídas da conversa (para o bloco de contexto do Gemini). */
@@ -431,7 +444,8 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
           emitSanitizedSuccessEvent(
             buildSuccessEvent({
               requestId,
-              engine: begun.payload?.engine ?? 'deterministic',
+              engine: begun.payload?.engine ?? begun.engine ?? 'deterministic',
+              intent: begun.intent ?? undefined,
               elapsedMs: Date.now() - startedAt,
               geminiCallCount: begun.payload?.geminiCallCount ?? 0,
             }),
@@ -474,6 +488,8 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
             geminiCallCount: 0,
             toolsUsed: deterministic.response.toolsUsed,
             evidence: deterministic.response.evidence ?? [],
+            cards: deterministic.response.cards,
+            notice: deterministic.response.notice,
           },
           intent: deterministic.intent,
           engine: 'deterministic',
@@ -485,6 +501,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
             periodAnalyzed:
               deterministic.response.periodAnalyzed ?? deterministic.response.period,
             answer: deterministic.response.answer,
+            analysis: deterministic.analysis,
           }),
           setTitle: !conversationTitle,
           title: titleFromQuestion(body.question),

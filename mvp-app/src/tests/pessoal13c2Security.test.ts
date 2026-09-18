@@ -551,14 +551,20 @@ const MIGRATION_023 = readFileSync(new URL('../../../supabase/migrations/023_cha
 const MIGRATION_024 = readFileSync(new URL('../../../supabase/migrations/024_chat_acl_least_privilege.sql', import.meta.url), 'utf8');
 const MIGRATION_025 = readFileSync(new URL('../../../supabase/migrations/025_remove_chat_message_delete_policy.sql', import.meta.url), 'utf8');
 
+// EOL-agnóstico: migrations podem ser lidas com LF ou CRLF (autocrlf) e o
+// parsing por linha não deve carregar '\r' residual nas statements.
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
 function aclStatements(migration: string): string[] {
-  return migration.split('\n').filter((l) => /^\s*(GRANT|REVOKE) /.test(l));
+  return normalizeEol(migration).split('\n').filter((l) => /^\s*(GRANT|REVOKE) /.test(l));
 }
 
 // Todas as STATEMENTS reais (linhas terminadas em ';' fora de comentário) —
 // permite exigir a lista EXATA de comandos de uma migration.
 function sqlStatements(migration: string): string[] {
-  return migration
+  return normalizeEol(migration)
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('--') && l.endsWith(';'));
@@ -568,7 +574,7 @@ function sqlStatements(migration: string): string[] {
 // "CASE WHEN (" com parêntese externo aberto e nunca fechado antes do THEN.
 // Exige parênteses balanceados e CASE/WHEN com END/THEN correspondentes.
 function sqlSyntacticallyBalanced(sql: string): boolean {
-  const code = sql
+  const code = normalizeEol(sql)
     .split('\n')
     .map((l) => l.replace(/--.*$/, ''))
     .join('\n');
@@ -668,6 +674,29 @@ describe('PESSOAL-13C2A.1 — auditoria dos SQLs', () => {
     ]) {
       expect(sqlAt(rel)).not.toContain('service_role');
     }
+  });
+
+  it('E0 CRLF: aclStatements dá a MESMA lista com LF ou CRLF nas migrations reais 023–026', () => {
+    // Regressão do checkout autocrlf=true no Windows: linhas com '\r' residual
+    // quebravam o toEqual exato do 024. NormalizeEol deve zerar a divergência.
+    for (const sql of [MIGRATION_023, MIGRATION_024, readFileSync(new URL('../../../supabase/migrations/026_chat_message_idempotency_role.sql', import.meta.url), 'utf8')]) {
+      const lf = normalizeEol(sql);
+      const crlf = lf.replace(/\n/g, '\r\n');
+      expect(aclStatements(crlf)).toEqual(aclStatements(lf));
+      expect(sqlStatements(crlf)).toEqual(sqlStatements(lf));
+      expect(sqlSyntacticallyBalanced(crlf)).toBe(sqlSyntacticallyBalanced(lf));
+    }
+    // Prova dirigida: o próprio 024 com CRLF precisa listar os grants exatos.
+    expect(aclStatements(normalizeEol(MIGRATION_024).replace(/\n/g, '\r\n'))).toEqual([
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM PUBLIC;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM anon;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_conversations FROM authenticated;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM PUBLIC;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM anon;',
+      'REVOKE ALL PRIVILEGES ON TABLE public.chat_messages FROM authenticated;',
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.chat_conversations TO authenticated;',
+      'GRANT SELECT, INSERT, UPDATE ON TABLE public.chat_messages TO authenticated;',
+    ]);
   });
 });
 

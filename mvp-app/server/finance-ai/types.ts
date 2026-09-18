@@ -186,6 +186,22 @@ export interface EvidenceItem {
 /** Motor que produziu a resposta (PESSOAL-13C1). */
 export type AskEngine = 'deterministic' | 'gemini';
 
+// ── Cards temáticos determinísticos (PESSOAL-13C3B-E2) ─────────
+
+export type TrendCardKind = 'growth' | 'new' | 'spike' | 'savings';
+
+export interface TrendCardRow {
+  label: string;
+  value: string;
+}
+
+export interface TrendCard {
+  kind: TrendCardKind;
+  title: string;
+  subtitle: string;
+  rows: TrendCardRow[];
+}
+
 export interface AskResponse {
   answer: string;
   period: { start: string; end: string } | null;
@@ -197,4 +213,8 @@ export interface AskResponse {
   geminiCallCount?: number;
   /** Período EFETIVAMENTE consultado pelo backend (igual a `period` aqui; badge da tela). */
   periodAnalyzed?: { start: string; end: string };
+  /** Cards temáticos (tendências / oportunidades de economia) — opcional e retrocompatível. */
+  cards?: TrendCard[];
+  /** Aviso adicional (ex.: simulação de redução) — opcional e retrocompatível. */
+  notice?: string;
 }

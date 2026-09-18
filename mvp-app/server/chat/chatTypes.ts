@@ -6,6 +6,8 @@
 // app.jwt_profile_id(). Nenhum profile_id atravessa estas interfaces: a
 // identidade vem exclusivamente do JWT do usuário em cada requisição.
 
+import type { TrendCard } from '../finance-ai/types.js';
+
 export type ChatRole = 'user' | 'assistant';
 
 export type ChatMessageStatus = 'pending' | 'completed' | 'failed';
@@ -13,6 +15,44 @@ export type ChatMessageStatus = 'pending' | 'completed' | 'failed';
 export interface ChatPeriod {
   start: string;
   end: string;
+}
+
+// ── Contexto analítico persistente (PESSOAL-13C3B-E3) ────────────
+
+export type ChatAnalysisIntent = 'growth_categories' | 'savings_opportunities';
+export type ChatAnalysisWindowStyle = 'six_complete' | 'five_plus_current' | 'six_plus_current';
+
+/** Âmbito da janela de tendência NO TURNO ATUAL (só datas; jamais valores). */
+export interface ChatAnalysisWindow {
+  start: string;
+  end: string;
+  baseStart: string;
+  baseEnd: string;
+  recentStart: string;
+  recentEnd: string;
+}
+
+/**
+ * Contexto analítico persistido na conversa para follow-ups elípticos
+ * ("E 5%?", "E só em supermercado?", "E incluindo este mês?") de tendências e
+ * oportunidades de economia. Regras PESSOAL-13C3B-E3:
+ *   - Pode persistir: intent, datas, estilo de janela, percentual e path
+ *     canônico de categoria;
+ *   - JAMAIS persiste valores monetários, médias, deltas, cards, linhas,
+ *     descrições, UUIDs nem agregados (o follow-up SEMPRE re-consulta dados).
+ */
+export interface ChatAnalysisContext {
+  version: 1;
+  intent: ChatAnalysisIntent;
+  windowStyle: ChatAnalysisWindowStyle;
+  /** Relógio local (YYYY-MM-DD) usado ao derivar a janela atual. */
+  anchorDate: string;
+  window: ChatAnalysisWindow;
+  includeCurrentMonth: boolean;
+  isPartialCurrent: boolean;
+  simulationPct?: number;
+  /** Lente canônica resolvida (matchTerm de resolveCategory), quando restrita. */
+  categoryPath?: string;
 }
 
 /**
@@ -29,6 +69,12 @@ export interface ChatContextState {
   period: ChatPeriod | null;
   /** Resumos das últimas respostas (teto CHAT_SUMMARIES_MAX) para o bloco do Gemini. */
   summaries: string[];
+  /**
+   * Contexto analítico persistente (PESSOAL-13C3B-E3). Presente somente após
+   * turno analítico concluído; os turnos não analíticos o limpam e os contextos
+   * legados não o contêm (retrocompatível).
+   */
+  analysis?: ChatAnalysisContext | null;
 }
 
 /** Payload SANITIZADO da resposta assistant (reconstrói os cards no UI). */
@@ -38,6 +84,13 @@ export interface ChatMessagePayload {
   toolsUsed?: string[];
   evidence?: Array<{ label: string; value: string }>;
   notice?: string;
+  /**
+   * Cards temáticos (tendências/oportunidades) já sanitizados em
+   * payloadSanitize.ts (PESSOAL-13C3B-E4): somente fields mapeados, nunca a
+   * resposta bruta do router/Gemini. `cards: []` significa "houve cards, mas
+   * vazios"; ausente significa "turno sem cards" (retrocompatível).
+   */
+  cards?: TrendCard[];
 }
 
 export interface ChatConversationRow {

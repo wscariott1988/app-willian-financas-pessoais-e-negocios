@@ -13,6 +13,7 @@ import {
   CHAT_GEMINI_RECENT_MSGS,
   CHAT_SUMMARIES_MAX,
   CHAT_TITLE_MAX_CHARS,
+  type ChatAnalysisContext,
   type ChatContextState,
   type ChatPeriod,
 } from './chatTypes.js';
@@ -50,6 +51,13 @@ export interface ContextTurnInput {
   category: string | null;
   periodAnalyzed: ChatPeriod | null;
   answer: string;
+  /**
+   * Contexto analítico persistente (PESSOAL-13C3B-E3). Quando definido, o turno
+   * era analítico e o contexto é (re)gravado; quando ausente (turno tradicional
+   * ou Gemini) o contexto analítico é LIMPO — nenhum follow-up de análise
+   * sobrevive a um turno não analítico.
+   */
+  analysis?: ChatAnalysisContext | null;
 }
 
 /**
@@ -67,6 +75,7 @@ export function contextFromTurn(
     intent: input.intent ?? null,
     period: input.periodAnalyzed ?? null,
     summaries: appendSummary(base, summaryOf(input.answer)),
+    analysis: input.analysis ?? null,
   };
 }
 
