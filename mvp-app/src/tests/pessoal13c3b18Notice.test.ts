@@ -333,7 +333,7 @@ describe('PESSOAL-13C3B.18 — cita somente os tipos realmente excluídos', () =
       { cat: ALUG, amount: 2000 },
     ]));
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Aluguel ficou fora: é compromisso fixo e exige análise de contrato e condições.');
+    expect(notice).toContain('A categoria Aluguel ficou fora: é compromisso fixo e exige análise de contrato e condições.');
     expect(notice.toLowerCase()).not.toContain('dívida');
     expect(notice.toLowerCase()).not.toContain('saúde');
     expect(notice.toLowerCase()).not.toContain('investimento');

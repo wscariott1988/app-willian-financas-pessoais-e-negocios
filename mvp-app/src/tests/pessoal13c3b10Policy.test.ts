@@ -498,7 +498,7 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     const notice = ans.response.notice ?? '';
     expect(notice).toContain('Aluguel');
     expect(notice).toContain('Empréstimo');
-    expect(notice).toContain('Aluguel e Empréstimo ficaram fora: compromissos fixos e dívidas exigem análise');
+    expect(notice).toContain('As categorias Aluguel e Empréstimo ficaram fora: compromissos fixos e dívidas exigem análise');
     expect(notice).not.toContain('R$ 2.000,00');
     expect(notice).not.toContain('R$ 1.500,00');
   });
@@ -563,7 +563,7 @@ describe('PESSOAL-13C3B.10 — roteador: aviso de exclusão e cards só de eleg�
     expect(rows['Economia mensal (cenário 5%)']).toContain('20,00');
     expect(rows['Economia anualizada (simulação)']).toContain('240,00');
     expect(fu?.response.notice).toContain('Aluguel');
-    expect(fu?.response.notice).toContain('Aluguel e Empréstimo ficaram fora');
+    expect(fu?.response.notice).toContain('As categorias Aluguel e Empréstimo ficaram fora');
     expect(fu?.response.geminiCallCount).toBe(0);
   });
 
@@ -866,7 +866,7 @@ describe('PESSOAL-13C3B.10 — endpoint: cache completed e F5 preservam cards e 
     const last = completed[completed.length - 1];
     expect(last.cards).toHaveLength(1);
     expect(last.cards?.[0]?.title).toBe('Alimentação > Supermercado');
-    expect(last.notice).toContain('Aluguel e Empréstimo ficaram fora');
+    expect(last.notice).toContain('As categorias Aluguel e Empréstimo ficaram fora');
 
     const persisted = assistantRowOf(c, 'r1')?.payload as
       | { cards?: Array<{ title: string }>; notice?: string }

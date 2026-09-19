@@ -73,6 +73,7 @@ import { MAX_QUESTION_LENGTH } from './orchestrator.js';
 import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
 import type { ChatAnalysisContext, ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
 import { PAYLOAD_NOTICE_MAX } from '../chat/payloadSanitize.js';
+import { dedupeDisplayNames } from './noticeDedup.js';
 
 export type DeterministicIntent =
   | 'total_expenses'
@@ -1583,7 +1584,7 @@ function savingsNotice(pct: number): string {
   );
 }
 
-function joinEn(w: string[]): string {
+function joinEn(w: readonly string[]): string {
   if (w.length === 0) return '';
   if (w.length === 1) return w[0];
   if (w.length === 2) return `${w[0]} e ${w[1]}`;
@@ -1599,22 +1600,27 @@ function displayNameOf(e: ExcludedSavingsOpportunity): string {
   return segments.length > 0 ? segments[segments.length - 1] : e.label.trim();
 }
 
-/** Nomes exibíveis deduplicados (ordem de exibição preservada). */
+/**
+ * Nomes exibíveis deduplicados (ordem de exibição preservada, PESSOAL-13C3B.21).
+ * A deduplicação compara apenas o TEXTO exibido ("Seguro do Carro" ♢ "seguro
+ * carro"); registros e classificações financeiras permanecem intactos.
+ */
 function displayNamesOf(list: ReadonlyArray<ExcludedSavingsOpportunity>): string[] {
-  const names: string[] = [];
-  for (const e of list) {
-    const name = displayNameOf(e);
-    if (!names.includes(name)) names.push(name);
-  }
-  return names;
+  return dedupeDisplayNames(list.map((e) => displayNameOf(e)));
 }
 
 /**
- * Aviso curto (PESSOAL-13C3B.10/.18) sobre categorias excluídas da simulação
- * percentual. Nunca inventa valores de economia e jamais recomenda corte em
- * débitos ou despesas protegidas sem análise de contrato/condições. Apenas os
- * TIPOS efetivamente excluídos na análise são citados; sem "e outras" quando as
- * categorias podem ser informadas corretamente.
+ * Aviso curto (PESSOAL-13C3B.10/.18/.21) sobre categorias excluídas da
+ * simulação percentual. Nunca inventa valores de economia e jamais recomenda
+ * corte em débitos ou despesas protegidas sem análise de contrato/condições.
+ * Apenas os TIPOS efetivamente excluídos na análise são citados; sem "e
+ * outras" quando as categorias podem ser informadas corretamente.
+ *
+ * Concordância estável (PESSOAL-13C3B.21): o sujeito é sempre o substantivo
+ * invariável "categoria/categorias", nunca o texto interno do rótulo — mesmo
+ * um nome no plural ("Investimentos") permanece gramaticalmente correto:
+ *   - um item:  "A categoria Investimentos ficou fora: ...";
+ *   - vários:   "As categorias Aluguel, Seguro do Carro e Empréstimo ficaram fora: ...".
  */
 function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportunity>): string {
   if (excluded.length === 0) return '';
@@ -1622,12 +1628,15 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
   const debt = excluded.filter((e) => e.classification === 'debt_commitment');
   const health = excluded.filter((e) => e.classification === 'protected_essential');
   const asset = excluded.filter((e) => e.classification === 'asset_allocation');
+  const subject = (names: readonly string[]): string =>
+    names.length === 1 ? `A categoria ${names[0]}` : `As categorias ${joinEn(names)}`;
   const ficou = (n: number): string => (n === 1 ? 'ficou' : 'ficaram');
 
   const sentences: string[] = [];
   if (fixed.length > 0 && debt.length > 0) {
+    const names = displayNamesOf([...fixed, ...debt]);
     sentences.push(
-      `${joinEn([...displayNamesOf(fixed), ...displayNamesOf(debt)])} ${ficou(fixed.length + debt.length)} fora: compromissos fixos e dívidas exigem análise de contrato, saldo e taxas.`,
+      `${subject(names)} ${ficou(names.length)} fora: compromissos fixos e dívidas exigem análise de contrato, saldo e taxas.`,
     );
   } else if (fixed.length > 0) {
     const names = displayNamesOf(fixed);
@@ -1635,25 +1644,25 @@ function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportuni
       names.length === 1
         ? 'é compromisso fixo e exige análise de contrato e condições'
         : 'são compromissos fixos e exigem análise de contrato e condições';
-    sentences.push(`${joinEn(names)} ${ficou(names.length)} fora: ${reason}.`);
+    sentences.push(`${subject(names)} ${ficou(names.length)} fora: ${reason}.`);
   } else if (debt.length > 0) {
     const names = displayNamesOf(debt);
     const reason =
       names.length === 1
         ? 'é dívida e exige análise de saldo, prazo, taxa e condições'
         : 'são dívidas e exigem análise de saldo, prazo, taxa e condições';
-    sentences.push(`${joinEn(names)} ${ficou(names.length)} fora: ${reason}.`);
+    sentences.push(`${subject(names)} ${ficou(names.length)} fora: ${reason}.`);
   }
   if (health.length > 0) {
     const names = displayNamesOf(health);
     sentences.push(
-      `${joinEn(names)} ${ficou(names.length)} fora: corte em despesas de saúde exige avaliação de necessidade.`,
+      `${subject(names)} ${ficou(names.length)} fora: corte em despesas de saúde exige avaliação de necessidade.`,
     );
   }
   if (asset.length > 0) {
     const names = displayNamesOf(asset);
     sentences.push(
-      `${joinEn(names)} ${ficou(names.length)} fora: ${names.length === 1 ? 'é alocação patrimonial, não consumo' : 'são alocação patrimonial, não consumo'}.`,
+      `${subject(names)} ${ficou(names.length)} fora: ${names.length === 1 ? 'representa alocação patrimonial, não consumo' : 'representam alocação patrimonial, não consumo'}.`,
     );
   }
   return sentences.join(' ');

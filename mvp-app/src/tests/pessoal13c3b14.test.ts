@@ -312,7 +312,7 @@ describe('PESSOAL-13C3B.14 — concordância singular/plural e fluxo geral intac
   it('aviso coletivo com UM excluído usa "ficou" (sujeito singular)', async () => {
     const { ans } = await firstTurn('Onde tenho oportunidades de economia de 10%?', singleExcludedRows());
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Aluguel ficou fora: é compromisso fixo e exige análise de contrato e condições.');
+    expect(notice).toContain('A categoria Aluguel ficou fora: é compromisso fixo e exige análise de contrato e condições.');
     expect(JSON.stringify(ans.response)).not.toContain('ficaram');
     expect(ans.response.geminiCallCount).toBe(0);
   });
@@ -320,7 +320,7 @@ describe('PESSOAL-13C3B.14 — concordância singular/plural e fluxo geral intac
   it('aviso coletivo com VÁRIOS excluídos mantém o plural "ficaram"', async () => {
     const { ans } = await firstTurn('Onde tenho oportunidades de economia de 10%?');
     const notice = ans.response.notice ?? '';
-    expect(notice).toContain('Aluguel e Empréstimo ficaram fora: compromissos fixos e dívidas exigem análise');
+    expect(notice).toContain('As categorias Aluguel e Empréstimo ficaram fora: compromissos fixos e dívidas exigem análise');
     expect(notice).toContain('Investimentos');
     expect(ans.response.geminiCallCount).toBe(0);
   });
@@ -330,7 +330,7 @@ describe('PESSOAL-13C3B.14 — concordância singular/plural e fluxo geral intac
     expect((ans.response.cards ?? []).map((c) => c.title)).toEqual(['Alimentação > Supermercado']);
     const notice = ans.response.notice ?? '';
     expect(notice).toContain('Simulação de 10% sobre a média mensal recente');
-    expect(notice).toContain('Aluguel e Empréstimo ficaram fora');
+    expect(notice).toContain('As categorias Aluguel e Empréstimo ficaram fora');
     expect(notice).toContain('Investimentos');
     expect(ans.response.engine).toBe('deterministic');
     expect(ans.response.geminiCallCount).toBe(0);
