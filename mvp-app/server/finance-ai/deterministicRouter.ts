@@ -72,6 +72,8 @@ import {
 import { MAX_QUESTION_LENGTH } from './orchestrator.js';
 import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
 import type { ChatAnalysisContext, ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
+import { PAYLOAD_NOTICE_MAX } from '../chat/payloadSanitize.js';
+import { dedupeDisplayNames } from './noticeDedup.js';
 
 export type DeterministicIntent =
   | 'total_expenses'
@@ -1576,54 +1578,133 @@ function formatPercent(v: number): string {
 
 function savingsNotice(pct: number): string {
   return (
-    `Simulação com redução de ${formatPercent(pct)} sobre a média mensal recente. ` +
-    'A economia anualizada equivale à economia mensal × 12 e não constitui previsão financeira: os valores são apenas cenários, não uma recomendação automática.'
+    `Simulação de ${formatPercent(pct)} sobre a média mensal recente; ` +
+    'a economia anualizada corresponde ao valor mensal × 12. ' +
+    'É apenas um cenário, não uma previsão nem recomendação automática.'
   );
 }
 
-function joinEn(w: string[]): string {
+function joinEn(w: readonly string[]): string {
   if (w.length === 0) return '';
   if (w.length === 1) return w[0];
   if (w.length === 2) return `${w[0]} e ${w[1]}`;
   return `${w.slice(0, -1).join(', ')} e ${w[w.length - 1]}`;
 }
 
+/** Nome curto exibível de uma categoria excluída (último segmento do path canônico). */
+function displayNameOf(e: ExcludedSavingsOpportunity): string {
+  const segments = e.label
+    .split('>')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1] : e.label.trim();
+}
+
 /**
- * Aviso curto (PESSOAL-13C3B.10) sobre categorias excluídas da simulação
- * percentual. Nunca inventa valores de economia e jamais recomenda corte em
- * débitos ou despesas protegidas sem análise de contrato/condições.
+ * Nomes exibíveis deduplicados (ordem de exibição preservada, PESSOAL-13C3B.21).
+ * A deduplicação compara apenas o TEXTO exibido ("Seguro do Carro" ♢ "seguro
+ * carro"); registros e classificações financeiras permanecem intactos.
+ */
+function displayNamesOf(list: ReadonlyArray<ExcludedSavingsOpportunity>): string[] {
+  return dedupeDisplayNames(list.map((e) => displayNameOf(e)));
+}
+
+/**
+ * Aviso curto (PESSOAL-13C3B.10/.18/.21) sobre categorias excluídas da
+ * simulação percentual. Nunca inventa valores de economia e jamais recomenda
+ * corte em débitos ou despesas protegidas sem análise de contrato/condições.
+ * Apenas os TIPOS efetivamente excluídos na análise são citados; sem "e
+ * outras" quando as categorias podem ser informadas corretamente.
+ *
+ * Concordância estável (PESSOAL-13C3B.21): o sujeito é sempre o substantivo
+ * invariável "categoria/categorias", nunca o texto interno do rótulo — mesmo
+ * um nome no plural ("Investimentos") permanece gramaticalmente correto:
+ *   - um item:  "A categoria Investimentos ficou fora: ...";
+ *   - vários:   "As categorias Aluguel, Seguro do Carro e Empréstimo ficaram fora: ...".
  */
 function savingsExclusionNotice(excluded: ReadonlyArray<ExcludedSavingsOpportunity>): string {
   if (excluded.length === 0) return '';
-  const names = excluded.map((e) => e.label);
-  const listed =
-    names.length > 3 ? `${names.slice(0, 3).join(', ')} e outras` : joinEn(names);
-  const hasFixed = excluded.some((e) => e.classification === 'fixed_contract');
-  const hasDebt = excluded.some((e) => e.classification === 'debt_commitment');
-  const hasProtected = excluded.some((e) => e.classification === 'protected_essential');
-  const hasAsset = excluded.some((e) => e.classification === 'asset_allocation');
+  const fixed = excluded.filter((e) => e.classification === 'fixed_contract');
+  const debt = excluded.filter((e) => e.classification === 'debt_commitment');
+  const health = excluded.filter((e) => e.classification === 'protected_essential');
+  const asset = excluded.filter((e) => e.classification === 'asset_allocation');
+  const subject = (names: readonly string[]): string =>
+    names.length === 1 ? `A categoria ${names[0]}` : `As categorias ${joinEn(names)}`;
+  const ficou = (n: number): string => (n === 1 ? 'ficou' : 'ficaram');
 
-  const agreement = names.length === 1 ? 'não entrou' : 'não entraram';
-  let text = `${listed} ${agreement} na simulação percentual.`;
-  if (hasFixed && hasDebt) {
-    text +=
-      ' Compromissos fixos e dívidas exigem análise de contrato, taxas e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
-  } else if (hasFixed) {
-    text +=
-      ' Compromissos fixos exigem análise de contrato e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
-  } else if (hasDebt) {
-    text +=
-      ' Dívidas exigem análise de saldo, prazo, taxa e condições; o histórico de pagamentos sozinho não permite estimar uma economia real.';
+  const sentences: string[] = [];
+  if (fixed.length > 0 && debt.length > 0) {
+    const names = displayNamesOf([...fixed, ...debt]);
+    sentences.push(
+      `${subject(names)} ${ficou(names.length)} fora: compromissos fixos e dívidas exigem análise de contrato, saldo e taxas.`,
+    );
+  } else if (fixed.length > 0) {
+    const names = displayNamesOf(fixed);
+    const reason =
+      names.length === 1
+        ? 'é compromisso fixo e exige análise de contrato e condições'
+        : 'são compromissos fixos e exigem análise de contrato e condições';
+    sentences.push(`${subject(names)} ${ficou(names.length)} fora: ${reason}.`);
+  } else if (debt.length > 0) {
+    const names = displayNamesOf(debt);
+    const reason =
+      names.length === 1
+        ? 'é dívida e exige análise de saldo, prazo, taxa e condições'
+        : 'são dívidas e exigem análise de saldo, prazo, taxa e condições';
+    sentences.push(`${subject(names)} ${ficou(names.length)} fora: ${reason}.`);
   }
-  if (hasProtected) {
-    text +=
-      ' Despesas médicas e de saúde ficaram fora: não é prudente sugerir corte sem avaliação de necessidade.';
+  if (health.length > 0) {
+    const names = displayNamesOf(health);
+    sentences.push(
+      `${subject(names)} ${ficou(names.length)} fora: corte em despesas de saúde exige avaliação de necessidade.`,
+    );
   }
-  if (hasAsset) {
-    text +=
-      ' Investimentos e aportes ficaram fora: são alocação patrimonial, não consumo a reduzir, e por isso não recebem simulação de economia.';
+  if (asset.length > 0) {
+    const names = displayNamesOf(asset);
+    sentences.push(
+      `${subject(names)} ${ficou(names.length)} fora: ${names.length === 1 ? 'representa alocação patrimonial, não consumo' : 'representam alocação patrimonial, não consumo'}.`,
+    );
   }
-  return text;
+  return sentences.join(' ');
+}
+
+/**
+ * Aviso por TIPO (sem enumerar categorias). Somente usado quando a enumeração
+ * completa estouraria o teto defensivo de PAYLOAD_NOTICE_MAX — assim a resposta
+ * fresca, o cache e o F5 permanecem idênticos dentro do limite.
+ */
+function savingsExclusionNoticeByType(
+  excluded: ReadonlyArray<ExcludedSavingsOpportunity>,
+): string {
+  const present: Array<{ noun: string; reason: string }> = [];
+  if (excluded.some((e) => e.classification === 'fixed_contract')) {
+    present.push({ noun: 'compromissos fixos', reason: 'exigem análise de contrato e condições' });
+  }
+  if (excluded.some((e) => e.classification === 'debt_commitment')) {
+    present.push({ noun: 'dívidas', reason: 'exigem análise de saldo, prazo e taxas' });
+  }
+  if (excluded.some((e) => e.classification === 'protected_essential')) {
+    present.push({ noun: 'despesas de saúde', reason: 'corte exige avaliação de necessidade' });
+  }
+  if (excluded.some((e) => e.classification === 'asset_allocation')) {
+    present.push({ noun: 'investimentos', reason: 'são alocação patrimonial, não consumo' });
+  }
+  const nouns = joinEn(present.map((p) => p.noun));
+  const verb = present.length === 1 ? 'ficou' : 'ficaram';
+  return `${nouns} ${verb} fora da simulação percentual: ${present.map((p) => p.reason).join('; ')}.`;
+}
+
+/** Aviso completo da simulação (base + exclusões), sempre dentro de PAYLOAD_NOTICE_MAX. */
+function composeSavingsNotice(
+  pct: number,
+  excluded: ReadonlyArray<ExcludedSavingsOpportunity>,
+): string {
+  const base = savingsNotice(pct);
+  const exclusion = savingsExclusionNotice(excluded);
+  if (!exclusion) return base;
+  const full = `${base} ${exclusion}`;
+  if (full.length <= PAYLOAD_NOTICE_MAX) return full;
+  return `${base} ${savingsExclusionNoticeByType(excluded)}`;
 }
 
 /** Resposta de lente quando a categoria pedida é excluída da simulação. */
@@ -1823,9 +1904,7 @@ async function buildSavingsOpportunities(
     { label: 'Período analisado', value: windowDisplay(w) },
   ]);
   response.cards = cards;
-  response.notice = exclusionNotice
-    ? `${savingsNotice(percent)} ${exclusionNotice}`
-    : savingsNotice(percent);
+  response.notice = composeSavingsNotice(percent, excluded);
   return {
     intent: 'savings_opportunities',
     response,

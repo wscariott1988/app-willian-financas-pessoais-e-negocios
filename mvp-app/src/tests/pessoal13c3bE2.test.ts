@@ -260,7 +260,7 @@ describe('PESSOAL-13C3B-E2 — savings_opportunities (determinístico)', () => {
     // SUPER: média 400 → 10% = 40/mês → 480/ano.
     expect(rows['Economia mensal (cenário 10%)']).toContain('40,00');
     expect(rows['Economia anualizada (simulação)']).toContain('480,00');
-    expect(ans?.response.notice).toContain('Simulação com redução de 10%');
+    expect(ans?.response.notice).toContain('Simulação de 10% sobre a média mensal recente');
   });
 
   it('12,5% aplica o percentual exato da simulação', async () => {

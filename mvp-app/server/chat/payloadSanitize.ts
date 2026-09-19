@@ -43,6 +43,7 @@ const TREND_CARD_KINDS: ReadonlySet<string> = new Set<TrendCardKind>([
 ]);
 
 const HTML_TAG_RE = /<[^>]*>/g;
+const ELLIPSIS = '…';
 
 /** Texto simples sem tags HTML arbitrárias, truncado com segurança. Nunca lança. */
 function cleanText(value: unknown, max: number): string | null {
@@ -50,6 +51,39 @@ function cleanText(value: unknown, max: number): string | null {
   const plain = value.replace(HTML_TAG_RE, '').trim();
   if (!plain) return null;
   return plain.length > max ? plain.slice(0, max) : plain;
+}
+
+/**
+ * Corta um texto que excede `max` em uma fronteira segura (PESSOAL-13C3B.18):
+ *   1. prefere o último limite de frase (`.`, `!`, `?`) dentro do limite —
+ *      o texto termina com a frase completa, sem reticências;
+ *   2. sem frase completa possível, corta no último espaço e acrescenta
+ *      reticências (nunca termina no meio de uma palavra);
+ *   3. palavra única maior que o limite vira prefixo com reticências.
+ * Resultado sempre dentro de `max`. Nunca lança.
+ */
+function truncateAtSafeBoundary(text: string, max: number): string {
+  const limit = Math.max(1, Math.floor(max));
+  const last = Math.min(limit - 1, text.length - 1);
+  for (let i = last; i >= 0; i -= 1) {
+    const ch = text[i];
+    if ((ch === '.' || ch === '!' || ch === '?') && /\s/.test(text[i + 1] ?? '')) {
+      return text.slice(0, i + 1);
+    }
+  }
+  for (let i = last; i >= 0; i -= 1) {
+    if (/\s/.test(text[i])) return text.slice(0, i) + ELLIPSIS;
+  }
+  return text.slice(0, limit - 1) + ELLIPSIS;
+}
+
+/** Texto de notice sem HTML, truncado em fronteira segura. Nunca lança. */
+function cleanNoticeText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const plain = value.replace(HTML_TAG_RE, '').trim();
+  if (!plain) return null;
+  if (plain.length <= PAYLOAD_NOTICE_MAX) return plain;
+  return truncateAtSafeBoundary(plain, PAYLOAD_NOTICE_MAX);
 }
 
 function cleanTextList(input: unknown, max: number, cap: number): string[] {
@@ -133,7 +167,7 @@ export function sanitizeChatPayload(input: unknown): ChatMessagePayload {
   const evidence = sanitizeEvidence(raw.evidence);
   if (evidence.length > 0) out.evidence = evidence;
   if (raw.notice !== undefined) {
-    const notice = cleanText(raw.notice, PAYLOAD_NOTICE_MAX);
+    const notice = cleanNoticeText(raw.notice);
     if (notice !== null) out.notice = notice;
   }
   if (raw.cards !== undefined) {

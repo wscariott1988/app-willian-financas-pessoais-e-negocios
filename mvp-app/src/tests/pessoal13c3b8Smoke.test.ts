@@ -442,7 +442,7 @@ describe('PESSOAL-13C3B.8 — savings: frase real e variações respondem determ
     expect(ans.response.geminiCallCount).toBe(0);
     expect(ans.response.cards?.length).toBeGreaterThan(0);
     expect(ans.response.answer).toContain('Com uma redução de 10%');
-    expect(ans.response.notice).toContain('Simulação com redução de 10%');
+    expect(ans.response.notice).toContain('Simulação de 10% sobre a média mensal recente');
   });
 
   it('opinião "economia do Brasil" continua caindo no Gemini (nulo)', async () => {
