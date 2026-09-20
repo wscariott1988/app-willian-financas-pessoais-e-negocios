@@ -419,6 +419,7 @@ const PROJECTION_ALLOWED_KEYS = new Set([
   'comparison',
   'categories',
   'remaining',
+  'lens',
   'realizedCents',
   'reason',
   'month',

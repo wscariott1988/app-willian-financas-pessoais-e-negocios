@@ -84,11 +84,34 @@ export interface ProjectionPeriod {
   endsOn?: string | null; // null = aberto
 }
 
+/** Lente de categoria que restringe TODOS os agregados da projeção (PESSOAL-13C4A-E3). */
+export type ProjectionLensInput =
+  | { kind: 'category'; categoryPath: string }
+  | { kind: 'uncategorized' };
+
+/**
+ * Casa uma transação com a lente ativa. Sem lente → todas as despesas entram.
+ * Lente de categoria casa o rótulo canônico exato OU descendentes do segmento
+ * ("Alimentação > Supermercado > X" pertence à lente "Alimentação > Supermercado").
+ * Lente 'uncategorized' casa apenas despesas com categoryId nulo.
+ */
+function lensMatches(
+  lens: ProjectionLensInput | null | undefined,
+  categoryId: string | null,
+  label: string,
+): boolean {
+  if (!lens) return true;
+  if (lens.kind === 'uncategorized') return categoryId === null;
+  return label === lens.categoryPath || label.startsWith(`${lens.categoryPath} > `);
+}
+
 export interface ProjectionEngineInput {
   todayISO: string; // obrigatório; controla todo o relógio
   referenceMonth?: YearMonth | null;
   transactions: ReadonlyArray<ProjectionTransaction>;
   periods: ReadonlyArray<ProjectionPeriod>;
+  /** Lente de categoria opcional: restringe TODOS os agregados à categoria/segmento (PESSOAL-13C4A-E3). */
+  lens?: ProjectionLensInput | null;
 }
 
 // ============ Basis (fatos da janela, sem projeção) ============
@@ -398,6 +421,7 @@ function addReferencedExpense(
   upTo: string | null,
   periods: ReadonlyArray<NormalizedPeriod>,
   target: Map<string, CategoryBucket>,
+  lens: ProjectionLensInput | null,
 ): number {
   if (t.deletedAt != null) return 0;
   if (t.transactionKind !== 'expense') return 0;
@@ -405,11 +429,13 @@ function addReferencedExpense(
   if (t.occurredOn < start || t.occurredOn > end) return 0;
   if (upTo != null && t.occurredOn > upTo) return 0;
   if (!accountPeriodCoversDay(t.accountId, periods, t.occurredOn)) return 0;
-  const amount = expenseAmount(t);
   const key = categoryKey(t.categoryId);
+  const label = bucketLabel(t.categoryId, t.categoryLabel);
+  if (!lensMatches(lens, t.categoryId, label)) return 0;
+  const amount = expenseAmount(t);
   const cur = target.get(key) ?? {
     categoryId: t.categoryId,
-    label: bucketLabel(t.categoryId, t.categoryLabel),
+    label,
     cents: 0,
   };
   cur.cents += amount;
@@ -423,11 +449,12 @@ function aggregateBase(
   periods: ReadonlyArray<NormalizedPeriod>,
 ): BaseAggregation {
   const categories = new Map<string, CategoryBucket>();
+  const lens = input.lens ?? null;
   for (const month of window) {
     month.covered = isMonthFullyCovered(month, periods);
     if (!month.covered) continue;
     for (const t of input.transactions) {
-      month.cents += addReferencedExpense(t, month.start, month.end, null, periods, categories);
+      month.cents += addReferencedExpense(t, month.start, month.end, null, periods, categories, lens);
     }
   }
   let totalBaseCents = 0;
@@ -453,6 +480,7 @@ function referenceMonthTotals(
   const last = daysInMonth(reference.year, reference.month);
   const end = toLocalISODate(reference.year, reference.month, last);
   const realizedCategories = new Map<string, CategoryBucket>();
+  const lens = input.lens ?? null;
 
   let realizedCents = 0;
   for (const t of input.transactions) {
@@ -463,6 +491,7 @@ function referenceMonthTotals(
       asCurrent ? todayISO : null,
       periods,
       realizedCategories,
+      lens,
     );
   }
 
@@ -474,6 +503,7 @@ function referenceMonthTotals(
       if (!isValidLocalDate(t.occurredOn)) continue;
       if (t.occurredOn <= todayISO || t.occurredOn > end) continue;
       if (!accountPeriodCoversDay(t.accountId, periods, t.occurredOn)) continue;
+      if (!lensMatches(lens, t.categoryId, bucketLabel(t.categoryId, t.categoryLabel))) continue;
       futureCents += expenseAmount(t);
     }
   }

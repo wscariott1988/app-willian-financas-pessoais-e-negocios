@@ -68,6 +68,8 @@ import {
 export const PROJECTION_PAYLOAD_VERSION = 1;
 export const PROJECTION_CATEGORIES_MAX = TOP_CATEGORIES_LIMIT;
 export const PROJECTION_LABEL_MAX = 120;
+/** Teto do nome exibível da lente (apenas texto de exibição; nunca ids/paths internos). */
+export const PROJECTION_LENS_LABEL_MAX = 60;
 
 export const PROJECTION_INTENTS: ReadonlyArray<ProjectionPayloadIntent> = [
   'projection_base',
@@ -179,6 +181,15 @@ export interface ProjectionPayloadRemainingV1 {
   annualScenarioCents: number;
 }
 
+/**
+ * Lente ativa da projeção (PESSOAL-13C4A-E3). Apenas o NOME EXIBÍVEL: nunca
+ * ids, cardinalidades, paths internos nem dados financeiros. Ausente em
+ * payloads sem lente (retrocompatível).
+ */
+export interface ProjectionPayloadLensV1 {
+  label: string;
+}
+
 export interface ProjectionPayloadReasonV1 {
   code: ProjectionPayloadReasonCode;
   coveredMonths: number;
@@ -196,6 +207,8 @@ export interface ProjectionPayloadSuccessV1 {
   comparison: ProjectionPayloadComparisonV1;
   categories: ProjectionPayloadCategoryV1[];
   remaining?: ProjectionPayloadRemainingV1;
+  /** Lente ativa, quando houver (apenas rótulo de exibição). */
+  lens?: ProjectionPayloadLensV1;
 }
 
 export interface ProjectionPayloadInsufficientV1 {
@@ -248,6 +261,7 @@ function coverageOf(basis: ProjectionBasis): ProjectionPayloadCoverageV1 {
 export function mapProjectionToPayloadV1(
   result: ProjectionEngineResult,
   intent: ProjectionPayloadIntent,
+  lensLabel?: string | null,
 ): ProjectionPayloadV1 {
   const reference: ProjectionPayloadReferenceV1 = {
     month: monthKeyOf(result.basis.referenceMonth),
@@ -323,6 +337,9 @@ export function mapProjectionToPayloadV1(
       monthlyMeanCents: result.remainingCategories.remainingMonthlyMeanCents,
       annualScenarioCents: result.remainingCategories.remainingAnnualScenarioCents,
     };
+  }
+  if (typeof lensLabel === 'string' && lensLabel.trim() !== '') {
+    payload.lens = { label: lensLabel.trim() };
   }
   return payload;
 }
@@ -577,6 +594,16 @@ function sanitizeReason(rawInput: unknown): ProjectionPayloadReasonV1 | undefine
   return { code, coveredMonths, minimumCoveredMonths };
 }
 
+/** Lente: apenas rótulo de exibição limpo (nunca ids/paths). Estruturalmente inválido → undefined. */
+function sanitizeLens(rawInput: unknown): ProjectionPayloadLensV1 | undefined {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined;
+  }
+  const label = cleanLabel((rawInput as Record<string, unknown>).label, PROJECTION_LENS_LABEL_MAX);
+  if (!label) return undefined;
+  return { label };
+}
+
 /**
  * Sanitiza um payload de projeção desconhecido para a forma versionada. Qualquer
  * violação estrutural ou de allowlist → undefined (nunca objeto parcial). O
@@ -636,6 +663,11 @@ export function sanitizeProjectionPayloadV1(input: unknown): ProjectionPayloadV1
       const remaining = sanitizeRemaining(raw.remaining);
       if (!remaining) return undefined;
       payload.remaining = remaining;
+    }
+    if (raw.lens !== undefined) {
+      const lens = sanitizeLens(raw.lens);
+      if (!lens) return undefined;
+      payload.lens = lens;
     }
     return payload;
   }

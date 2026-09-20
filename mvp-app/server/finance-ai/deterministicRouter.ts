@@ -57,6 +57,7 @@ import {
 import type { AnalyticsTxRow } from '../../src/lib/analytics.js';
 import type {
   ProjectionEngineResult,
+  ProjectionLensInput,
   YearMonth,
 } from '../../src/lib/analyticsProjection.js';
 import { addMonths, formatShortDate } from '../../src/lib/period.js';
@@ -89,8 +90,8 @@ import {
   type TrendWindowStyle,
 } from '../../src/lib/analyticsTrends.js';
 import { MAX_QUESTION_LENGTH } from './orchestrator.js';
-import { AskError, isSupabaseQueryError, providerStatusOf } from './observability.js';
-import type { ChatAnalysisContext, ChatContextState, ChatPeriod } from '../chat/chatTypes.js';
+import { AskError, isSupabaseQueryError, providerStatusOf, type ProjectionRouteMode } from './observability.js';
+import type { ChatAnalysisContext, ChatContextState, ChatPeriod, ChatProjectionContext } from '../chat/chatTypes.js';
 import { PAYLOAD_NOTICE_MAX } from '../chat/payloadSanitize.js';
 import { dedupeDisplayNames } from './noticeDedup.js';
 
@@ -132,6 +133,15 @@ export interface DeterministicAnswer {
    * turnos tradicionais (o endpoint então limpa o contexto analítico).
    */
   analysis?: ChatAnalysisContext;
+  /**
+   * Contexto de projeção persistível (PESSOAL-13C4A-E3): intent, mês de
+   * referência (YYYY-MM), lente canônica + rótulo — nunca payload/valores.
+   * Presente apenas em turnos de projeção REAL (payload.status === 'success');
+   * ausente em projeções que caíram em esclarecimento.
+   */
+  projection?: ChatProjectionContext;
+  /** Como o turno de projeção surgiu ('direct' | 'follow_up'); ausente sem projeção. */
+  projectionRoute?: ProjectionRouteMode;
 }
 
 export interface DeterministicRouterDeps {
@@ -1976,7 +1986,9 @@ type ProjectionClarificationKind =
   | 'ambiguous'
   | 'year_close'
   | 'category'
-  | 'future_month';
+  | 'future_month'
+  | 'reference_month'
+  | 'unknown_lens';
 
 interface ProjectionRoute {
   intent:
@@ -1987,6 +1999,8 @@ interface ProjectionRoute {
     | 'projection_clarification';
   clarification?: ProjectionClarificationKind;
   referenceMonth?: YearMonth;
+  /** Termo de categoria isolada capturado (clarification 'category'), resolvido contextualmente no E3. */
+  lensTerm?: string | null;
 }
 
 const PROJECTION_AMBIGUOUS_TEXT =
@@ -2007,6 +2021,266 @@ const PROJECTION_FUTURE_TEXT =
   'Ainda não consigo projetar meses futuros. Posso projetar o fechamento do mês ' +
   'atual, a comparação de um mês anterior com a média dos 12 meses anteriores ou ' +
   'o cenário dos próximos 12 meses.';
+
+// PESSOAL-13C4A-E3: esclarecimentos dos follow-ups contextuais — texto de
+// exibição, nunca lógica. A rota da resposta é sempre determinística.
+const PROJECTION_REFERENCE_MONTH_TEXT =
+  'O fechamento estimado vale para o mês atual. Posso comparar um mês anterior ' +
+  'com a média dos 12 meses anteriores ou projetar os próximos 12 meses. Qual prefere?';
+
+const PROJECTION_UNKNOWN_LENS_TEXT =
+  'Não identifiquei essa categoria na sua lista. Informe só o nome, como ' +
+  'supermercado, transporte ou aluguel, para eu restringir a projeção a ela.';
+
+const PROJECTION_UNCATEGORIZED_LABEL = 'Sem categoria';
+const PROJECTION_MONTHS_AGO_RE = /\b(?:mes\s+passado|ultimo\s+mes|mes\s+anterior)\b/i;
+const PROJECTION_UNCATEGORIZED_RE =
+  /\b(?:sem\s+categoria|sem\s+categorizar|nao\s+categorizad[ao])\b/i;
+const PROJECTION_CLEAR_LENS_RE =
+  /\b(?:sem\s+filtro|sem\s+filtrar|visao\s+geral|projec(?:ao|oes)\s+geral|tudo\s+de\s+novo)\b/i;
+// Follow-ups que claramente pedem valores financeiros ("E quanto gastei?",
+// "E o saldo?") NUNCA podem ser leitura de lente/mês de projeção.
+const PROJECTION_FOLLOWUP_REJECT =
+  /\b(?:gastei|gasto|gastou|recebi|recebemos|saldo|resultad(?:o|os?))\b/i;
+// Termos que, se aparecerem, indicam que o follow-up NÃO é uma lente de categoria
+// (inclui os introtips de visão do E3: comparação, média, categorias, anual, fechamento).
+const PROJECTION_LENS_TERM_REJECT =
+  /\b(?:quanto|qual|quais|ai|agora|depois|mes(?:es)?|ano|periodo|informe|diga|entao|incluindo|ate|hoje|atual|corrente|como|ficaria|fosse|poderia|seria|acha|isso|disso|tudo|todos|total|geral|categorias?|comparar|comparaca?o|comparad[oa]?|versus|media|medias|anual|anualizad|proximos?|12|fech(?:o|ar|amento|ando|a)|este|esse|neste|nesse)\b/i;
+const PROJECTION_LENS_PREFIX_RE =
+  /^(?:e\s+|entao\s+|depois\s+)?(?:so\s+|somente\s+|apenas\s+)?(?:(?:o|a|os|as)\s+)?(?:(?:em|com|na|no|de|do|da|para|sobre)\s+)?/i;
+const PROJECTION_GASTO_PREFIX_RE = /^(?:gast[oa]s?|despesas?|foco)\s+(?:com\s+|em\s+|de\s+|no\s+|na\s+|para\s+|sobre\s+)+/;
+
+/**
+ * Lente de categoria da projeção (PESSOAL-13C4A-E3). Só path canônico (matchTerm
+ * de resolveCategory) + rótulo de exibição — nunca UUIDs/paths internos.
+ */
+type ProjectionRouteLens =
+  | { kind: 'category'; categoryPath: string; label: string }
+  | { kind: 'uncategorized'; label: string };
+
+function leafLabelOfPath(path: string): string {
+  return path
+    .split('>')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .pop() ?? path;
+}
+
+function toLensInput(lens: ProjectionRouteLens | null | undefined): ProjectionLensInput | null {
+  if (!lens) return null;
+  if (lens.kind === 'uncategorized') return { kind: 'uncategorized' };
+  return { kind: 'category', categoryPath: lens.categoryPath };
+}
+
+function projectCtxReference(ctx: ChatProjectionContext, todayISO: string): YearMonth {
+  const parsed = /^\d{4}-\d{2}$/.test(ctx.referenceMonth)
+    ? { year: Number(ctx.referenceMonth.slice(0, 4)), month: Number(ctx.referenceMonth.slice(5, 7)) }
+    : null;
+  if (parsed && parsed.month >= 1 && parsed.month <= 12) return parsed;
+  return yearMonthOfProjection(todayISO);
+}
+
+function ctxLens(ctx: ChatProjectionContext): ProjectionRouteLens | null {
+  if (ctx.lensKind === 'uncategorized') {
+    return { kind: 'uncategorized', label: PROJECTION_UNCATEGORIZED_LABEL };
+  }
+  if (ctx.lensKind === 'category' && ctx.lensPath) {
+    return {
+      kind: 'category',
+      categoryPath: ctx.lensPath,
+      label: ctx.lensLabel ?? leafLabelOfPath(ctx.lensPath),
+    };
+  }
+  return null;
+}
+
+function monthRankOf(ym: YearMonth): number {
+  return ym.year * 12 + (ym.month - 1);
+}
+
+function monthIsFuture(target: YearMonth, todayISO: string): boolean {
+  return monthRankOf(target) > monthRankOf(yearMonthOfProjection(todayISO));
+}
+
+function sameMonth(a: YearMonth, b: YearMonth): boolean {
+  return a.year === b.year && a.month === b.month;
+}
+
+function monthTargetOf(norm: string, todayISO: string): YearMonth | null {
+  if (PROJECTION_MONTHS_AGO_RE.test(norm)) {
+    return addMonths(yearMonthOfProjection(todayISO), -1);
+  }
+  const monthNumber = firstMonthNumber(norm);
+  if (!monthNumber) return null;
+  const current = yearMonthOfProjection(todayISO);
+  return { year: Number(yearOfToken(norm) ?? String(current.year)), month: monthNumber };
+}
+
+/** Encapsula o PATH canônico do segmento casado + rótulo de exibição da lente. */
+function lensOfResolved(resolved: ResolvedCategory): ProjectionRouteLens {
+  return { kind: 'category', categoryPath: resolved.matchTerm, label: leafLabelOfPath(resolved.matchTerm) };
+}
+
+/**
+ * Resolve o termo de uma lente de categoria para a classificação CANÔNICA das
+ * categorias do usuário (mesma regra de match dos agregadores/tendências).
+ * Retorna null quando o termo não é uma categoria reconhecida (tratamento
+ * 'unknown_lens' fica a cargo do chamador).
+ */
+async function resolveProjectionLens(
+  supabase: SupabaseClient,
+  term: string,
+): Promise<ProjectionRouteLens | null> {
+  const labels = await fetchExpenseCategories(supabase);
+  const resolved = resolveCategory(labels, term);
+  return resolved ? lensOfResolved(resolved) : null;
+}
+
+/**
+ * Extrai o termo de lente de um follow-up elíptico de projeção ("E só
+ * supermercado?", "E com transporte?"). Dedica-se a este papel para nunca
+ * capturar meses, períodos, comparativos nem termos genéricos (ex.: "E a
+ * comparação?" → null; "E em maio?" → null). Quando mês e lente aparecem
+ * combinados ("E em maio só supermercado?"), a LENTE prevalece (frase de mês é
+ * descartada apenas do alto) — sem nunca engolir um mês sozinho.
+ */
+function extractProjectionLensTerm(norm: string): string | null {
+  if (!CONTINUATION_RE.test(norm) && !/^(?:so\s+|somente\s+|apenas\s+)/.test(norm)) return null;
+  if (PROJECTION_LENS_TERM_REJECT.test(norm)) return null;
+  const stripMonthPhrase = (input: string): string => {
+    const ago = /^(?:em|no|na|para)\s+(?:mes\s+passado|ultimo\s+mes|mes\s+anterior)\b/.exec(input)?.[0];
+    if (ago) return input.slice(ago.length).trim();
+    const prep = /^(?:em|no|na|para)\s+/.exec(input)?.[0];
+    if (prep) {
+      const after = input.slice(prep.length);
+      const first = after.split(/\s+/)[0] ?? '';
+      if (MONTH_BY_NORM[first] != null) {
+        return after.split(/\s+/).slice(1).join(' ');
+      }
+    }
+    // Mês NU no início restando do prefixo ("e em maio so supermercado?" →
+    // 'maio so supermercado'): a LENTE vence — descarta o mês só se sobrar
+    // outro conteúdo (mês puro segue para o guarda de mês e vira null).
+    const tokens = input.split(/\s+/);
+    const firstToken = tokens[0] ?? '';
+    const remaining = tokens.slice(1).join(' ');
+    if (firstToken && MONTH_BY_NORM[firstToken] != null && remaining.trim()) {
+      return remaining;
+    }
+    return input;
+  };
+  let rest = stripMonthPhrase(norm);
+  rest = rest
+    .replace(PROJECTION_LENS_PREFIX_RE, (m) => (m ? ' ' : m))
+    .trim();
+  rest = stripMonthPhrase(rest);
+  rest = rest.replace(PROJECTION_LENS_PREFIX_RE, (m) => (m ? ' ' : m)).trim();
+  let term = rest.replace(/[?.!;].*$/, ' ').split(',')[0].split(/\s+e\s+/)[0].trim();
+  if (!term) return null;
+  const first = term.split(/\s+/)[0];
+  if (first && MONTH_BY_NORM[first] != null) return null;
+  term = collapseLensTerm(term);
+  if (!term || PROJECTION_LENS_TERM_REJECT.test(term)) return null;
+  return term;
+}
+
+function collapseLensTerm(term: string): string {
+  return term.replace(PROJECTION_GASTO_PREFIX_RE, '');
+}
+
+interface ProjectionFollowUpBuild {
+  kind: 'build';
+  intent: ProjectionPayloadIntent;
+  referenceMonth: YearMonth;
+  lens: ProjectionRouteLens | null;
+}
+interface ProjectionFollowUpClarify {
+  kind: 'clarification';
+  clarification: ProjectionClarificationKind;
+}
+type ProjectionFollowUp = ProjectionFollowUpBuild | ProjectionFollowUpClarify;
+
+/**
+ * Follow-up ELÍPTICO de projeção (PESSOAL-13C4A-E3): lente específica/limpa,
+ * novo mês de referência ou troca de visão, sempre a partir do contexto. Sem
+ * prefixo de continuidade (ou com sinais de valores financeiros) → null (a
+ * pergunta segue para os intents tradicionais/Gemini). NUNCA consulta dados
+ * financeiros — apenas categorias para resolver a lente.
+ */
+async function resolveProjectionFollowUp(
+  supabase: SupabaseClient,
+  norm: string,
+  ctx: ChatProjectionContext,
+  todayISO: string,
+): Promise<ProjectionFollowUp | null> {
+  if (!CONTINUATION_RE.test(norm) && !/^(?:so\s+|somente\s+|apenas\s+)/.test(norm)) return null;
+  if (PROJECTION_FOLLOWUP_REJECT.test(norm)) return null;
+
+  // 1) Limpar a lente e manter a projeção ativa.
+  if (PROJECTION_CLEAR_LENS_RE.test(norm)) {
+    return {
+      kind: 'build',
+      intent: ctx.intent,
+      referenceMonth: projectCtxReference(ctx, todayISO),
+      lens: null,
+    };
+  }
+
+  // 2) Lente "sem categoria" (uncategorized) — ANTES de qualquer leitura de
+  //    termo, para que "E sem categoria?" nunca caia na troca de visão.
+  if (PROJECTION_UNCATEGORIZED_RE.test(norm)) {
+    return {
+      kind: 'build',
+      intent: ctx.intent,
+      referenceMonth: projectCtxReference(ctx, todayISO),
+      lens: { kind: 'uncategorized', label: PROJECTION_UNCATEGORIZED_LABEL },
+    };
+  }
+
+  // 3) Lente específica. No mês+lente combinado a lente vence nesta fase
+  //    (1ª iteração do E3), sem inventar semântica.
+  const lensTerm = extractProjectionLensTerm(norm);
+  if (lensTerm) {
+    const lens = await resolveProjectionLens(supabase, lensTerm);
+    if (!lens) return { kind: 'clarification', clarification: 'unknown_lens' };
+    return { kind: 'build', intent: ctx.intent, referenceMonth: projectCtxReference(ctx, todayISO), lens };
+  }
+
+  // 4) Novo mês de referência ("E em maio?", "E o mês passado?").
+  if (isFutureProjectionMonth(norm, todayISO)) {
+    return { kind: 'clarification', clarification: 'future_month' };
+  }
+  const target = monthTargetOf(norm, todayISO);
+  if (target) {
+    const current = yearMonthOfProjection(todayISO);
+    if (sameMonth(target, current)) {
+      return { kind: 'build', intent: ctx.intent, referenceMonth: target, lens: ctxLens(ctx) };
+    }
+    if (monthIsFuture(target, todayISO)) {
+      return { kind: 'clarification', clarification: 'future_month' };
+    }
+    if (ctx.intent === 'projection_current_month') {
+      // Fechamento estimado só existe para o mês atual → esclarecer.
+      return { kind: 'clarification', clarification: 'reference_month' };
+    }
+    return { kind: 'build', intent: ctx.intent, referenceMonth: target, lens: ctxLens(ctx) };
+  }
+
+  // 4) Troca de visão elíptica ("E as categorias?", "E a comparação?").
+  if (/\bcategorias?\b/.test(norm) || /\bpor\s+categoria\b/.test(norm)) {
+    return { kind: 'build', intent: 'projection_categories', referenceMonth: projectCtxReference(ctx, todayISO), lens: ctxLens(ctx) };
+  }
+  if (/\b(?:comparar|comparaca?o|comparad[oa]|versus|vs|media)\b/.test(norm)) {
+    return { kind: 'build', intent: 'projection_month_comparison', referenceMonth: projectCtxReference(ctx, todayISO), lens: ctxLens(ctx) };
+  }
+  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual|anualizad|no\s+ano|por\s+mes)\b/.test(norm)) {
+    return { kind: 'build', intent: 'projection_base', referenceMonth: yearMonthOfProjection(todayISO), lens: ctxLens(ctx) };
+  }
+  if (/\b(?:este|esse|neste|nesse)\s+mes\b|\bmes\s+atual\b|\bfech(?:o|amento)\b/.test(norm)) {
+    return { kind: 'build', intent: 'projection_current_month', referenceMonth: yearMonthOfProjection(todayISO), lens: ctxLens(ctx) };
+  }
+  return null;
+}
 
 function isProjectionQuestion(norm: string): boolean {
   return (
@@ -2093,9 +2367,11 @@ function detectProjection(norm: string, todayISO: string): ProjectionRoute | nul
     return { intent: 'projection_clarification', clarification: 'year_close' };
   }
 
-  // 2) Categoria isolada → esclarecer nesta fase (filtros/lentes são E3).
-  if (projectionCategoryTerm(norm)) {
-    return { intent: 'projection_clarification', clarification: 'category' };
+  // 2) Categoria isolada → esclarecer na ausência de contexto (E2); com
+  //    contexto de projeção, o E3 resolve a lente a partir do termo capturado.
+  const categoryTerm = projectionCategoryTerm(norm);
+  if (categoryTerm) {
+    return { intent: 'projection_clarification', clarification: 'category', lensTerm: categoryTerm };
   }
 
   // 3) Mês futuro → explicação determinística, nunca cálculo inventado.
@@ -2206,6 +2482,8 @@ function projectionClarificationAnswer(
     year_close: PROJECTION_YEAR_CLOSE_TEXT,
     category: PROJECTION_CATEGORY_TEXT,
     future_month: PROJECTION_FUTURE_TEXT,
+    reference_month: PROJECTION_REFERENCE_MONTH_TEXT,
+    unknown_lens: PROJECTION_UNKNOWN_LENS_TEXT,
   }[kind];
   const range = monthRangeOf(yearMonthOfProjection(todayISO));
   return {
@@ -2334,6 +2612,8 @@ function isProjectionPayloadIntent(
 function toProjectionDeterministicAnswer(
   intent: DeterministicIntent,
   result: ProjectionEngineResult,
+  lens?: ProjectionRouteLens | null,
+  route: ProjectionRouteMode = 'direct',
 ): DeterministicAnswer {
   // PESSOAL-13C4A-E2: o payload versionado acompanha APENAS turnos de projeção
   // reais (full/preliminary/insufficient). Clarification e falha de
@@ -2343,13 +2623,31 @@ function toProjectionDeterministicAnswer(
   if (!isProjectionPayloadIntent(intent)) {
     throw new Error('Rotear projeção com intent inválido.');
   }
-  const projection = mapProjectionToPayloadV1(result, intent);
+  const projection = mapProjectionToPayloadV1(result, intent, lens?.label);
   const resolved = makeProjectionAnswer(
     intent,
     projectionAnswerText(projection),
     projectionPeriodOf(projection),
   );
   resolved.response.projection = projection;
+  if (projection.status === 'success') {
+    // PESSOAL-13C4A-E3: contexto de follow-up apenas com projeção REAL (status
+    // success); './insufficient' e clarification nunca persistem contexto.
+    resolved.projection = {
+      version: 1,
+      intent: projection.intent,
+      referenceMonth: projection.reference.month,
+      ...(lens
+        ? {
+            lensKind: lens.kind as ChatProjectionContext['lensKind'],
+            ...(lens.kind === 'category'
+              ? { lensPath: lens.categoryPath, lensLabel: lens.label }
+              : { lensLabel: lens.label }),
+          }
+        : {}),
+    };
+    resolved.projectionRoute = route;
+  }
   return resolved;
 }
 
@@ -2365,9 +2663,40 @@ async function buildProjectionAnswer(
   intent: DeterministicIntent,
   referenceMonth: YearMonth,
   todayISO: string,
+  opts?: { lens?: ProjectionRouteLens | null; route?: ProjectionRouteMode },
 ): Promise<DeterministicAnswer> {
-  const result = await fetchProjection(supabase, { todayISO, referenceMonth });
-  return toProjectionDeterministicAnswer(intent, result);
+  const result = await fetchProjection(supabase, {
+    todayISO,
+    referenceMonth,
+    lens: toLensInput(opts?.lens ?? null),
+  });
+  return toProjectionDeterministicAnswer(intent, result, opts?.lens ?? null, opts?.route ?? 'direct');
+}
+
+/**
+ * Build a projeção a partir do CONTEXTO persistido (E3). Só deve ser chamado
+ * quando existir contexto de projeção válido; nunca consulta valores no
+ * contexto — re-consulta finanças e re-deriva o payload do zero.
+ */
+async function buildProjectionFromContext(
+  supabase: SupabaseClient,
+  ctx: ChatProjectionContext,
+  todayISO: string,
+  lens: ProjectionRouteLens | null,
+  route: ProjectionRouteMode,
+): Promise<DeterministicAnswer | null> {
+  if (!supportsPaginableAsync(supabase)) return null;
+  try {
+    return await buildProjectionAnswer(
+      supabase,
+      ctx.intent,
+      projectCtxReference(ctx, todayISO),
+      todayISO,
+      { lens, route },
+    );
+  } catch (err) {
+    throw withProjectionIntent(err, ctx.intent);
+  }
 }
 
 /**
@@ -2437,15 +2766,124 @@ export async function runDeterministicAsk(
     }
   }
 
-  // PESSOAL-13C4A-E2 (Fase 3): projeção determinística. Sinais fortes; detecção na
+  // PESSOAL-13C4A-E2/E3: projeção determinística. Sinais fortes; detecção na
   // pergunta principal CRUA (antes do contexto — "e a projeção?" nunca vira
-  // follow-up de categoria). Clarificação/explicação NUNCA consulta banco.
+  // follow-up de categoria). Clarificação/explicação NUNCA consulta banco,
+  // exceto a resolução da lente contextual do E3 (apenas categorias).
   const projToday = deps.nowISO ?? saoPauloTodayISO();
-  const projection = detectProjection(normalizeText(q), projToday);
+  const normQuestion = normalizeText(q);
+  const projection = detectProjection(normQuestion, projToday);
+  const projCtx = deps.context?.projection ?? null;
   if (projection) {
+    const isElliptical = CONTINUATION_RE.test(normQuestion);
+
+    // Clarificação com contexto de projeção válido → tratamento contextual
+    // (E3); sem contexto → comportamento E2 intacto.
     if (projection.clarification) {
+      if (projCtx) {
+        if (projection.clarification === 'ambiguous' && PROJECTION_CLEAR_LENS_RE.test(normQuestion)) {
+          return await buildProjectionFromContext(deps.supabase, projCtx, projToday, null, 'follow_up');
+        }
+        if (projection.clarification === 'ambiguous') {
+          return await buildProjectionFromContext(deps.supabase, projCtx, projToday, ctxLens(projCtx), 'follow_up');
+        }
+        if (projection.clarification === 'category' && projection.lensTerm) {
+          if (PROJECTION_UNCATEGORIZED_RE.test(normQuestion)) {
+            return await buildProjectionFromContext(
+              deps.supabase,
+              projCtx,
+              projToday,
+              { kind: 'uncategorized', label: PROJECTION_UNCATEGORIZED_LABEL },
+              'follow_up',
+            );
+          }
+          if (!supportsPaginableAsync(deps.supabase)) return null;
+          let lens: ProjectionRouteLens | null = null;
+          try {
+            lens = await resolveProjectionLens(deps.supabase, projection.lensTerm);
+          } catch (err) {
+            if (err instanceof AskError) throw err;
+            throw toAskSupabaseError(err);
+          }
+          if (lens) {
+            return await buildProjectionFromContext(deps.supabase, projCtx, projToday, lens, 'follow_up');
+          }
+          return projectionClarificationAnswer('unknown_lens', projToday);
+        }
+        if (projection.clarification === 'category') {
+          return projectionClarificationAnswer('unknown_lens', projToday);
+        }
+        // year_close / future_month / reference_month permanecem clarificação.
+      }
       return projectionClarificationAnswer(projection.clarification, projToday);
     }
+
+    // Follow-up ELÍPTICO com intent explícito ("E a comparação?", "E o
+    // fechamento?") → usa o contexto: preserva a lente e aplica as regras de
+    // mês de referência do E3. Sem contexto → direto como no E2.
+    if (isElliptical && projCtx) {
+      const hasOwnMonth = firstMonthNumber(normQuestion) != null;
+      let reference = projection.referenceMonth ?? yearMonthOfProjection(projToday);
+      // "E o fechamento no mês passado?" com contexto de current_month → o
+      // fechamento estimado só existe para o mês atual, então o passado/futuro
+      // cai em esclarecimento (antecede a precedência do detectProjection).
+      if (
+        projCtx.intent === 'projection_current_month' &&
+        /\bfech(?:o|ar|amento|ando|a)\b/.test(normQuestion)
+      ) {
+        const current = yearMonthOfProjection(projToday);
+        const target = monthTargetOf(normQuestion, projToday) ?? projection.referenceMonth ?? null;
+        if (target) {
+          if (monthIsFuture(target, projToday)) {
+            return projectionClarificationAnswer('future_month', projToday);
+          }
+          if (!sameMonth(target, current)) {
+            return projectionClarificationAnswer('reference_month', projToday);
+          }
+        }
+      }
+      if (projection.intent === 'projection_current_month' && hasOwnMonth) {
+        if (monthIsFuture(reference, projToday)) {
+          return projectionClarificationAnswer('future_month', projToday);
+        }
+        if (!sameMonth(reference, yearMonthOfProjection(projToday))) {
+          return projectionClarificationAnswer('reference_month', projToday);
+        }
+      }
+      if (
+        (projection.intent === 'projection_categories' ||
+          projection.intent === 'projection_month_comparison') &&
+        !hasOwnMonth
+      ) {
+        // Mês de família ("E o fechamento no mês passado?") derivado pelo
+        // detector prevalece sobre o contexto; comparação/categorias sem mês
+        // re-ancoram na referência do próprio contexto.
+        const current = yearMonthOfProjection(projToday);
+        reference =
+          projection.referenceMonth != null && !sameMonth(projection.referenceMonth, current)
+            ? projection.referenceMonth
+            : projectCtxReference(projCtx, projToday);
+      } else if (
+        projection.intent === 'projection_base' ||
+        projection.intent === 'projection_current_month'
+      ) {
+        reference = yearMonthOfProjection(projToday);
+      }
+      if (!supportsPaginableAsync(deps.supabase)) return null;
+      try {
+        return await buildProjectionAnswer(
+          deps.supabase,
+          projection.intent,
+          reference,
+          projToday,
+          { lens: ctxLens(projCtx), route: 'follow_up' },
+        );
+      } catch (err) {
+        throw withProjectionIntent(err, projection.intent);
+      }
+    }
+
+    // Direto (pergunta explícita não elíptica) — E2 sem contexto envolvido.
     if (!supportsPaginableAsync(deps.supabase)) return null;
     try {
       return await buildProjectionAnswer(
@@ -2453,6 +2891,7 @@ export async function runDeterministicAsk(
         projection.intent,
         projection.referenceMonth ?? yearMonthOfProjection(projToday),
         projToday,
+        { route: 'direct' },
       );
     } catch (err) {
       throw withProjectionIntent(err, projection.intent);
@@ -2484,6 +2923,40 @@ export async function runDeterministicAsk(
   const intent = detectIntent(question, resolved);
 
   if (!intent) {
+    // PESSOAL-13C4A-E3: follow-up de projeção ELÍPTICO compatível com o
+    // contexto ("E só supermercado?", "E o mês passado?", "E as categorias?",
+    // "E sem filtro?"). Corresponde ANTES do follow-up analítico e só quando o
+    // turno anterior foi de projeção real (context.projection presente). Sem
+    // prefixo de continuidade ou com sinais de valores financeiros → null.
+    if (deps.context?.projection) {
+      let projectionFollowUp: ProjectionFollowUp | null;
+      try {
+        projectionFollowUp = await resolveProjectionFollowUp(
+          deps.supabase,
+          normalizeText(q),
+          deps.context.projection,
+          projToday,
+        );
+      } catch (err) {
+        throw withProjectionIntent(err, deps.context.projection.intent);
+      }
+      if (projectionFollowUp) {
+        if (projectionFollowUp.kind === 'clarification') {
+          return projectionClarificationAnswer(projectionFollowUp.clarification, projToday);
+        }
+        try {
+          return await buildProjectionAnswer(
+            deps.supabase,
+            projectionFollowUp.intent,
+            projectionFollowUp.referenceMonth,
+            projToday,
+            { lens: projectionFollowUp.lens, route: 'follow_up' },
+          );
+        } catch (err) {
+          throw withProjectionIntent(err, projectionFollowUp.intent);
+        }
+      }
+    }
     // PESSOAL-13C3B-E3: follow-up analítico elíptico compatível com o
     // contexto (percentual/categoria/janela). Dispara SOMENTE quando o turno
     // anterior foi analítico (context.analysis presente) e NENHUM intent

@@ -899,3 +899,110 @@ describe('PESSOAL-13C4A-E1 — mês atual no dia ≥ 7 e realizado zero retorna 
     expect(r.comparison.closingProjectionCents).not.toBeNull();
   });
 });
+
+// ============ PESSOAL-13C4A-E3: motor com lente ============
+
+describe('PESSOAL-13C4A-E3 — motor: lente de categoria restringe todos os agregados', () => {
+  const SUPER = { id: 'c-super', label: 'Alimentação > Supermercado' };
+  const TRANSP = { id: 'c-transp', label: 'Transporte' };
+
+  const input = (lens: unknown): ProjectionEngineInput => ({
+    todayISO: TODAY,
+    transactions: [
+      ...monthlyExpenses(FULL_12, AUG_2026, 60000, { category: SUPER }),
+      ...monthlyExpenses(FULL_12, AUG_2026, 40000, { category: TRANSP }),
+      tx(ymd(2026, 9, 10), 60000, { category: SUPER }),
+      tx(ymd(2026, 9, 10), 40000, { category: TRANSP }),
+    ],
+    periods: [period('ACCT-A', '2025-09-01')],
+    ...(lens ? { lens: lens as ProjectionEngineInput['lens'] } : {}),
+  });
+
+  it('sem lente: média 100000 e realizado 100000 (linha de base)', () => {
+    const r = buildProjection(input(undefined));
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.summary.monthlyMeanCents).toBe(100000);
+    expect(r.comparison.kind).toBe('current');
+    if (r.comparison.kind !== 'current') return;
+    expect(r.comparison.realizedCents).toBe(100000);
+  });
+
+  it('lente de categoria: média/cenário/realizado só da categoria, qualidade intacta (full)', () => {
+    const r = buildProjection(input({ kind: 'category', categoryPath: 'Alimentação > Supermercado' }));
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.quality).toBe('full');
+    expect(r.basis.windowMonths).toBe(12);
+    expect(r.basis.coveredMonths).toBe(12);
+    expect(r.basis.totalBaseCents).toBe(720000);
+    expect(r.summary.monthlyMeanCents).toBe(60000);
+    expect(r.summary.annualScenarioCents).toBe(720000);
+    expect(r.summary.totalBaseCents).toBe(720000);
+    expect(r.comparison.kind).toBe('current');
+    if (r.comparison.kind !== 'current') return;
+    expect(r.comparison.realizedCents).toBe(60000);
+    expect(r.categories).toHaveLength(1);
+    expect(r.categories[0].label).toBe('Alimentação > Supermercado');
+    expect(r.categories[0].monthlyMeanCents).toBe(60000);
+  });
+
+  it('lente de segmento inclui descendentes canônicos e exclui irmãos', () => {
+    const desc = { id: 'c-emb', label: 'Alimentação > Supermercado > Embalagens' };
+    const hortifruti = { id: 'c-hort', label: 'Alimentação > Hortifruti' };
+    const input2: ProjectionEngineInput = {
+      todayISO: TODAY,
+      transactions: [
+        ...monthlyExpenses(FULL_12, AUG_2026, 60000, { category: SUPER }),
+        ...monthlyExpenses(FULL_12, AUG_2026, 20000, { category: desc }),
+        ...monthlyExpenses(FULL_12, AUG_2026, 10000, { category: hortifruti }),
+        tx(ymd(2026, 9, 10), 60000, { category: SUPER }),
+        tx(ymd(2026, 9, 10), 20000, { category: desc }),
+        tx(ymd(2026, 9, 10), 10000, { category: hortifruti }),
+      ],
+      periods: [period('ACCT-A', '2025-09-01')],
+      lens: { kind: 'category', categoryPath: 'Alimentação > Supermercado' },
+    };
+    const r = buildProjection(input2);
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.summary.monthlyMeanCents).toBe(80000);
+    expect(r.summary.annualScenarioCents).toBe(960000);
+    expect(r.comparison.kind).toBe('current');
+    if (r.comparison.kind !== 'current') return;
+    expect(r.comparison.realizedCents).toBe(80000);
+    const labels = r.categories.map((c) => c.label).sort();
+    expect(labels).toEqual(['Alimentação > Supermercado', 'Alimentação > Supermercado > Embalagens']);
+    expect(labels.join(',')).not.toMatch(/Hortifruti/);
+  });
+});
+
+describe('PESSOAL-13C4A-E3 — motor: lente "sem categoria" restringe a despesas sem categoria', () => {
+  it('uncategorized: só entram despesas com categoryId nulo (média/cenário/realizado/categorias)', () => {
+    const SUPER = { id: 'c-super', label: 'Alimentação > Supermercado' };
+    const input2: ProjectionEngineInput = {
+      todayISO: TODAY,
+      transactions: [
+        ...monthlyExpenses(FULL_12, AUG_2026, 60000, { category: SUPER }),
+        ...monthlyExpenses(FULL_12, AUG_2026, 30000, { category: null }),
+        tx(ymd(2026, 9, 10), 60000, { category: SUPER }),
+        tx(ymd(2026, 9, 10), 30000, { category: null }),
+      ],
+      periods: [period('ACCT-A', '2025-09-01')],
+      lens: { kind: 'uncategorized' },
+    };
+    const r = buildProjection(input2);
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.quality).toBe('full');
+    expect(r.summary.monthlyMeanCents).toBe(30000);
+    expect(r.summary.annualScenarioCents).toBe(360000);
+    expect(r.basis.totalBaseCents).toBe(360000);
+    expect(r.comparison.kind).toBe('current');
+    if (r.comparison.kind !== 'current') return;
+    expect(r.comparison.realizedCents).toBe(30000);
+    expect(r.categories).toHaveLength(1);
+    expect(r.categories[0].label).toBe(UNCATEGORIZED_LABEL);
+    expect(r.categories[0].monthlyMeanCents).toBe(30000);
+  });
+});

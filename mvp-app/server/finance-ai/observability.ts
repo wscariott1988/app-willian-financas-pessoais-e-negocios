@@ -425,6 +425,12 @@ export type ProjectionSuccessOutcome = (typeof PROJECTION_SUCCESS_OUTCOMES)[numb
 export const PROJECTION_CACHE_STATES = ['fresh', 'hit'] as const;
 export type ProjectionCacheState = (typeof PROJECTION_CACHE_STATES)[number];
 
+// PESSOAL-13C4A-E3: como a resposta de projeção fresca surgiu — pergunta
+// explícita completa ('direct') ou follow-up contextual da conversa ('follow_up').
+// Cache-hit não carrega route (o modo é desconhecido ao reenviar a resposta).
+export const PROJECTION_ROUTE_MODES = ['direct', 'follow_up'] as const;
+export type ProjectionRouteMode = (typeof PROJECTION_ROUTE_MODES)[number];
+
 export const OBSERVABILITY_SUCCESS_FIELDS = [
   'event',
   'requestId',
@@ -435,6 +441,7 @@ export const OBSERVABILITY_SUCCESS_FIELDS = [
   'source',
   'outcome',
   'cache',
+  'route',
 ] as const;
 
 export interface SanitizedSuccessEvent {
@@ -451,6 +458,12 @@ export interface SanitizedSuccessEvent {
   outcome?: ProjectionSuccessOutcome;
   /** fresh = calculada agora; hit = reutilização idempotente do cache de chat. */
   cache?: ProjectionCacheState;
+  /**
+   * PESSOAL-13C4A-E3: como a projeção fresca surgiu ('direct' = pergunta
+   * explícita completa; 'follow_up' = follow-up contextual). Omitido no
+   * cache-hit (o modo é desconhecido ao reenviar a resposta).
+   */
+  route?: ProjectionRouteMode;
 }
 
 export function buildSuccessEvent(opts: {
@@ -462,6 +475,7 @@ export function buildSuccessEvent(opts: {
   source?: 'deterministic';
   outcome?: ProjectionSuccessOutcome;
   cache?: ProjectionCacheState;
+  route?: ProjectionRouteMode;
 }): SanitizedSuccessEvent {
   const event: SanitizedSuccessEvent = {
     event: 'ask_resolved',
@@ -483,6 +497,15 @@ export function buildSuccessEvent(opts: {
     event.source = opts.source;
     event.outcome = opts.outcome;
     event.cache = opts.cache;
+    // PESSOAL-13C4A-E3: route segue o mesmo princípio — só entra com a projeção
+    // fresca, vindo de allowlist fechada, e nunca no cache-hit.
+    if (
+      opts.route !== undefined &&
+      opts.cache === 'fresh' &&
+      (PROJECTION_ROUTE_MODES as readonly string[]).includes(opts.route)
+    ) {
+      event.route = opts.route;
+    }
   }
   return event;
 }

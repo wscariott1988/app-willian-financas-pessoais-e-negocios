@@ -66,6 +66,7 @@ import {
   type AskStage,
   type FailureClassification,
   type ProjectionSuccessOutcome,
+  type ProjectionRouteMode,
 } from '../../server/finance-ai/observability.js';
 
 interface NodeResponseLike {
@@ -109,11 +110,18 @@ function respond(res: NodeResponseLike | undefined, status: number, body: unknow
 // ask_resolved. Retorna null quando a resposta NÃO é de projeção — nesses casos
 // o evento permanece exatamente como antes (sem source/outcome/cache). Quando é
 // de projeção, devolve o trio fechado que o buildSuccessEvent valida por
-// allowlist antes de emitir.
+// allowlist antes de emitir. A rota (PESSOAL-13C4A-E3) só acompanha a resposta
+// FRESCA — o cache-hit desconhece o modo e o buildSuccessEvent exige
+// cache === 'fresh' para expô-lo.
 function projectionSuccessMeta(
   intent: string | null | undefined,
   projection: ProjectionPayloadV1 | null | undefined,
-): { source: 'deterministic'; outcome: ProjectionSuccessOutcome } | null {
+  route?: ProjectionRouteMode,
+): {
+  source: 'deterministic';
+  outcome: ProjectionSuccessOutcome;
+  route?: ProjectionRouteMode;
+} | null {
   if (intent === 'projection_clarification') {
     return { source: 'deterministic', outcome: 'clarification' };
   }
@@ -123,10 +131,9 @@ function projectionSuccessMeta(
     (PROJECTION_INTENTS as readonly string[]).includes(intent)
   ) {
     if (projection) {
-      return {
-        source: 'deterministic',
-        outcome: projection.status === 'insufficient' ? 'insufficient' : projection.quality,
-      };
+      const outcome: ProjectionSuccessOutcome =
+        projection.status === 'insufficient' ? 'insufficient' : projection.quality;
+      return route ? { source: 'deterministic', outcome, route } : { source: 'deterministic', outcome };
     }
     // Intenção de projeção sem payload é estado impossível de produzir; por
     // segurança, NÃO inventa metadados.
@@ -566,6 +573,9 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
               deterministic.response.periodAnalyzed ?? deterministic.response.period,
             answer: deterministic.response.answer,
             analysis: deterministic.analysis,
+            // PESSOAL-13C4A-E3: contexto persistido de projeção — apenas se o
+            // turno foi de projeção real; turnos tradicionais/Gemini o limpam.
+            projection: deterministic.projection,
           }),
           setTitle: !conversationTitle,
           title: titleFromQuestion(body.question),
@@ -574,6 +584,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
       const projectionMeta = projectionSuccessMeta(
         deterministic.intent,
         deterministic.response.projection ?? undefined,
+        deterministic.projectionRoute,
       );
       emitSanitizedSuccessEvent(
         buildSuccessEvent({

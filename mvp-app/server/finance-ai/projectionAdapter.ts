@@ -29,6 +29,7 @@ import {
   buildProjection,
   type ProjectionEngineInput,
   type ProjectionEngineResult,
+  type ProjectionLensInput,
   type ProjectionPeriod,
   type ProjectionTransaction,
   type TransactionKind,
@@ -243,6 +244,8 @@ export interface ProjectionAdapterOptions {
   todayISO?: string;
   /** Mês de referência a projetar. Default: mês atual de todayISO. */
   referenceMonth?: YearMonth | null;
+  /** Lente de categoria que restringe os agregados (PESSOAL-13C4A-E3). Default: none. */
+  lens?: ProjectionLensInput | null;
   /** Tamanho da página de transações. Default: PROJECTION_PAGE_SIZE. */
   pageSize?: number;
 }
@@ -293,6 +296,7 @@ export async function fetchProjection(
     todayISO,
     transactions: txRows.map(mapTransaction),
     periods,
+    lens: options.lens ?? null,
   };
   if (options.referenceMonth != null) {
     input.referenceMonth = options.referenceMonth;
