@@ -55,7 +55,26 @@ import {
   MONTH_FULL,
 } from '../../src/lib/analyticsInsights.js';
 import type { AnalyticsTxRow } from '../../src/lib/analytics.js';
-import { formatShortDate } from '../../src/lib/period.js';
+import type {
+  ProjectionEngineResult,
+  YearMonth,
+} from '../../src/lib/analyticsProjection.js';
+import { addMonths, formatShortDate } from '../../src/lib/period.js';
+import {
+  fetchProjection,
+  saoPauloTodayISO,
+  ProjectionDataError,
+} from './projectionAdapter.js';
+import {
+  mapProjectionToPayloadV1,
+  PROJECTION_INTENTS,
+  type ProjectionPayloadDeviation,
+  type ProjectionPayloadInsufficientV1,
+  type ProjectionPayloadIntent,
+  type ProjectionPayloadQuality,
+  type ProjectionPayloadSuccessV1,
+  type ProjectionPayloadV1,
+} from './projectionPayloadV1.js';
 import {
   analyzeCategoryGrowth,
   buildTrendWindow,
@@ -84,7 +103,12 @@ export type DeterministicIntent =
   | 'month_most_spent'
   | 'monthly_comparison'
   | 'growth_categories'
-  | 'savings_opportunities';
+  | 'savings_opportunities'
+  | 'projection_base'
+  | 'projection_current_month'
+  | 'projection_month_comparison'
+  | 'projection_categories'
+  | 'projection_clarification';
 
 export interface DeterministicIntentResult {
   intent: DeterministicIntent;
@@ -1918,6 +1942,456 @@ async function buildSavingsOpportunities(
   };
 }
 
+// ── Projeção determinística (PESSOAL-13C4A-E2 — Fase 3) ────────
+//
+// Fase 3 cobre APENAS os intents diretos e o despacho ao adapter:
+//   projection_base                 próximos 12 meses / anualizada
+//   projection_current_month        fechamento estimado do mês atual
+//   projection_month_comparison     mês atual ou passado vs média dos 12 anteriores
+//   projection_categories           projeção geral por categorias
+//   projection_clarification        esclarecimento determinístico SEM banco
+//
+// Regras desta fase:
+//   - sinais fortes: projeção, previsão de gastos, estimativa, continuar nesse
+//     ritmo, quanto vou gastar, quanto fecho o mês;
+//   - "Projeção" / "quero uma previsão" / "e a projeção?" → pergunta com quatro
+//     opções determinística, NUNCA Gemini;
+//   - "fechamento do ano" → esclarece ano-calendário × próximos 12 meses (não
+//     são equivalentes);
+//   - mês futuro → explicação determinística, sem inventar cálculo;
+//   - categoria isolada ("projeção de supermercado") → esclarecer nesta fase
+//     (filtros/lentes contextuais pertencem ao E3);
+//   - reconhecida → fetchProjection (relógio injetado nowISO repassado como
+//     todayISO); ambígua → zero consulta; erro do adapter → FALHA CONTROLADA
+//     propagada pelo contrato existente do endpoint (AskError → HTTP ≠ 200, sem
+//     Gemini, sem persistir/cachear resposta) — NUNCA vira clarification;
+//   - nenhum registro em toolRegistry.ts; apenas texto determinístico mínimo
+//     (sem payload/cards/persistência/follow-ups/observabilidade).
+//
+// Precedência: growth/savings rodam antes; as perguntas de projeção não contêm
+// aqueles sinais (sem regressão). A detecção ocorre na pergunta principal CRUA,
+// antes do contexto — "e a projeção?" nunca vira follow-up de categoria.
+
+type ProjectionClarificationKind =
+  | 'ambiguous'
+  | 'year_close'
+  | 'category'
+  | 'future_month';
+
+interface ProjectionRoute {
+  intent:
+    | 'projection_base'
+    | 'projection_current_month'
+    | 'projection_month_comparison'
+    | 'projection_categories'
+    | 'projection_clarification';
+  clarification?: ProjectionClarificationKind;
+  referenceMonth?: YearMonth;
+}
+
+const PROJECTION_AMBIGUOUS_TEXT =
+  'Posso te ajudar com a projeção em quatro cenários: 1) os próximos 12 meses ' +
+  '(anualizado); 2) o fechamento estimado do mês atual; 3) o mês atual ou o mês ' +
+  'passado comparado com a média dos 12 meses anteriores; 4) a projeção geral ' +
+  'por categorias. Escolha um cenário para eu seguir.';
+
+const PROJECTION_YEAR_CLOSE_TEXT =
+  'Você quer o fechamento do ano-calendário ou a projeção dos próximos 12 meses?';
+
+const PROJECTION_CATEGORY_TEXT =
+  'Ainda não consigo projetar uma categoria isolada nesta versão. Posso projetar ' +
+  'o cenário geral (próximos 12 meses), o fechamento do mês atual, a comparação ' +
+  'do mês com a média dos 12 anteriores ou a projeção por categorias.';
+
+const PROJECTION_FUTURE_TEXT =
+  'Ainda não consigo projetar meses futuros. Posso projetar o fechamento do mês ' +
+  'atual, a comparação de um mês anterior com a média dos 12 meses anteriores ou ' +
+  'o cenário dos próximos 12 meses.';
+
+function isProjectionQuestion(norm: string): boolean {
+  return (
+    /\bprojec(?:ao|oes)\b/.test(norm) ||
+    /\bprevis[a-z]*\b/.test(norm) ||
+    /\bestimativ[a-z]*\b/.test(norm) ||
+    /\bestimar\b/.test(norm) ||
+    /\britmo\b/.test(norm) ||
+    /\bquanto\s+(?:vou|voce\s+vai)\s+gastar\b/.test(norm) ||
+    /\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bmes\b/.test(norm) ||
+    /\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bano\b/.test(norm)
+  );
+}
+
+/**
+ * Categoria isolada em perguntas de projeção ("projeção de supermercado").
+ * Termos genéricos/período/comparação NÃO contam como categoria (aí a pergunta
+ * segue para os subtipos de projeção). Rejeita mês/ano/média/comparação.
+ */
+function projectionCategoryTerm(norm: string): string | null {
+  const m =
+    /\b(?:projec(?:ao|oes)|previs[a-z]*)\s+(?:de|em|para|por|d[ao]s?)\s+(.+)$/.exec(norm);
+  if (!m) return null;
+  const term = normalizeText(m[1].replace(/[?.!;]+.*$/, ' ').split(',')[0]);
+  if (!term) return null;
+  if (
+    /\b(?:mes|meses|ano|anos|media|medias|comparar|comparaca?o|comparad|versus|vs|ritmo|proximos|ultimos|12)\b/.test(
+      term,
+    ) ||
+    /\b(?:gastos?|despesas?|categorias?|tudo|todos|total|geral)\b/.test(term)
+  ) {
+    return null;
+  }
+  const first = term.split(/\s+/)[0];
+  if (MONTH_BY_NORM[first]) return null;
+  return term;
+}
+
+function yearMonthOfProjection(iso: string): YearMonth {
+  return { year: Number(iso.slice(0, 4)), month: Number(iso.slice(5, 7)) };
+}
+
+function monthRankProjection(ym: YearMonth): number {
+  return ym.year * 12 + (ym.month - 1);
+}
+
+/** Mês futuro explícito (ou "próximo mês") → não suportado nesta fase. */
+function isFutureProjectionMonth(norm: string, todayISO: string): boolean {
+  if (/\bproximo\s+mes\b|\bmes\s+que\s+vem\b|\bmes\s+seguinte\b/.test(norm)) return true;
+  const current = yearMonthOfProjection(todayISO);
+  const monthNumber = firstMonthNumber(norm);
+  if (monthNumber) {
+    const year = Number(yearOfToken(norm) ?? String(current.year));
+    if (monthRankProjection({ year, month: monthNumber }) > monthRankProjection(current)) {
+      return true;
+    }
+  }
+  const yearToken = yearOfToken(norm);
+  if (yearToken && monthNumber == null && Number(yearToken) > current.year) return true;
+  return false;
+}
+
+/** Mês de referência da comparação: mês passado/último mês OU mês explícito (não futuro) OU atual. */
+function projectionComparisonReference(norm: string, todayISO: string): YearMonth {
+  const current = yearMonthOfProjection(todayISO);
+  if (/\bmes\s+passado\b|\bultimo\s+mes\b|\bmes\s+anterior\b/.test(norm)) {
+    return addMonths(current, -1);
+  }
+  const monthNumber = firstMonthNumber(norm);
+  if (monthNumber) {
+    return {
+      year: Number(yearOfToken(norm) ?? String(current.year)),
+      month: monthNumber,
+    };
+  }
+  return current;
+}
+
+function detectProjection(norm: string, todayISO: string): ProjectionRoute | null {
+  if (!isProjectionQuestion(norm)) return null;
+
+  // 1) Fechamento do ANO → esclarecer (ano-calendário ≠ próximos 12 meses).
+  if (/\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bano\b/.test(norm)) {
+    return { intent: 'projection_clarification', clarification: 'year_close' };
+  }
+
+  // 2) Categoria isolada → esclarecer nesta fase (filtros/lentes são E3).
+  if (projectionCategoryTerm(norm)) {
+    return { intent: 'projection_clarification', clarification: 'category' };
+  }
+
+  // 3) Mês futuro → explicação determinística, nunca cálculo inventado.
+  if (isFutureProjectionMonth(norm, todayISO)) {
+    return { intent: 'projection_clarification', clarification: 'future_month' };
+  }
+
+  // 4) Subtipos diretos.
+  if (/\bcategorias?\b/.test(norm) || /\bpor\s+categoria\b/.test(norm)) {
+    return { intent: 'projection_categories' };
+  }
+  // Comparação ANTES da marca de "12 meses" da base: "…comparado à média dos 12
+  // meses anteriores" é comparação, não anualizado.
+  if (
+    /\b(?:comparar|comparaca?o|comparad[oa]|versus|vs|media|meses\s+anteriores)\b/.test(norm) ||
+    /\bmes\s+(?:passado|anterior)\b|\bultimo\s+mes\b/.test(norm)
+  ) {
+    return {
+      intent: 'projection_month_comparison',
+      referenceMonth: projectionComparisonReference(norm, todayISO),
+    };
+  }
+  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual|anualizad|no\s+ano|por\s+mes)\b/.test(norm)) {
+    return { intent: 'projection_base' };
+  }
+  if (
+    /\b(?:este|esse|neste|nesse)\s+mes\b/.test(norm) ||
+    /\bmes\s+atual\b/.test(norm) ||
+    /\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bmes\b/.test(norm) ||
+    /\bquanto\s+(?:vou|voce\s+vai)\s+gastar\b/.test(norm)
+  ) {
+    return { intent: 'projection_current_month' };
+  }
+
+  // 5) Núcleo nu ("Projeção", "e a projeção?", "quero uma previsão") → 4 opções;
+  //    com palavra de despesa ("previsão de gastos") → base.
+  if (/\b(?:gastos?|despesas?)\b/.test(norm)) {
+    return { intent: 'projection_base' };
+  }
+  if (/\b(?:projec(?:ao|oes)|previs[a-z]*|estimativ[a-z]*)\b/.test(norm)) {
+    return { intent: 'projection_clarification', clarification: 'ambiguous' };
+  }
+  return { intent: 'projection_base' };
+}
+
+// ── Construção das respostas de projeção (texto mínimo e seguro) ─
+// brlCents (reais → "R$ ..." a partir de centavos) já existe acima.
+
+function monthLabelOf(ym: YearMonth): string {
+  return `${MONTH_FULL[ym.month - 1] ?? ym.month} de ${ym.year}`;
+}
+
+function monthRangeOf(ym: YearMonth): { start: string; end: string } {
+  return {
+    start: `${ym.year}-${pad2(ym.month)}-01`,
+    end: lastDayOf(String(ym.year), ym.month),
+  };
+}
+
+const PROJECTION_DISCLAIMER = ' Cenário histórico, sem garantia nem recomendação.';
+
+function monthKeyOfPayload(month: string): YearMonth {
+  const [year, m] = month.split('-').map(Number);
+  return { year, month: m };
+}
+
+function monthRangeOfKey(month: string): { start: string; end: string } {
+  return monthRangeOf(monthKeyOfPayload(month));
+}
+
+function directionLabel(deviation: ProjectionPayloadDeviation): string {
+  if (deviation === 'above') return 'acima da referência';
+  if (deviation === 'below') return 'abaixo da referência';
+  return 'igual à referência';
+}
+
+function coveragePhrase(quality: ProjectionPayloadQuality, coveredMonths: number): string {
+  return quality === 'preliminary'
+    ? `base preliminar em ${coveredMonths} dos 12 meses`
+    : `${coveredMonths} meses cobertos`;
+}
+
+function makeProjectionAnswer(
+  intent: DeterministicIntent,
+  answer: string,
+  period: { start: string; end: string },
+): DeterministicAnswer {
+  return {
+    intent,
+    response: {
+      answer,
+      period,
+      toolsUsed: ['projection'],
+      evidence: [],
+      engine: 'deterministic',
+      geminiCallCount: 0,
+      periodAnalyzed: period,
+    },
+  };
+}
+
+function projectionClarificationAnswer(
+  kind: ProjectionClarificationKind,
+  todayISO: string,
+): DeterministicAnswer {
+  const text = {
+    ambiguous: PROJECTION_AMBIGUOUS_TEXT,
+    year_close: PROJECTION_YEAR_CLOSE_TEXT,
+    category: PROJECTION_CATEGORY_TEXT,
+    future_month: PROJECTION_FUTURE_TEXT,
+  }[kind];
+  const range = monthRangeOf(yearMonthOfProjection(todayISO));
+  return {
+    intent: 'projection_clarification',
+    response: {
+      answer: text,
+      period: range,
+      toolsUsed: ['projection_clarification'],
+      evidence: [],
+      engine: 'deterministic',
+      geminiCallCount: 0,
+      periodAnalyzed: range,
+    },
+  };
+}
+
+function projectionBaseText(p: ProjectionPayloadSuccessV1): string {
+  return (
+    `Com ${coveragePhrase(p.quality, p.coverage.coveredMonths)}, a média mensal é de ${brlCents(
+      p.summary.monthlyMeanCents,
+    )} e o cenário anualizado para os próximos 12 meses é de ${brlCents(
+      p.summary.annualScenarioCents,
+    )}.` + PROJECTION_DISCLAIMER
+  );
+}
+
+function projectionCurrentMonthText(p: ProjectionPayloadSuccessV1): string {
+  const c = p.comparison;
+  if (c.referenceBasis !== 'expected_to_date') {
+    throw new Error('Mês atual com comparação fora de expected_to_date.');
+  }
+  const closing =
+    c.closingProjectionCents === null
+      ? ' Ainda é cedo para estimar o fechamento: ele passa a ser calculado a partir do 7º dia do mês.'
+      : ` Pelo ritmo atual, o fechamento estimado do mês é de ${brlCents(c.closingProjectionCents)}.`;
+  return (
+    `No mês atual, o realizado até hoje é de ${brlCents(c.realizedCents)}, contra um esperado ` +
+    `proporcional de ${brlCents(c.expectedToDateCents)} (${directionLabel(c.deviation)}). ` +
+    `Lançamentos futuros já registrados somam ${brlCents(c.futureRegisteredCents)} e o comprometido ` +
+    `(realizado + futuros) fica em ${brlCents(c.committedCents)}.` +
+    closing +
+    PROJECTION_DISCLAIMER
+  );
+}
+
+function projectionMonthComparisonText(p: ProjectionPayloadSuccessV1): string {
+  const c = p.comparison;
+  if (c.referenceBasis === 'monthly_mean') {
+    return (
+      `Em ${monthLabelOf(monthKeyOfPayload(p.reference.month))}, a despesa foi de ${brlCents(
+        c.realizedCents,
+      )}, contra a média mensal de ${brlCents(c.referenceCents)} dos 12 meses anteriores ` +
+      `(${directionLabel(c.deviation)}).` + PROJECTION_DISCLAIMER
+    );
+  }
+  return (
+    `No mês atual, o realizado até hoje é de ${brlCents(c.realizedCents)}, contra o esperado ` +
+    `proporcional de ${brlCents(c.referenceCents)} (${directionLabel(c.deviation)}).` +
+    PROJECTION_DISCLAIMER
+  );
+}
+
+function projectionCategoriesText(p: ProjectionPayloadSuccessV1): string {
+  const top = p.categories.slice(0, 2);
+  const names =
+    top.length === 0
+      ? 'ainda não há categorias representativas'
+      : top.map((cat) => `${cat.label} (${brlCents(cat.monthlyMeanCents)}/mês)`).join(' e ');
+  return (
+    `Categorias de maior peso: ${names}. ` +
+    `Com ${coveragePhrase(p.quality, p.coverage.coveredMonths)}; detalhes completos no resumo por categorias.` +
+    PROJECTION_DISCLAIMER
+  );
+}
+
+function projectionInsufficientTextOf(p: ProjectionPayloadInsufficientV1): string {
+  return (
+    `Ainda não há dados suficientes para projetar: foram encontrados ${p.reason.coveredMonths} de ` +
+    `${p.coverage.windowMonths} meses com cobertura completa (mínimo de ${p.reason.minimumCoveredMonths}). ` +
+    `Por isso não apresento média mensal, fechamento, comparação nem projeção por categorias.` +
+    PROJECTION_DISCLAIMER
+  );
+}
+
+/**
+ * Texto da resposta de projeção derivado EXCLUSIVAMENTE do ProjectionPayloadV1 —
+ * a mesma fonte que cards/persistência/cache usam. Nenhum valor é recalculado:
+ * só os agregados já mapeados são formatados (pt-BR).
+ */
+function projectionAnswerText(payload: ProjectionPayloadV1): string {
+  if (payload.status === 'insufficient') return projectionInsufficientTextOf(payload);
+  switch (payload.intent) {
+    case 'projection_base':
+      return projectionBaseText(payload);
+    case 'projection_current_month':
+      return projectionCurrentMonthText(payload);
+    case 'projection_month_comparison':
+      return projectionMonthComparisonText(payload);
+    case 'projection_categories':
+      return projectionCategoriesText(payload);
+  }
+}
+
+function projectionPeriodOf(payload: ProjectionPayloadV1): { start: string; end: string } {
+  const window = {
+    start: `${payload.coverage.windowStart}-01`,
+    end: monthRangeOfKey(payload.coverage.windowEnd).end,
+  };
+  if (payload.status === 'insufficient') return window;
+  if (
+    payload.intent === 'projection_current_month' ||
+    payload.intent === 'projection_month_comparison'
+  ) {
+    return monthRangeOfKey(payload.reference.month);
+  }
+  return window;
+}
+
+/** Restringe um DeterministicIntent aos QUATRO intents reais de projeção. */
+function isProjectionPayloadIntent(
+  intent: DeterministicIntent,
+): intent is ProjectionPayloadIntent {
+  return (PROJECTION_INTENTS as readonly string[]).includes(intent);
+}
+
+function toProjectionDeterministicAnswer(
+  intent: DeterministicIntent,
+  result: ProjectionEngineResult,
+): DeterministicAnswer {
+  // PESSOAL-13C4A-E2: o payload versionado acompanha APENAS turnos de projeção
+  // reais (full/preliminary/insufficient). Clarification e falha de
+  // infraestrutura nunca chegam aqui — logo nenhuma resposta deles carrega
+  // `projection`. A forma mapeada é validável e idempotente pelo sanitizador
+  // na fronteira de persistência, garantindo fresh === cache === listMessages.
+  if (!isProjectionPayloadIntent(intent)) {
+    throw new Error('Rotear projeção com intent inválido.');
+  }
+  const projection = mapProjectionToPayloadV1(result, intent);
+  const resolved = makeProjectionAnswer(
+    intent,
+    projectionAnswerText(projection),
+    projectionPeriodOf(projection),
+  );
+  resolved.response.projection = projection;
+  return resolved;
+}
+
+/**
+ * Despacha um intent de projeção ao adapter. Falha de INFRAESTRUTURA do adapter
+ * (ProjectionDataError ou erro inesperado de consulta) PROPAGA como erro
+ * controlado do contrato do endpoint (AskError → HTTP ≠ 200, sanitizado, sem
+ * Gemini, sem persistir resposta) — projection_clarification é reservado para
+ * ambiguidade SEMÂNTICA da pergunta.
+ */
+async function buildProjectionAnswer(
+  supabase: SupabaseClient,
+  intent: DeterministicIntent,
+  referenceMonth: YearMonth,
+  todayISO: string,
+): Promise<DeterministicAnswer> {
+  const result = await fetchProjection(supabase, { todayISO, referenceMonth });
+  return toProjectionDeterministicAnswer(intent, result);
+}
+
+/**
+ * Converte erro de infraestrutura da projeção em erro controlado do contrato
+ * existente do endpoint, preservando o intent detectado para o diagnóstico
+ * sanitizado — nunca expõe mensagem bruta do Supabase/stack/tabela/SQL/UUID.
+ */
+function withProjectionIntent(err: unknown, intent: string): unknown {
+  const converted: unknown =
+    err instanceof AskError
+      ? err
+      : err instanceof ProjectionDataError
+        ? new AskError('supabase_query', {
+            category: 'supabase_query_error',
+            providerStatus: providerStatusOf(err),
+            retryable: false,
+          })
+        : toAskSupabaseError(err);
+  if (converted instanceof AskError) {
+    (converted as AskError & { intent?: string }).intent = intent;
+  }
+  return converted;
+}
+
 // ── Entrada pública ────────────────────────────────────────────
 
 /**
@@ -1960,6 +2434,28 @@ export async function runDeterministicAsk(
     } catch (err) {
       if (err instanceof AskError) throw err;
       throw toAskSupabaseError(err);
+    }
+  }
+
+  // PESSOAL-13C4A-E2 (Fase 3): projeção determinística. Sinais fortes; detecção na
+  // pergunta principal CRUA (antes do contexto — "e a projeção?" nunca vira
+  // follow-up de categoria). Clarificação/explicação NUNCA consulta banco.
+  const projToday = deps.nowISO ?? saoPauloTodayISO();
+  const projection = detectProjection(normalizeText(q), projToday);
+  if (projection) {
+    if (projection.clarification) {
+      return projectionClarificationAnswer(projection.clarification, projToday);
+    }
+    if (!supportsPaginableAsync(deps.supabase)) return null;
+    try {
+      return await buildProjectionAnswer(
+        deps.supabase,
+        projection.intent,
+        projection.referenceMonth ?? yearMonthOfProjection(projToday),
+        projToday,
+      );
+    } catch (err) {
+      throw withProjectionIntent(err, projection.intent);
     }
   }
 

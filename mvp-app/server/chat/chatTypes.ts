@@ -7,6 +7,7 @@
 // identidade vem exclusivamente do JWT do usuário em cada requisição.
 
 import type { TrendCard } from '../finance-ai/types.js';
+import type { ProjectionPayloadV1 } from '../finance-ai/projectionPayloadV1.js';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -91,6 +92,14 @@ export interface ChatMessagePayload {
    * vazios"; ausente significa "turno sem cards" (retrocompatível).
    */
   cards?: TrendCard[];
+  /**
+   * Payload de projeção versionado já sanitizado (PESSOAL-13C4A-E2): presente
+   * somente em turnos de projeção reais (full/preliminary/insufficient),
+   * jamais em clarification ou falha. Ausente = turno sem projeção
+   * (retrocompatível). A leitura (cache/listMessages) devolve EXATAMENTE a
+   * forma sanitizada gravada aqui.
+   */
+  projection?: ProjectionPayloadV1;
 }
 
 export interface ChatConversationRow {

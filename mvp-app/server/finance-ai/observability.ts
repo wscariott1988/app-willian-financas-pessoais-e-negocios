@@ -311,6 +311,8 @@ export interface SanitizedFailureEvent {
   providerCode?: AskProviderCode;
   retryable: boolean;
   elapsedMs: number;
+  /** Intent determinístico preservado quando a falha veio de uma rota determinística. */
+  intent?: string;
 }
 
 export function newRequestId(): string {
@@ -335,6 +337,7 @@ export function buildFailureEvent(opts: {
   providerCode?: AskProviderCode;
   retryable: boolean;
   elapsedMs: number;
+  intent?: string;
 }): SanitizedFailureEvent {
   const event: SanitizedFailureEvent = {
     event: 'ask_failure',
@@ -348,6 +351,7 @@ export function buildFailureEvent(opts: {
   };
   if (opts.providerStatus !== undefined) event.providerStatus = opts.providerStatus;
   if (opts.providerCode !== undefined) event.providerCode = opts.providerCode;
+  if (opts.intent !== undefined) event.intent = opts.intent;
   return event;
 }
 
@@ -368,12 +372,14 @@ export function getSanitizedEventSink(): SanitizedEventSink | null {
 }
 
 export function emitSanitizedFailureEvent(event: SanitizedFailureEvent): void {
-  if (eventSink) {
-    eventSink(event);
-    return;
-  }
-  const line = `[finance-ask] ${JSON.stringify(event)}`;
+  // PESSOAL-13C4A (Fase 6): telemetria NUNCA pode derrubar a response — o
+  // sink (inclusive um que lance exceção) também fica sob guarda.
   try {
+    if (eventSink) {
+      eventSink(event);
+      return;
+    }
+    const line = `[finance-ask] ${JSON.stringify(event)}`;
     // eslint-disable-next-line no-console
     console.error(line);
   } catch {
@@ -392,6 +398,7 @@ export const OBSERVABILITY_FIELDS = [
   'providerCode',
   'retryable',
   'elapsedMs',
+  'intent',
 ] as const;
 
 // PESSOAL-13C3B-E4: nome canônico do conjunto FECHADO do evento de FALHA
@@ -404,6 +411,20 @@ export const OBSERVABILITY_FAILURE_FIELDS = OBSERVABILITY_FIELDS;
 // chamadas. NUNCA contém pergunta, resposta, valores financeiros, UUIDs, JWT,
 // tokens ou conteúdo do Gemini.
 
+// PESSOAL-13C4A (Fase 6): allowlists FECHADAS do trio opcional que documenta
+// uma resposta de projeção determinística — nenhum valor fora destes conjuntos
+// é admissível em evento de sucesso.
+export const PROJECTION_SUCCESS_OUTCOMES = [
+  'full',
+  'preliminary',
+  'insufficient',
+  'clarification',
+] as const;
+export type ProjectionSuccessOutcome = (typeof PROJECTION_SUCCESS_OUTCOMES)[number];
+
+export const PROJECTION_CACHE_STATES = ['fresh', 'hit'] as const;
+export type ProjectionCacheState = (typeof PROJECTION_CACHE_STATES)[number];
+
 export const OBSERVABILITY_SUCCESS_FIELDS = [
   'event',
   'requestId',
@@ -411,6 +432,9 @@ export const OBSERVABILITY_SUCCESS_FIELDS = [
   'intent',
   'elapsedMs',
   'geminiCallCount',
+  'source',
+  'outcome',
+  'cache',
 ] as const;
 
 export interface SanitizedSuccessEvent {
@@ -421,6 +445,12 @@ export interface SanitizedSuccessEvent {
   intent?: string;
   elapsedMs: number;
   geminiCallCount: number;
+  /** Sempre 'deterministic'; presente apenas em respostas de projeção. */
+  source?: 'deterministic';
+  /** Qualidade da projeção; presente apenas em respostas de projeção. */
+  outcome?: ProjectionSuccessOutcome;
+  /** fresh = calculada agora; hit = reutilização idempotente do cache de chat. */
+  cache?: ProjectionCacheState;
 }
 
 export function buildSuccessEvent(opts: {
@@ -429,6 +459,9 @@ export function buildSuccessEvent(opts: {
   intent?: string;
   elapsedMs: number;
   geminiCallCount: number;
+  source?: 'deterministic';
+  outcome?: ProjectionSuccessOutcome;
+  cache?: ProjectionCacheState;
 }): SanitizedSuccessEvent {
   const event: SanitizedSuccessEvent = {
     event: 'ask_resolved',
@@ -438,6 +471,19 @@ export function buildSuccessEvent(opts: {
     geminiCallCount: opts.geminiCallCount,
   };
   if (opts.intent && opts.engine === 'deterministic') event.intent = opts.intent;
+  // PESSOAL-13C4A (Fase 6): o trio source/outcome/cache só entra completo e
+  // vindo de allowlist fechada — nunca parcial, nunca fora do conjunto.
+  if (
+    opts.source === 'deterministic' &&
+    opts.outcome !== undefined &&
+    (PROJECTION_SUCCESS_OUTCOMES as readonly string[]).includes(opts.outcome) &&
+    opts.cache !== undefined &&
+    (PROJECTION_CACHE_STATES as readonly string[]).includes(opts.cache)
+  ) {
+    event.source = opts.source;
+    event.outcome = opts.outcome;
+    event.cache = opts.cache;
+  }
   return event;
 }
 
@@ -454,12 +500,14 @@ export function getSanitizedSuccessSink(): SanitizedSuccessSink | null {
 }
 
 export function emitSanitizedSuccessEvent(event: SanitizedSuccessEvent): void {
-  if (successSink) {
-    successSink(event);
-    return;
-  }
-  const line = `[finance-ask] ${JSON.stringify(event)}`;
+  // PESSOAL-13C4A (Fase 6): telemetria NUNCA pode derrubar a response — o
+  // sink (inclusive um que lance exceção) também fica sob guarda.
   try {
+    if (successSink) {
+      successSink(event);
+      return;
+    }
+    const line = `[finance-ask] ${JSON.stringify(event)}`;
     // eslint-disable-next-line no-console
     console.info(line);
   } catch {

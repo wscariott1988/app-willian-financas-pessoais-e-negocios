@@ -13,9 +13,20 @@ import {
   type ProjectionPeriod,
   type ProjectionTransaction,
   type TransactionKind,
+  type YearMonth,
 } from '../lib/analyticsProjection';
 
 const PAD2 = (v: number) => String(v).padStart(2, '0');
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    Object.freeze(value);
+    for (const key of Object.keys(value as object)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
+}
 
 function ymd(y: number, m: number, d: number): string {
   return `${y}-${PAD2(m)}-${PAD2(d)}`;
@@ -770,5 +781,121 @@ describe('PESSOAL-13C4A-E1 — relógio injetado e validação', () => {
         periods: [],
       }),
     ).toThrow(RangeError);
+  });
+});
+
+// ============ 29..33. Grupos permanentes (PESSOAL-13C4A-E1) ============
+
+describe('PESSOAL-13C4A-E1 — períodos persistidos prevalecem sobre fallback', () => {
+  it('com período persistido, o fallback nunca estende a cobertura', () => {
+    const txs = [
+      tx(ymd(2025, 10, 1), 100000),
+      ...monthlyExpenses({ year: 2025, month: 11 }, AUG_2026, 100000),
+    ];
+    const persisted = buildProjection({
+      todayISO: TODAY,
+      transactions: txs,
+      periods: [period('ACCT-A', '2025-11-01')],
+    });
+    expect(persisted.status).toBe('success');
+    if (persisted.status !== 'success') return;
+    expect(persisted.basis.months.find((m) => m.key === '2025-10')?.covered).toBe(false);
+    expect(persisted.basis.coveredMonths).toBe(10);
+    expect(persisted.basis.totalBaseCents).toBe(1000000);
+    expect(persisted.quality).toBe('preliminary');
+
+    const fallback = buildProjection({
+      todayISO: TODAY,
+      transactions: txs,
+      periods: [],
+    });
+    expect(fallback.status).toBe('success');
+    if (fallback.status !== 'success') return;
+    expect(fallback.basis.months.find((m) => m.key === '2025-10')?.covered).toBe(true);
+    expect(fallback.basis.coveredMonths).toBe(11);
+    expect(fallback.basis.totalBaseCents).toBe(1100000);
+  });
+});
+
+describe('PESSOAL-13C4A-E1 — fallback ignora transação deletada ao determinar o início', () => {
+  it('soft-deleted não vira ponto de início do fallback', () => {
+    const input: ProjectionEngineInput = {
+      todayISO: TODAY,
+      transactions: [
+        tx(ymd(2025, 9, 15), 99000, { deleted: '2025-10-20' }),
+        ...monthlyExpenses({ year: 2025, month: 10 }, AUG_2026, 100000),
+      ],
+      periods: [],
+    };
+    const r = buildProjection(input);
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.basis.months.find((m) => m.key === '2025-09')?.covered).toBe(false);
+    expect(r.basis.months.find((m) => m.key === '2025-10')?.covered).toBe(false);
+    expect(r.basis.coveredMonths).toBe(10);
+    expect(r.basis.totalBaseCents).toBe(1000000);
+    expect(r.quality).toBe('preliminary');
+  });
+});
+
+describe('PESSOAL-13C4A-E1 — 7, 8 e 9 meses resultam em preliminary', () => {
+  it('cobertura de 7, 8 e 9 meses → preliminary (não full)', () => {
+    const startOf = (count: number): YearMonth => {
+      const idx = 2026 * 12 + 7 - (count - 1);
+      return { year: Math.floor(idx / 12), month: (idx % 12) + 1 };
+    };
+    for (const count of [7, 8, 9]) {
+      const start = startOf(count);
+      const r = buildProjection({
+        todayISO: TODAY,
+        transactions: monthlyExpenses(start, AUG_2026, 100000),
+        periods: [period('ACCT-A', ymd(start.year, start.month, 1))],
+      });
+      expect(r.status).toBe('success');
+      if (r.status !== 'success') continue;
+      expect(r.basis.coveredMonths).toBe(count);
+      expect(r.quality).toBe('preliminary');
+    }
+  });
+});
+
+describe('PESSOAL-13C4A-E1 — inputs profundamente congelados não são modificados', () => {
+  it('deep-freeze não quebra e o resultado é idêntico ao não congelado', () => {
+    const build = (): ProjectionEngineInput => ({
+      todayISO: TODAY,
+      transactions: [
+        ...monthlyExpenses(FULL_12, AUG_2026, 100000),
+        tx(ymd(2026, 9, 10), 1000),
+      ],
+      periods: [period('ACCT-A', '2025-09-01')],
+    });
+    const base = build();
+    const frozen = deepFreeze(build());
+    expect(() => buildProjection(frozen)).not.toThrow();
+    const r = buildProjection(frozen);
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(JSON.stringify(buildProjection(base))).toBe(JSON.stringify(r));
+    expect(r.basis.coveredMonths).toBe(12);
+    expect(r.quality).toBe('full');
+  });
+});
+
+describe('PESSOAL-13C4A-E1 — mês atual no dia ≥ 7 e realizado zero retorna 0, não null', () => {
+  it('realizado zero no 7º dia+ → closingProjectionCents é 0, não null', () => {
+    const r = buildProjection({
+      todayISO: '2026-09-07',
+      transactions: monthlyExpenses(FULL_12, AUG_2026, 100000),
+      periods: [period('ACCT-A', '2025-09-01')],
+    });
+    expect(r.status).toBe('success');
+    if (r.status !== 'success') return;
+    expect(r.comparison.kind).toBe('current');
+    if (r.comparison.kind !== 'current') return;
+    expect(r.comparison.realizedCents).toBe(0);
+    expect(r.comparison.futureCents).toBe(0);
+    expect(r.comparison.committedCents).toBe(0);
+    expect(r.comparison.closingProjectionCents).toBe(0);
+    expect(r.comparison.closingProjectionCents).not.toBeNull();
   });
 });

@@ -38,6 +38,11 @@ import {
   type ChatConversationSnapshot,
 } from '../../server/chat/chatStore.js';
 import {
+  PROJECTION_INTENTS,
+  sanitizeProjectionPayloadV1,
+  type ProjectionPayloadV1,
+} from '../../server/finance-ai/projectionPayloadV1.js';
+import {
   contextFromTurn,
   geminiContextBlock,
   titleFromQuestion,
@@ -60,6 +65,7 @@ import {
   type AskOutcome,
   type AskStage,
   type FailureClassification,
+  type ProjectionSuccessOutcome,
 } from '../../server/finance-ai/observability.js';
 
 interface NodeResponseLike {
@@ -97,6 +103,36 @@ function respond(res: NodeResponseLike | undefined, status: number, body: unknow
     }
   }
   return jsonResponse(status, body);
+}
+
+// PESSOAL-13C4A (Fase 6): metadados de projeção para o evento de sucesso
+// ask_resolved. Retorna null quando a resposta NÃO é de projeção — nesses casos
+// o evento permanece exatamente como antes (sem source/outcome/cache). Quando é
+// de projeção, devolve o trio fechado que o buildSuccessEvent valida por
+// allowlist antes de emitir.
+function projectionSuccessMeta(
+  intent: string | null | undefined,
+  projection: ProjectionPayloadV1 | null | undefined,
+): { source: 'deterministic'; outcome: ProjectionSuccessOutcome } | null {
+  if (intent === 'projection_clarification') {
+    return { source: 'deterministic', outcome: 'clarification' };
+  }
+  if (
+    intent !== null &&
+    intent !== undefined &&
+    (PROJECTION_INTENTS as readonly string[]).includes(intent)
+  ) {
+    if (projection) {
+      return {
+        source: 'deterministic',
+        outcome: projection.status === 'insufficient' ? 'insufficient' : projection.quality,
+      };
+    }
+    // Intenção de projeção sem payload é estado impossível de produzir; por
+    // segurança, NÃO inventa metadados.
+    return null;
+  }
+  return null;
 }
 
 function readBearer(authHeader: string | null): string | null {
@@ -189,6 +225,7 @@ function resolveFailure(err: unknown): {
   outcome: AskOutcome;
   status: number;
   errorName: string;
+  intent?: string;
 } {
   if (err instanceof AskError) {
     const finalOutcome: AskOutcome =
@@ -196,6 +233,7 @@ function resolveFailure(err: unknown): {
       err.classification.category === 'gemini_rate_limited'
         ? 'quota'
         : err.outcome;
+    const errWithIntent = err as AskError & { intent?: string };
     return {
       stage:
         err.classification.category === 'gemini_timeout' ? 'timeout' : err.stage,
@@ -203,6 +241,10 @@ function resolveFailure(err: unknown): {
       outcome: finalOutcome,
       status: httpStatusForOutcome(finalOutcome),
       errorName: sanitizeErrorName(err, 'AskError'),
+      intent:
+        typeof errWithIntent.intent === 'string' && errWithIntent.intent
+          ? errWithIntent.intent
+          : undefined,
     };
   }
   if (isAbortLikeError(err)) {
@@ -239,6 +281,7 @@ function emitFailure(opts: {
   errorName: string;
   httpStatus: number;
   classification: FailureClassification;
+  intent?: string;
 }): void {
   emitSanitizedFailureEvent(
     buildFailureEvent({
@@ -251,6 +294,7 @@ function emitFailure(opts: {
       providerCode: opts.classification.providerCode,
       retryable: opts.classification.retryable,
       elapsedMs: Date.now() - opts.startedAt,
+      intent: opts.intent,
     }),
   );
 }
@@ -283,6 +327,17 @@ function cachedResponseOf(turn: CachedTurn): AskResponse {
   }
   if (typeof turn.payload?.notice === 'string') {
     reply.notice = turn.payload.notice;
+  }
+  // PESSOAL-13C4A-E2: o payload de projeção (já sanitizado ao gravar) é
+  // reconstituído no cache/idempotência exatamente como foi persistido —
+  // garantindo igualdade estrutural com a resposta fresca e o listMessages.
+  // Defensivo extra na leitura: se a linha do banco vier adulterada (INSERT
+  // direto via PostgREST), a projeção é RE-sanitizada aqui — IDs/campos
+  // desconhecidos nunca reaparecem na resposta ao cliente. Idempotente sobre
+  // payloads legítimos (fresh === cache preservado).
+  if (turn.payload?.projection !== undefined) {
+    const projection = sanitizeProjectionPayloadV1(turn.payload.projection);
+    if (projection !== undefined) reply.projection = projection;
   }
   return reply;
 }
@@ -440,7 +495,11 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
             error: 'in_flight',
             message: 'Esta pergunta já está sendo processada.',
           });
-        case 'cached':
+        case 'cached': {
+          const projectionMeta = projectionSuccessMeta(
+            begun.intent ?? undefined,
+            begun.payload?.projection ?? undefined,
+          );
           emitSanitizedSuccessEvent(
             buildSuccessEvent({
               requestId,
@@ -448,9 +507,11 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
               intent: begun.intent ?? undefined,
               elapsedMs: Date.now() - startedAt,
               geminiCallCount: begun.payload?.geminiCallCount ?? 0,
+              ...(projectionMeta ? { ...projectionMeta, cache: 'hit' } : {}),
             }),
           );
           return respond(res, 200, cachedResponseOf(begun));
+        }
         case 'cached_failure':
           return respond(res, 502, {
             error: 'upstream',
@@ -490,6 +551,9 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
             evidence: deterministic.response.evidence ?? [],
             cards: deterministic.response.cards,
             notice: deterministic.response.notice,
+            // PESSOAL-13C4A-E2: projection sanitizado na fronteira única de
+            // persistência (sanitizeChatPayload → sanitizeProjectionPayloadV1).
+            projection: deterministic.response.projection,
           },
           intent: deterministic.intent,
           engine: 'deterministic',
@@ -507,6 +571,10 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
           title: titleFromQuestion(body.question),
         });
       }
+      const projectionMeta = projectionSuccessMeta(
+        deterministic.intent,
+        deterministic.response.projection ?? undefined,
+      );
       emitSanitizedSuccessEvent(
         buildSuccessEvent({
           requestId,
@@ -514,6 +582,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
           intent: deterministic.intent,
           elapsedMs: Date.now() - startedAt,
           geminiCallCount: 0,
+          ...(projectionMeta ? { ...projectionMeta, cache: 'fresh' } : {}),
         }),
       );
       return respond(res, 200, deterministic.response);
@@ -648,6 +717,7 @@ export async function handler(req: Request, res?: NodeResponseLike): Promise<Res
       errorName: failure.errorName,
       httpStatus: failure.status,
       classification: failure.classification,
+      intent: failure.intent,
     });
     return respond(res, failure.status, friendlyForOutcome(failure.outcome));
   } finally {
