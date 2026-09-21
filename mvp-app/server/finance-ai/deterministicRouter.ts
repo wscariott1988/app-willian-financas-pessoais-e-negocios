@@ -2213,8 +2213,31 @@ async function resolveProjectionLens(
 ): Promise<ProjectionRouteLens | null> {
   const labels = await fetchExpenseCategories(supabase);
   const resolved = resolveCategory(labels, term);
-  if (resolved?.status === 'ambiguous') return null;
-  return resolved?.status === 'resolved' ? lensOfResolved(resolved) : null;
+  if (resolved?.status === 'resolved') return lensOfResolved(resolved);
+  if (resolved?.status !== 'ambiguous') return null;
+  // (PESSOAL-13C4A-E3.1A) Precedência do alias na LENTE: quando o termo é
+  // EXATAMENTE o sinônimo canônico isolado ("mercado" → "supermercado") e há um
+  // ÚNICO nó com o segmento canônico do alias entre os candidatos, ele vence —
+  // inclusive sobre a categoria nomeada com o próprio termo ("Alimentação >
+  // mercado"). Sem isso, "E só mercado?" ficaria ambíguo e viraria
+  // 'unknown_lens'. Nunca substring: o segmento precisa ser inteiro.
+  const aliasTarget = SEGMENT_ALIAS[normalizeCategoryTerm(term)];
+  if (aliasTarget) {
+    const seen = new Set<string>();
+    const aliased: ResolvedCategoryMatch[] = [];
+    for (const m of resolved.matches) {
+      if (seen.has(m.matchTerm)) continue;
+      seen.add(m.matchTerm);
+      const pathSegs = normalizeCategoryTerm(m.matchTerm)
+        .split('>')
+        .map((s) => s.trim());
+      if (pathSegs.includes(aliasTarget)) aliased.push(m);
+    }
+    if (aliased.length === 1) {
+      return lensOfResolved({ status: 'resolved', label: aliased[0].label, matchTerm: aliased[0].matchTerm });
+    }
+  }
+  return null;
 }
 
 /**
@@ -2344,7 +2367,14 @@ async function resolveProjectionFollowUp(
       return { kind: 'clarification', clarification: 'future_month' };
     }
     if (ctx.intent === 'projection_current_month') {
-      // Fechamento estimado só existe para o mês atual → esclarecer.
+      // Fechamento estimado só existe para o mês atual → esclarecer. EXCEÇÃO
+      // (PESSOAL-13C4A-E3.1A): mês PASSADO explícito COM ANO ("E em agosto de
+      // 2026?") re-ancora uma comparação mensal com a MESMA lente — o
+      // fechamento nunca se aplica, mas a comparação do mês passado sim. Mês
+      // sem ano ("E em maio?") mantém o esclarecimento de sempre.
+      if (yearOfToken(norm) != null) {
+        return { kind: 'build', intent: 'projection_month_comparison', referenceMonth: target, lens: ctxLens(ctx) };
+      }
       return { kind: 'clarification', clarification: 'reference_month' };
     }
     return { kind: 'build', intent: ctx.intent, referenceMonth: target, lens: ctxLens(ctx) };
