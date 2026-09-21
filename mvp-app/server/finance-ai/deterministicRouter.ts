@@ -967,7 +967,7 @@ async function fetchExpenseCategories(supabase: SupabaseClient): Promise<Categor
   return labels;
 }
 
-interface ResolvedCategory {
+interface ResolvedCategoryMatch {
   /** Nó da tabela categories usado como referência (nunca exibido como path de descendente). */
   label: CategoryLabel;
   /**
@@ -983,6 +983,20 @@ interface ResolvedCategory {
   matchTerm: string;
 }
 
+type ResolvedCategory =
+  | { status: 'resolved'; label: CategoryLabel; matchTerm: string }
+  | { status: 'ambiguous'; matches: ResolvedCategoryMatch[] }
+  | null;
+
+/**
+ * Sinônimos de segmento canônico (PESSOAL-13C4A-E3.1): um termo dito
+ * naturalmente que corresponde a um segmento de path com outro nome. O match é
+ * SEMPRE por igualdade de segmento inteiro — nunca por substring. Assim
+ * "mercado" → "supermercado" (semântica coloquial) cobre as despesas de mercado
+ * sem recair no fallback antigo que casava "Mercado Livre" por substring.
+ */
+const SEGMENT_ALIAS: Readonly<Record<string, string>> = { mercado: 'supermercado' };
+
 function depthOfPath(path: string | null): number {
   return path ? path.split('>').length : 1;
 }
@@ -990,15 +1004,26 @@ function depthOfPath(path: string | null): number {
 /**
  * Resolve a categoria extraída para a classificação CANÔNICA do usuário
  * (display_name/canonical_path da tabela categories). Nunca devolve a string
- * bruta da pergunta. Entre múltiplas correspondências hierárquicas prefere o nó
- * ancestral (menor profundidade) e, para segmento casado, devolve o path BASE do
- * nó (prefixo até o segmento). Retorna null quando a categoria não é reconhecida.
+ * bruta da pergunta.
+ *
+ * Regras (PESSOAL-13C4A-E3.1):
+ *   - igualdade EXATA de display_name/canonical_path prevalece;
+ *   - hierárquico por SEGMENTO inteiro: o segmento é igual ao termo OU ao
+ *     sinônimo canônico (SEGMENT_ALIAS). NUNCA substring;
+ *   - um descendente (mesma causa canônica) devolve o path BASE até o segmento
+ *     casado; correspondências que produzem o MESMO matchTerm colapsam em uma;
+ *   - entre múltiplas causas canônicas prefere-se o nó ancestral (menor
+ *     profundidade). Quando restam ≥2 matchTerms canônicos DISTINTOS, a
+ *     resolução é AMBÍGUA e devolve os matches — o chamador decide o
+ *     esclarecimento com os nomes de exibição;
+ *   - retorna null quando a categoria não é reconhecida.
  */
-function resolveCategory(labels: CategoryLabel[], term: string): ResolvedCategory | null {
+function resolveCategory(labels: CategoryLabel[], term: string): ResolvedCategory {
   const target = normalizeCategoryTerm(term);
   if (!target) return null;
-  const exact: ResolvedCategory[] = [];
-  const hierarchic: ResolvedCategory[] = [];
+  const aliasTarget = SEGMENT_ALIAS[target];
+  const exact: ResolvedCategoryMatch[] = [];
+  const hierarchic: ResolvedCategoryMatch[] = [];
   for (const l of labels) {
     const dn = normalizeCategoryTerm(l.display_name);
     const rawPath = l.canonical_path;
@@ -1010,35 +1035,42 @@ function resolveCategory(labels: CategoryLabel[], term: string): ResolvedCategor
     if (cp) {
       const normSegs = cp.split('>').map((s) => s.trim());
       const rawSegs = rawPath ? rawPath.split('>').map((s) => s.trim()) : [];
-      const idx = normSegs.indexOf(target);
+      const eqIdx = normSegs.indexOf(target);
+      const aliasIdx =
+        aliasTarget && aliasTarget !== target ? normSegs.indexOf(aliasTarget) : -1;
+      const idx = eqIdx >= 0 ? eqIdx : aliasIdx >= 0 ? aliasIdx : -1;
       if (idx >= 0) {
         hierarchic.push({
           label: l,
           matchTerm: rawSegs.slice(0, idx + 1).join(' > '),
         });
-        continue;
-      }
-      if (target.length >= 3 && cp.includes(target)) {
-        const normIdx = normSegs.findIndex((s) => s.includes(target));
-        if (normIdx >= 0) {
-          hierarchic.push({
-            label: l,
-            matchTerm: rawSegs.slice(0, normIdx + 1).join(' > '),
-          });
-        }
       }
     }
   }
-  if (exact.length > 0) {
-    exact.sort((a, b) => depthOfPath(a.label.canonical_path) - depthOfPath(b.label.canonical_path));
-    return exact[0];
+  const all = [...exact, ...hierarchic];
+  if (all.length === 0) return null;
+  const seen = new Set<string>();
+  const uniq: ResolvedCategoryMatch[] = [];
+  for (const m of all) {
+    if (!seen.has(m.matchTerm)) {
+      seen.add(m.matchTerm);
+      uniq.push(m);
+    }
   }
-  if (hierarchic.length > 0) {
-    hierarchic.sort((a, b) => depthOfPath(a.label.canonical_path) - depthOfPath(b.label.canonical_path));
-    return hierarchic[0];
+  if (uniq.length === 1) {
+    return { status: 'resolved', label: uniq[0].label, matchTerm: uniq[0].matchTerm };
   }
-  return null;
+  uniq.sort((a, b) => depthOfPath(a.label.canonical_path) - depthOfPath(b.label.canonical_path));
+  return { status: 'ambiguous', matches: uniq };
 }
+
+/** Nomes de exibição (folha do matchTerm canônico) deduplicados para esclarecimento. */
+function ambiguousCategoryNames(matches: ResolvedCategoryMatch[]): string[] {
+  return dedupeDisplayNames(matches.map((m) => leafLabelOfPath(m.matchTerm)));
+}
+
+const CATEGORY_AMBIGUITY_CLARIFICATION =
+  'Isso pode ser mais de uma categoria da sua lista. Informe só o nome de UMA delas para eu analisar.';
 
 async function buildPeriodSummary(
   supabase: SupabaseClient,
@@ -1105,6 +1137,23 @@ async function buildCategoryTotal(
 ): Promise<DeterministicAnswer> {
   const cats = await fetchExpenseCategories(supabase);
   const resolvedCat = resolveCategory(cats, category);
+  if (resolvedCat?.status === 'ambiguous') {
+    // Categoria pode corresponder a mais de um item canônico → esclarecimento
+    // sem custo (nunca consulta o texto contaminado e nunca aciona o Gemini).
+    const names = ambiguousCategoryNames(resolvedCat.matches);
+    const clarification = names.length >= 2
+      ? `Achei mais de uma categoria possível: ${names.join(' e ')}. Informe só o nome de UMA delas para eu analisar.`
+      : CATEGORY_AMBIGUITY_CLARIFICATION;
+    return {
+      intent: 'category_total',
+      response: makeResponse(
+        clarification,
+        resolved,
+        [],
+        [{ label: 'Período analisado', value: periodDisplay(resolved) }],
+      ),
+    };
+  }
   if (!resolvedCat) {
     // Categoria não reconhecida → esclarecimento sem custo (nunca consulta o
     // texto contaminado, nunca R$ 0,00 e nunca aciona o Gemini).
@@ -1148,6 +1197,21 @@ async function buildMonthMost(
 ): Promise<DeterministicAnswer> {
   const cats = await fetchExpenseCategories(supabase);
   const resolvedCat = resolveCategory(cats, category);
+  if (resolvedCat?.status === 'ambiguous') {
+    const names = ambiguousCategoryNames(resolvedCat.matches);
+    const clarification = names.length >= 2
+      ? `Achei mais de uma categoria possível: ${names.join(' e ')}. Informe só o nome de UMA delas para eu analisar.`
+      : CATEGORY_AMBIGUITY_CLARIFICATION;
+    return {
+      intent: 'month_most_spent',
+      response: makeResponse(
+        clarification,
+        resolved,
+        [],
+        [{ label: 'Período analisado', value: periodDisplay(resolved) }],
+      ),
+    };
+  }
   if (!resolvedCat) {
     return {
       intent: 'month_most_spent',
@@ -1426,6 +1490,8 @@ interface ResolvedAnalysisFollowUp {
   categoryPath?: string;
   /** true = termo de categoria não reconhecido → responde com esclarecimento amigável. */
   unknownCategory?: boolean;
+  /** true = a categoria corresponde a múltiplos itens canônicos → esclarecer a qual referir. */
+  ambiguousNames?: string[];
 }
 
 /**
@@ -1483,6 +1549,17 @@ async function resolveAnalysisFollowUp(
   if (term) {
     const cats = await fetchExpenseCategories(supabase);
     let resolvedCat = resolveCategory(cats, term);
+    if (resolvedCat?.status === 'ambiguous') {
+      const names = ambiguousCategoryNames(resolvedCat.matches);
+      return {
+        intent: analysis.intent,
+        style: analysis.windowStyle,
+        anchorDate: analysis.anchorDate,
+        percent: analysis.simulationPct,
+        ambiguousNames: names.length >= 2 ? names : undefined,
+        unknownCategory: false,
+      };
+    }
     if (!resolvedCat) {
       // Lente virtual conservadora (PESSOAL-13C3B.12): a categoria excluída
       // pode NÃO existir na tabela categories (ex.: "investimentos" sem
@@ -1493,6 +1570,7 @@ async function resolveAnalysisFollowUp(
       const virtualClass = classifySavingsCategory(virtualLabel);
       if (virtualClass !== 'percentage_candidate') {
         resolvedCat = {
+          status: 'resolved',
           label: { display_name: virtualLabel, canonical_path: virtualLabel },
           matchTerm: virtualLabel,
         };
@@ -1502,7 +1580,7 @@ async function resolveAnalysisFollowUp(
       intent: analysis.intent,
       style: analysis.windowStyle,
       anchorDate: analysis.anchorDate,
-      categoryPath: resolvedCat?.matchTerm,
+      categoryPath: resolvedCat?.status === 'resolved' ? resolvedCat.matchTerm : undefined,
       percent: analysis.simulationPct,
       unknownCategory: !resolvedCat,
     };
@@ -2117,7 +2195,9 @@ function monthTargetOf(norm: string, todayISO: string): YearMonth | null {
 }
 
 /** Encapsula o PATH canônico do segmento casado + rótulo de exibição da lente. */
-function lensOfResolved(resolved: ResolvedCategory): ProjectionRouteLens {
+function lensOfResolved(
+  resolved: Extract<ResolvedCategory, { status: 'resolved' }>,
+): ProjectionRouteLens {
   return { kind: 'category', categoryPath: resolved.matchTerm, label: leafLabelOfPath(resolved.matchTerm) };
 }
 
@@ -2133,7 +2213,8 @@ async function resolveProjectionLens(
 ): Promise<ProjectionRouteLens | null> {
   const labels = await fetchExpenseCategories(supabase);
   const resolved = resolveCategory(labels, term);
-  return resolved ? lensOfResolved(resolved) : null;
+  if (resolved?.status === 'ambiguous') return null;
+  return resolved?.status === 'resolved' ? lensOfResolved(resolved) : null;
 }
 
 /**
@@ -2181,6 +2262,9 @@ function extractProjectionLensTerm(norm: string): string | null {
   if (first && MONTH_BY_NORM[first] != null) return null;
   term = collapseLensTerm(term);
   if (!term || PROJECTION_LENS_TERM_REJECT.test(term)) return null;
+  // (PESSOAL-13C4A-E3.1) Ano puro restante ("e em agosto de 2026" → '2026')
+  // NUNCA é lente: pertencia à frase de mês e deve voltar ao fluxo de mês.
+  if (/^\d{4}$/.test(term)) return null;
   return term;
 }
 
@@ -2721,6 +2805,32 @@ function withProjectionIntent(err: unknown, intent: string): unknown {
   return converted;
 }
 
+// ── Follow-up elíptico de projeção SEM contexto (PESSOAL-13C4A-E3.1) ──
+
+/**
+ * Expressões de projeção que dispensam o contexto do turno anterior para
+ * serem reconhecidas em modo elíptico ("E por categorias?", "E comparado ao
+ * mês passado?", "E sem filtro?", "Só a média anual?", "Próximos 12 meses",
+ * "E fechar o mês?", "E a visão geral?"). Nunca casa meses soltos sem ano
+ * ("E em maio?"), categorias, nem "e em 2026?" — esses seguem os fluxos atuais.
+ */
+const ELLIPTICAL_PROJECTION_IDIOMS_RE =
+  /\b(?:categorias?|por\s+categoria|comparar|comparaca?o|comparad[oa]?|versus|vs|media|medias|anual|anualizad|proximos?\s+(?:12\s+)?meses?|12\s+meses|mes\s+atual|este\s+mes|esse\s+mes|fech(?:o|ar|amento|ando|a)|sem\s+filtro|visao\s+geral)\b/i;
+
+/**
+ * Reconhece um follow-up de projeção sem contexto nenhum (nem projeção, nem
+ * análise) — o turno NUNCA pode ceder ao Gemini em interpretação. Exige modo
+ * elíptico (prefixo de continuidade ou escopo "só/somente/apenas") + expressão
+ * de projeção. Devolve o kind de clarificação: 'future_month' para horizontes
+ * de meses futuros, 'ambiguous' caso contrário.
+ */
+function noContextProjectionFollowUp(norm: string): ProjectionClarificationKind | null {
+  if (!CONTINUATION_RE.test(norm) && !/^(?:so\s+|somente\s+|apenas\s+)/.test(norm)) return null;
+  if (!ELLIPTICAL_PROJECTION_IDIOMS_RE.test(norm)) return null;
+  if (/(?:proximo\s+mes|mes\s+que\s+vem|mes\s+seguinte)\b/i.test(norm)) return 'future_month';
+  return 'ambiguous';
+}
+
 // ── Entrada pública ────────────────────────────────────────────
 
 /**
@@ -2966,6 +3076,22 @@ export async function runDeterministicAsk(
       if (followUp) {
         if (!supportsPaginableAsync(deps.supabase)) return null;
         try {
+          if (followUp.ambiguousNames) {
+            const w = buildTrendWindow(
+              followUp.anchorDate ?? deps.nowISO ?? todayISO(),
+              followUp.style,
+            );
+            const tool = followUp.intent === 'growth_categories' ? 'trend_growth' : 'trend_savings';
+            const response = makeResponse(
+              `Achei mais de uma categoria possível: ${followUp.ambiguousNames.join(' e ')}. Informe só o nome de UMA delas para eu analisar.`,
+              resolvidoAPartirDaJanela(w),
+              [tool],
+              [{ label: 'Período analisado', value: windowDisplay(w) }],
+            );
+            response.cards = [];
+            // Preserva a análise anterior: não sobrescreve com contexto incorreto.
+            return { intent: followUp.intent, response, analysis: deps.context.analysis };
+          }
           if (followUp.unknownCategory) {
             const w = buildTrendWindow(
               followUp.anchorDate ?? deps.nowISO ?? todayISO(),
@@ -3005,6 +3131,17 @@ export async function runDeterministicAsk(
           throw toAskSupabaseError(err);
         }
       }
+    }
+    // PESSOAL-13C4A-E3.1: follow-up de projeção SEM contexto nenhum (nem
+    // projeção, nem análise). Responde com sinalização/esclarecimento sem custo
+    // (nunca consulta dados financeiros, nunca cai no Gemini). Deve estar na
+    // ÚLTIMA posição: só captura o que nenhum intent/turno anterior resolveu.
+    const noCtxKind =
+      deps.context?.projection == null &&
+      deps.context?.analysis == null &&
+      noContextProjectionFollowUp(normQuestion);
+    if (noCtxKind) {
+      return projectionClarificationAnswer(noCtxKind, projToday);
     }
     return null;
   }

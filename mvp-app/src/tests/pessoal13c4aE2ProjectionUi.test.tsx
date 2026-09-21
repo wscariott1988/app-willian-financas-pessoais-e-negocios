@@ -189,9 +189,9 @@ describe('PESSOAL-13C4A-E2 — cards gerais por intent (somente valores do paylo
 
     expect(await screen.findByText('Base completa · 12/12 meses')).toBeDefined();
     expect(screen.getByText('Visão geral')).toBeDefined();
-    expect(screen.getByText('Média mensal')).toBeDefined();
+    expect(screen.getByText('Média mensal histórica')).toBeDefined();
     expect(screen.getByText(brl(100000))).toBeDefined();
-    expect(screen.getByText('Cenário anualizado (próximos 12 meses)')).toBeDefined();
+    expect(screen.getByText('Cenário se a média se repetir por 12 meses')).toBeDefined();
     expect(screen.getByText(brl(1200000))).toBeDefined();
     expect(screen.queryByText('Mês atual')).toBeNull();
     expect(screen.queryByText('Mês analisado')).toBeNull();
@@ -404,10 +404,10 @@ describe('PESSOAL-13C4A-E2 — categorias, remaining e insufficient', () => {
 
     expect(await screen.findByText('Categoria 1')).toBeDefined();
     expect(screen.getByText('Categoria 8')).toBeDefined();
-    expect(screen.getAllByText('Referência proporcional').length).toBe(8);
-    expect(screen.getAllByText('Realizado no mês').length).toBe(8);
-    expect(screen.getAllByText('Média mensal').length).toBe(9);
-    expect(screen.getAllByText('Cenário anualizado').length).toBe(9);
+    expect(screen.getAllByText('Referência até hoje (média proporcional)').length).toBe(8);
+    expect(screen.getAllByText('Realizado até hoje').length).toBe(8);
+    expect(screen.getAllByText('Média mensal histórica').length).toBe(9);
+    expect(screen.getAllByText('Cenário se a média se repetir por 12 meses').length).toBe(9);
     expect(screen.getByText('Outras 4 categorias')).toBeDefined();
     expect(screen.getByText(brl(40000))).toBeDefined();
     expect(screen.getByText(brl(480000))).toBeDefined();
@@ -429,7 +429,7 @@ describe('PESSOAL-13C4A-E2 — categorias, remaining e insufficient', () => {
     expect(await screen.findByText('Dados insuficientes · 1 mês · mínimo 6')).toBeDefined();
     const section = await screen.findByLabelText('Cards de projeção');
     expect(within(section).getByText('Dados insuficientes')).toBeDefined();
-    expect(within(section).queryByText('Média mensal')).toBeNull();
+    expect(within(section).queryByText('Média mensal histórica')).toBeNull();
     expect(within(section).queryByText('Fechamento estimado')).toBeNull();
     expect(section.innerHTML).not.toMatch(/R\$/);
     expect(container.querySelector('.finance-ai-proj-category')).toBeNull();

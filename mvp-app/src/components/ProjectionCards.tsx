@@ -32,7 +32,15 @@ function monthNameOf(yearMonth: string): string {
   return name ? `${name} de ${yearMonth.slice(0, 4)}` : yearMonth;
 }
 
-function directionOf(d: ProjectionPayloadDeviation): { label: string; tone: string } {
+function directionOf(
+  d: ProjectionPayloadDeviation,
+  basis: ProjectionPayloadComparisonBasis,
+): { label: string; tone: string } {
+  if (basis === 'expected_to_date') {
+    if (d === 'above') return { label: 'acima do ritmo até hoje', tone: 'finance-ai-proj-above' };
+    if (d === 'below') return { label: 'abaixo do ritmo até hoje', tone: 'finance-ai-proj-below' };
+    return { label: 'no ritmo esperado até hoje', tone: 'finance-ai-proj-equal' };
+  }
   if (d === 'above') return { label: 'acima da referência', tone: 'finance-ai-proj-above' };
   if (d === 'below') return { label: 'abaixo da referência', tone: 'finance-ai-proj-below' };
   return { label: 'igual à referência', tone: 'finance-ai-proj-equal' };
@@ -75,14 +83,18 @@ function Row({ label, value }: { label: string; value: string }) {
 function DirectionRow({
   deviation,
   deviationCents,
+  basis,
 }: {
   deviation: ProjectionPayloadDeviation;
   deviationCents: number;
+  basis: ProjectionPayloadComparisonBasis;
 }) {
-  const dir = directionOf(deviation);
+  const dir = directionOf(deviation, basis);
   return (
     <div className="finance-ai-card-row">
-      <dt className="finance-ai-card-dt">Diferença</dt>
+      <dt className="finance-ai-card-dt">
+        {basis === 'expected_to_date' ? 'Diferença no ritmo até hoje' : 'Diferença'}
+      </dt>
       <dd className="finance-ai-card-dd finance-ai-proj-dd">
         <span>{brlCents(Math.abs(deviationCents))}</span>
         <span className={`finance-ai-proj-dir ${dir.tone}`}>
@@ -99,9 +111,9 @@ function SummaryCard({ projection }: { projection: ProjectionPayloadSuccessV1 })
       <article className="finance-ai-proj-card">
         <h3 className="finance-ai-card-title">Visão geral</h3>
         <dl className="finance-ai-card-dl">
-          <Row label="Média mensal" value={brlCents(projection.summary.monthlyMeanCents)} />
+          <Row label="Média mensal histórica" value={brlCents(projection.summary.monthlyMeanCents)} />
           <Row
-            label="Cenário anualizado (próximos 12 meses)"
+            label="Cenário se a média se repetir por 12 meses"
             value={brlCents(projection.summary.annualScenarioCents)}
           />
         </dl>
@@ -144,7 +156,11 @@ function MonthCard({ projection }: { projection: ProjectionPayloadSuccessV1 }) {
         <dl className="finance-ai-card-dl">
           <Row label="Realizado" value={brlCents(c.realizedCents)} />
           <Row label="Média histórica" value={brlCents(c.referenceCents)} />
-          <DirectionRow deviation={c.deviation} deviationCents={c.deviationCents} />
+          <DirectionRow
+            deviation={c.deviation}
+            deviationCents={c.deviationCents}
+            basis="monthly_mean"
+          />
         </dl>
       </article>
     </li>
@@ -159,20 +175,25 @@ function CategoryCard({
   basis: ProjectionPayloadComparisonBasis;
 }) {
   const refLabel =
-    basis === 'expected_to_date' ? 'Referência proporcional' : 'Média histórica';
+    basis === 'expected_to_date' ? 'Referência até hoje (média proporcional)' : 'Média histórica';
+  const realizedLabel = basis === 'expected_to_date' ? 'Realizado até hoje' : 'Realizado no mês';
   return (
     <li>
       <article className="finance-ai-proj-card finance-ai-proj-category">
         <h3 className="finance-ai-card-title">{category.label}</h3>
         <dl className="finance-ai-card-dl">
-          <Row label="Realizado no mês" value={brlCents(category.realizedCents)} />
+          <Row label={realizedLabel} value={brlCents(category.realizedCents)} />
           <Row label={refLabel} value={brlCents(category.referenceCents)} />
           <DirectionRow
             deviation={category.deviation}
             deviationCents={category.deviationCents}
+            basis={basis}
           />
-          <Row label="Média mensal" value={brlCents(category.monthlyMeanCents)} />
-          <Row label="Cenário anualizado" value={brlCents(category.annualScenarioCents)} />
+          <Row label="Média mensal histórica" value={brlCents(category.monthlyMeanCents)} />
+          <Row
+            label="Cenário se a média se repetir por 12 meses"
+            value={brlCents(category.annualScenarioCents)}
+          />
         </dl>
       </article>
     </li>
@@ -187,27 +208,43 @@ function RemainingCard({ p }: { p: ProjectionPayloadSuccessV1 }) {
       <article className="finance-ai-proj-card finance-ai-proj-remaining">
         <h3 className="finance-ai-card-title">Outras {remaining.categoriesCount} categorias</h3>
         <dl className="finance-ai-card-dl">
-          <Row label="Média mensal" value={brlCents(remaining.monthlyMeanCents)} />
-          <Row label="Cenário anualizado" value={brlCents(remaining.annualScenarioCents)} />
+          <Row label="Média mensal histórica" value={brlCents(remaining.monthlyMeanCents)} />
+          <Row
+            label="Cenário se a média se repetir por 12 meses"
+            value={brlCents(remaining.annualScenarioCents)}
+          />
         </dl>
       </article>
     </li>
   );
 }
 
+const TO_DATE_NOTICE =
+  'A referência até hoje distribui a média histórica pelos dias transcorridos. Para contas pagas de uma vez, como aluguel, ficar acima dessa referência indica apenas que o pagamento já ocorreu; não significa que o mês terminará acima da média.';
+
 function SuccessCards({ projection }: { projection: ProjectionPayloadSuccessV1 }) {
+  const showNotice =
+    projection.intent !== 'projection_base' &&
+    projection.comparison.referenceBasis === 'expected_to_date';
   if (projection.intent === 'projection_categories') {
     return (
-      <ul className="finance-ai-projection-list">
-        {projection.categories.map((c) => (
-          <CategoryCard
-            key={c.label}
-            category={c}
-            basis={projection.comparison.referenceBasis}
-          />
-        ))}
-        <RemainingCard p={projection} />
-      </ul>
+      <>
+        <ul className="finance-ai-projection-list">
+          {projection.categories.map((c) => (
+            <CategoryCard
+              key={c.label}
+              category={c}
+              basis={projection.comparison.referenceBasis}
+            />
+          ))}
+          <RemainingCard p={projection} />
+        </ul>
+        {showNotice && (
+          <p className="finance-ai-notice" role="note">
+            {TO_DATE_NOTICE}
+          </p>
+        )}
+      </>
     );
   }
   if (projection.intent === 'projection_base') {
@@ -218,9 +255,16 @@ function SuccessCards({ projection }: { projection: ProjectionPayloadSuccessV1 }
     );
   }
   return (
-    <ul className="finance-ai-projection-list">
-      <MonthCard projection={projection} />
-    </ul>
+    <>
+      <ul className="finance-ai-projection-list">
+        <MonthCard projection={projection} />
+      </ul>
+      {showNotice && (
+        <p className="finance-ai-notice" role="note">
+          {TO_DATE_NOTICE}
+        </p>
+      )}
+    </>
   );
 }
 
