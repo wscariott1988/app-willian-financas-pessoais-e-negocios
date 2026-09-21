@@ -2632,7 +2632,7 @@ function projectionCurrentMonthText(p: ProjectionPayloadSuccessV1): string {
   const closing =
     c.closingProjectionCents === null
       ? ' Ainda é cedo para estimar o fechamento: ele passa a ser calculado a partir do 7º dia do mês.'
-      : ` Pelo ritmo atual, o fechamento estimado do mês é de ${brlCents(c.closingProjectionCents)}.`;
+      : ` Somando o ritmo do realizado aos lançamentos futuros já registrados, o fechamento estimado do mês é de ${brlCents(c.closingProjectionCents)}.`;
   return (
     `No mês atual, o realizado até hoje é de ${brlCents(c.realizedCents)}, contra um esperado ` +
     `proporcional de ${brlCents(c.expectedToDateCents)} (${directionLabel(c.deviation)}). ` +

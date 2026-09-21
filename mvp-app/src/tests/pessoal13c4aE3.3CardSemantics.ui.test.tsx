@@ -4,8 +4,8 @@
 // projeção renderizam a semântica por categoria que o servidor já calculou.
 // O navegador só formata (nunca recalcula média/desvio/fechamento).
 //
-//   1. compromisso fixo (Aluguel, monthly_commitment): "Valor lançado até
-//      hoje", média mensal completa "R$ 1.846,59" e "+R$ 81,21" — NUNCA o
+//   1. compromisso fixo (Aluguel, monthly_commitment): "Valor já lançado no
+//      mês", média mensal completa "R$ 1.846,59" e "+R$ 81,21" — NUNCA o
 //      proporcional "R$ 1.292,61", nunca "ritmo";
 //   2. gasto variável (Supermercado, variable_pace): "Referência até hoje
 //      (média proporcional)" "R$ 1.120,91" e "R$ 996,93" abaixo do ritmo;
@@ -31,7 +31,7 @@ const VARIABLE_PACE_NOTICE =
 const MONTHLY_COMMITMENT_NOTICE =
   'Esta categoria costuma ser paga em uma ou poucas datas. Por isso, a comparação usa a média mensal completa, e não uma distribuição diária.';
 const CLOSING_NOTICE =
-  'O fechamento usa o ritmo do realizado e pode oscilar quando contas mensais são pagas no início do mês.';
+  'O fechamento soma o ritmo do realizado aos lançamentos futuros já registrados e pode oscilar quando contas mensais são pagas no início do mês.';
 
 let originalActEnv: unknown;
 
@@ -154,7 +154,7 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
     render(<ProjectionCards projection={p} />);
 
     // Aluguel: rótulos de compromisso fixo + valores da média (nunca o proporcional).
-    expect(screen.getByText('Valor lançado até hoje')).toBeDefined();
+    expect(screen.getByText('Valor já lançado no mês')).toBeDefined();
     expect(screen.getAllByText('Média mensal histórica').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Diferença da média mensal até agora')).toBeDefined();
     expect(screen.getByText('acima da média mensal')).toBeDefined();
@@ -196,7 +196,7 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
       ],
     });
     render(<ProjectionCards projection={p} />);
-    expect(screen.getByText('Aportes realizados até hoje')).toBeDefined();
+    expect(screen.getByText('Aportes já lançados no mês')).toBeDefined();
     expect(screen.getByText('Média mensal histórica de aportes')).toBeDefined();
     expect(screen.getByText('Diferença da média de aportes')).toBeDefined();
     expect(screen.getByText('acima da média de aportes')).toBeDefined();
@@ -237,7 +237,7 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
     expect(screen.getAllByText('Média histórica').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Diferença')).toBeDefined();
     expect(screen.getByText('abaixo da referência')).toBeDefined();
-    expect(screen.queryByText('Valor lançado até hoje')).toBeNull();
+    expect(screen.queryByText('Valor já lançado no mês')).toBeNull();
     expect(screen.queryByText('Diferença da média mensal até agora')).toBeNull();
     expect(screen.queryByText(/ritmo/)).toBeNull();
     expect(screen.queryByText(/até hoje/)).toBeNull();

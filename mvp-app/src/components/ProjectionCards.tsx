@@ -243,13 +243,18 @@ function CategoryCard({
       </li>
     );
   }
+  // Mês atual: "já lançado" (realizado + futuros) para compromissos e aportes;
+  // variável mostra realizado, futuros e total já lançado separadamente.
+  const committed = category.committedCents ?? category.realizedCents;
+  const future = category.futureRegisteredCents ?? 0;
   if (category.mode === 'monthly_commitment') {
     return (
       <li>
         <article className="finance-ai-proj-card finance-ai-proj-category">
           <h3 className="finance-ai-card-title">{category.label}</h3>
           <dl className="finance-ai-card-dl">
-            <Row label="Valor lançado até hoje" value={brlCents(category.realizedCents)} />
+            <Row label="Valor já lançado no mês" value={brlCents(committed)} />
+            {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
             <Row label="Média mensal histórica" value={brlCents(category.referenceCents)} />
             <DirectionRow
               deviation={category.deviation}
@@ -274,7 +279,8 @@ function CategoryCard({
         <article className="finance-ai-proj-card finance-ai-proj-category">
           <h3 className="finance-ai-card-title">{category.label}</h3>
           <dl className="finance-ai-card-dl">
-            <Row label="Aportes realizados até hoje" value={brlCents(category.realizedCents)} />
+            <Row label="Aportes já lançados no mês" value={brlCents(committed)} />
+            {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
             <Row
               label="Média mensal histórica de aportes"
               value={brlCents(category.referenceCents)}
@@ -315,6 +321,8 @@ function CategoryCard({
             below={dir.below}
             equal={dir.equal}
           />
+          {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
+          {future > 0 && <Row label="Total já lançado no mês" value={brlCents(committed)} />}
           <Row label="Média mensal histórica" value={brlCents(category.monthlyMeanCents)} />
           <Row
             label="Cenário se a média se repetir por 12 meses"
@@ -352,7 +360,7 @@ const MONTHLY_COMMITMENT_NOTICE =
   'Esta categoria costuma ser paga em uma ou poucas datas. Por isso, a comparação usa a média mensal completa, e não uma distribuição diária.';
 
 const CLOSING_NOTICE =
-  'O fechamento usa o ritmo do realizado e pode oscilar quando contas mensais são pagas no início do mês.';
+  'O fechamento soma o ritmo do realizado aos lançamentos futuros já registrados e pode oscilar quando contas mensais são pagas no início do mês.';
 
 /** Notas por MODO de card presentes na resposta atual (deduplicadas). */
 function categoryNotes(p: ProjectionPayloadSuccessV1): string[] {

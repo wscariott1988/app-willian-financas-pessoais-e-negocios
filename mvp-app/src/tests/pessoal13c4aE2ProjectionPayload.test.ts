@@ -267,11 +267,15 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       deviation: 'above',
       referenceBasis: 'expected_to_date',
       mode: 'variable_pace',
+      futureRegisteredCents: 0,
+      committedCents: 100000,
     });
     expect(Object.keys(p.categories[0]).sort()).toEqual([
       'annualScenarioCents',
+      'committedCents',
       'deviation',
       'deviationCents',
+      'futureRegisteredCents',
       'label',
       'mode',
       'monthlyMeanCents',
@@ -385,8 +389,10 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
     for (const c of p.categories) {
       expect(Object.keys(c).sort()).toEqual([
         'annualScenarioCents',
+        'committedCents',
         'deviation',
         'deviationCents',
+        'futureRegisteredCents',
         'label',
         'mode',
         'monthlyMeanCents',
@@ -402,6 +408,8 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       expect(c.mode).toBe('variable_pace');
       expect(c.deviationCents).toBe(-53333);
       expect(c.deviation).toBe('below');
+      expect(c.futureRegisteredCents).toBe(0);
+      expect(c.committedCents).toBe(0);
     }
     expect(p.remaining).toEqual({
       categoriesCount: 2,
@@ -462,6 +470,8 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
           referenceCents: 0,
           deviationCents: 0,
           deviation: 'equal',
+          futureRegisteredCents: 0,
+          committedCents: 0,
         },
       ],
     };
@@ -731,6 +741,14 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     const missingCategoryRealized = clonePayload(fullPayload());
     delete ((missingCategoryRealized.categories as Raw[])[0] as Raw).realizedCents;
     expect(sanitizeProjectionPayloadV1(missingCategoryRealized)).toBeUndefined();
+
+    const missingCategoryFuture = clonePayload(fullPayload());
+    delete ((missingCategoryFuture.categories as Raw[])[0] as Raw).futureRegisteredCents;
+    expect(sanitizeProjectionPayloadV1(missingCategoryFuture)).toBeUndefined();
+
+    const missingCategoryCommitted = clonePayload(fullPayload());
+    delete ((missingCategoryCommitted.categories as Raw[])[0] as Raw).committedCents;
+    expect(sanitizeProjectionPayloadV1(missingCategoryCommitted)).toBeUndefined();
 
     const badWindowStart = clonePayload(fullPayload());
     (badWindowStart.coverage as Raw).windowStart = '2026/09';

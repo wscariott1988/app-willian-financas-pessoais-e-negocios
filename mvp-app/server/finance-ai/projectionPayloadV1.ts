@@ -205,6 +205,14 @@ export interface ProjectionPayloadCategoryV1 {
   referenceCents: number;
   deviationCents: number;
   deviation: ProjectionPayloadDeviation;
+  /**
+   * PESSOAL-13C4A-E3.5 — lançamentos futuros da categoria no mês atual e
+   * realizado + futuros. Presentes SOMENTE em categorias do mês atual
+   * (reference.kind 'current'); o sanitizador os exige no mês atual e REJEITA
+   * payloads de mês passado que os carreguem.
+   */
+  futureRegisteredCents?: number;
+  committedCents?: number;
 }
 
 export interface ProjectionPayloadRemainingV1 {
@@ -353,17 +361,29 @@ export function mapProjectionToPayloadV1(
       totalBaseCents: result.summary.totalBaseCents,
     },
     comparison,
-    categories: result.categories.slice(0, PROJECTION_CATEGORIES_MAX).map((c) => ({
-      label: c.label,
-      monthlyMeanCents: c.monthlyMeanCents,
-      annualScenarioCents: c.annualScenarioCents,
-      realizedCents: c.actualCents,
-      referenceBasis: c.referenceBasis,
-      mode: c.mode,
-      referenceCents: c.referenceCents,
-      deviationCents: c.deviationCents,
-      deviation: c.deviation,
-    })),
+    categories: result.categories.slice(0, PROJECTION_CATEGORIES_MAX).map((c) => {
+      const category = {
+        label: c.label,
+        monthlyMeanCents: c.monthlyMeanCents,
+        annualScenarioCents: c.annualScenarioCents,
+        realizedCents: c.actualCents,
+        referenceBasis: c.referenceBasis,
+        mode: c.mode,
+        referenceCents: c.referenceCents,
+        deviationCents: c.deviationCents,
+        deviation: c.deviation,
+      };
+      // PESSOAL-13C4A-E3.5: só o mês atual expõe futuros/comprometido por
+      // categoria (nunca no passado, onde não existem).
+      if (result.comparison.kind === 'current') {
+        return {
+          ...category,
+          futureRegisteredCents: c.futureRegisteredCents ?? 0,
+          committedCents: c.committedCents ?? c.actualCents,
+        };
+      }
+      return category;
+    }),
   };
   if (result.remainingCategories.remainingCategoriesCount > 0) {
     payload.remaining = {
@@ -577,6 +597,12 @@ function sanitizeCategories(
     const referenceCents = amountValue(raw.referenceCents);
     const deviationCents = deltaValue(raw.deviationCents);
     const deviation = enumValue(raw.deviation, PROJECTION_DEVIATIONS);
+    // PESSOAL-13C4A-E3.5: futuros/comprometido por categoria existem SOMENTE
+    // no mês atual (obrigatórios e numéricos); no passado são REJEITADOS.
+    const hasCurrentCategoryFields =
+      raw.futureRegisteredCents !== undefined || raw.committedCents !== undefined;
+    const futureRegisteredCents = amountValue(raw.futureRegisteredCents);
+    const committedCents = amountValue(raw.committedCents);
     if (
       !label ||
       monthlyMeanCents === undefined ||
@@ -589,6 +615,11 @@ function sanitizeCategories(
       !deviation
     ) {
       return undefined;
+    }
+    if (referenceKind === 'past' && hasCurrentCategoryFields) return undefined;
+    if (referenceKind === 'current') {
+      if (!hasCurrentCategoryFields) return undefined;
+      if (futureRegisteredCents === undefined || committedCents === undefined) return undefined;
     }
     // PESSOAL-13C4A-E3.3 — coerência cruzada modo ↔ referenceBasis ↔ kind:
     //   mês atual: variable_pace exige expected_to_date; monthly_commitment e
@@ -611,6 +642,12 @@ function sanitizeCategories(
       referenceCents,
       deviationCents,
       deviation,
+      ...(referenceKind === 'current'
+        ? {
+            futureRegisteredCents: futureRegisteredCents as number,
+            committedCents: committedCents as number,
+          }
+        : {}),
     });
   }
   return out;

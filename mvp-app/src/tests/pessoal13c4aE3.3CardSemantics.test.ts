@@ -219,6 +219,8 @@ describe('PESSOAL-13C4A-E3.3 — mapeador e sanitizador (mode/referenceBasis por
       deviation: 'above',
       referenceBasis: 'monthly_mean',
       mode: 'monthly_commitment',
+      futureRegisteredCents: 0,
+      committedCents: 192780,
     });
     expect(supermercado).toEqual({
       label: 'Supermercado',
@@ -230,6 +232,8 @@ describe('PESSOAL-13C4A-E3.3 — mapeador e sanitizador (mode/referenceBasis por
       deviation: 'below',
       referenceBasis: 'expected_to_date',
       mode: 'variable_pace',
+      futureRegisteredCents: 0,
+      committedCents: 12398,
     });
     expect(sanitizeProjectionPayloadV1(clonePayload(p))).toEqual(p);
   });

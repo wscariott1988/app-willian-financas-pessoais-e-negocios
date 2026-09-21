@@ -46,7 +46,9 @@
 //   annualScenarioCents    = monthlyMeanCents * 12
 //   expectedToDateCents    = round(monthlyMeanCents * elapsedDays / daysInMonth)
 //   closingProjectionCents = round(realizedToDateCents * daysInMonth / elapsedDays)
-//     — fechamento pelo ritmo SOMENTE a partir do 7º dia;
+//                           + futureCents, com mínimo = committedCents
+//     — fechamento pelo ritmo do realizado SOMADO aos lançamentos futuros já
+//     registrados no mês, SOMENTE a partir do 7º dia (PESSOAL-13C4A-E3.5);
 //   committedCents         = realizedToDateCents + futureRegisteredCents;
 //   shareBps               = round(categoryBaseCents * 10000 / totalBaseCents)
 //     (0 quando totalBaseCents = 0, para nunca dividir por zero).
@@ -227,6 +229,14 @@ export interface ProjectionCategory {
   referenceCents: number;
   deviationCents: number;
   deviation: ProjectionDeviation;
+  /**
+   * PESSOAL-13C4A-E3.5 — lançamentos futuros da categoria no mês atual e
+   * realizado + futuros (portanto os campos existem SOMENTE quando o mês de
+   * referência é o próprio mês atual; no mês passado ficam ausentes). Não há
+   * fechamento POR CATEGORIA: o fechamento é geral (comparison).
+   */
+  futureRegisteredCents?: number;
+  committedCents?: number;
 }
 
 export interface RemainingProjectionCategories {
@@ -523,7 +533,12 @@ function referenceMonthTotals(
   periods: ReadonlyArray<NormalizedPeriod>,
   asCurrent: boolean,
   todayISO: string,
-): { realizedCents: number; futureCents: number; realizedCategories: Map<string, CategoryBucket> } {
+): {
+  realizedCents: number;
+  futureCents: number;
+  realizedCategories: Map<string, CategoryBucket>;
+  futureCategories: Map<string, CategoryBucket>;
+} {
   const start = toLocalISODate(reference.year, reference.month, 1);
   const last = daysInMonth(reference.year, reference.month);
   const end = toLocalISODate(reference.year, reference.month, last);
@@ -543,7 +558,10 @@ function referenceMonthTotals(
     );
   }
 
+  // PESSOAL-13C4A-E3.5: além do total, os futuros são agregados POR CATEGORIA
+  // no mês atual (para o card "Valor já lançado no mês" / "Total já lançado").
   let futureCents = 0;
+  const futureCategories = new Map<string, CategoryBucket>();
   if (asCurrent) {
     for (const t of input.transactions) {
       if (t.deletedAt != null) continue;
@@ -551,12 +569,22 @@ function referenceMonthTotals(
       if (!isValidLocalDate(t.occurredOn)) continue;
       if (t.occurredOn <= todayISO || t.occurredOn > end) continue;
       if (!accountPeriodCoversDay(t.accountId, periods, t.occurredOn)) continue;
-      if (!lensMatches(lens, t.categoryId, bucketLabel(t.categoryId, t.categoryLabel))) continue;
-      futureCents += expenseAmount(t);
+      const label = bucketLabel(t.categoryId, t.categoryLabel);
+      if (!lensMatches(lens, t.categoryId, label)) continue;
+      const amount = expenseAmount(t);
+      futureCents += amount;
+      const key = categoryKey(t.categoryId);
+      const cur = futureCategories.get(key) ?? {
+        categoryId: t.categoryId,
+        label,
+        cents: 0,
+      };
+      cur.cents += amount;
+      futureCategories.set(key, cur);
     }
   }
 
-  return { realizedCents, futureCents, realizedCategories };
+  return { realizedCents, futureCents, realizedCategories, futureCategories };
 }
 
 // ============ Categorias ============
@@ -577,6 +605,7 @@ function buildCategories(
   coveredMonths: number,
   comparison: ProjectionComparison,
   realizedCategories: Map<string, CategoryBucket>,
+  futureCategories: Map<string, CategoryBucket>,
   elapsedDays: number,
   currentMonth: YearMonth,
 ): { categories: ProjectionCategory[]; remainingCategories: RemainingProjectionCategories } {
@@ -587,6 +616,12 @@ function buildCategories(
   for (const bucket of base.categories.values()) {
     const mean = Math.round(bucket.cents / coveredMonths);
     const actual = realizedCategories.get(categoryKey(bucket.categoryId))?.cents ?? 0;
+    // PESSOAL-13C4A-E3.5: futuros registrados e "já lançado" (realizado +
+    // futuros) por categoria, apenas no mês atual.
+    const futureCents = isCurrent
+      ? futureCategories.get(categoryKey(bucket.categoryId))?.cents ?? 0
+      : 0;
+    const committed = actual + futureCents;
     // PESSOAL-13C4A-E3.3: a base de comparação é POR CATEGORIA, derivada do
     // modo. Somente rodadas variáveis do mês atual usam a referência
     // proporcional até hoje; compromissos fixos, dívidas e investimentos usam
@@ -596,6 +631,10 @@ function buildCategories(
     const reference = proportional
       ? Math.round((mean * elapsedDays) / currentDays)
       : mean;
+    // PESSOAL-13C4A-E3.5: variáveis comparam o REALIZADO até hoje; compromissos
+    // fixos e aportes comparam o JÁ LANÇADO (realizado + futuros) contra a
+    // média mensal completa.
+    const comparable = proportional ? actual : committed;
     rows.push({
       bucket,
       row: {
@@ -607,8 +646,14 @@ function buildCategories(
         referenceBasis: proportional ? 'expected_to_date' : 'monthly_mean',
         mode,
         referenceCents: reference,
-        deviationCents: actual - reference,
-        deviation: deviationLabel(actual - reference),
+        deviationCents: comparable - reference,
+        deviation: deviationLabel(comparable - reference),
+        ...(isCurrent
+          ? {
+              futureRegisteredCents: futureCents,
+              committedCents: committed,
+            }
+          : {}),
       },
     });
   }
@@ -664,7 +709,7 @@ export function buildProjection(input: ProjectionEngineInput): ProjectionEngineR
     months: window,
   };
 
-  const { realizedCents, futureCents, realizedCategories } = referenceMonthTotals(
+  const { realizedCents, futureCents, realizedCategories, futureCategories } = referenceMonthTotals(
     input,
     reference,
     periods,
@@ -703,11 +748,16 @@ export function buildProjection(input: ProjectionEngineInput): ProjectionEngineR
     const elapsedDays = today.day;
     const currentDays = daysInMonth(currentMonth.year, currentMonth.month);
     const expectedToDateCents = Math.round((monthlyMeanCents * elapsedDays) / currentDays);
+    const committedCents = realizedCents + futureCents;
+    // PESSOAL-13C4A-E3.5: fechamento = ritmo do realizado + lançamentos futuros
+    // já registrados no mês, com mínimo = comprometido (nunca abaixo dele).
     const closingProjectionCents =
       elapsedDays >= PACE_CLOSING_START_DAY
-        ? Math.round((realizedCents * currentDays) / elapsedDays)
+        ? Math.max(
+            Math.round((realizedCents * currentDays) / elapsedDays) + futureCents,
+            committedCents,
+          )
         : null;
-    const committedCents = realizedCents + futureCents;
     const deviationCents = realizedCents - expectedToDateCents;
     comparison = {
       kind: 'current',
@@ -738,6 +788,7 @@ export function buildProjection(input: ProjectionEngineInput): ProjectionEngineR
     base.coveredMonths,
     comparison,
     realizedCategories,
+    futureCategories,
     asCurrent ? today.day : 1,
     currentMonth,
   );
