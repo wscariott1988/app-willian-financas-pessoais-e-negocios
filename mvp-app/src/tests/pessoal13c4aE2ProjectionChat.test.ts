@@ -443,6 +443,7 @@ const PROJECTION_ALLOWED_KEYS = new Set([
   'closingProjectionCents',
   'label',
   'categoriesCount',
+  'mode',
   'code',
   'minimumCoveredMonths',
 ]);

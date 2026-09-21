@@ -27,6 +27,11 @@
 //   - categorias (≤ 8): rótulo, média dos meses cobertos e os comparativos que
 //     o motor JÁ fornece por categoria — realizado no mês atual/selecionado,
 //     referência, diferença e desvio (mapeados direto, NUNCA recalculados);
+//     cada categoria carrega AINDA o modo de card fechado (variable_pace |
+//     monthly_commitment | investment_allocation) e a base de comparação usada
+//     (PESSOAL-13C4A-E3.3): rodadas variáveis do mês atual → expected_to_date
+//     (referência proporcional), compromissos fixos/investimentos do mês atual
+//     e qualquer categoria de mês passado → monthly_mean (média completa);
 //   - agregado `remaining` quando existir (count > 0): apenas count/média/anual
 //     — o motor NÃO fornece comparativos do remaining, então não são inventados.
 //   - insufficient: somente contexto seguro, cobertura, motivo permitido e
@@ -35,11 +40,16 @@
 //
 // Sanitizador:
 //   - entrada tratada como unknown; allowlists fechadas (version, intent,
-//     quality, reference kind, reason code, deviation);
+//     quality, reference kind, reason code, deviation, MODO de categoria);
 //   - valida coerência cruzada da comparação: reference.kind 'current' exige
 //     união 'expected_to_date'; 'past' exige 'monthly_mean'; combinações
 //     trocadas ou campos exclusivos do mês atual injetados num payload passado
 //     → undefined;
+//   - valida coerência cruzada POR CATEGORIA (PESSOAL-13C4A-E3.3): no mês
+//     atual, variable_pace exige referenceBasis 'expected_to_date' e
+//     monthly_commitment/investment_allocation exigem 'monthly_mean'; no mês
+//     passado toda categoria exige 'monthly_mean' — qualquer combinação fora
+//     disso → undefined;
 //   - apenas inteiros seguros e finitos (preserva 0 legitimamente);
 //   - closingProjectionCents: null preservado exatamente; inteiro seguro
 //     (inclusive 0) também preservado;
@@ -94,6 +104,11 @@ export const PROJECTION_COMPARISON_BASIS: ReadonlyArray<ProjectionPayloadCompari
   'expected_to_date',
   'monthly_mean',
 ];
+export const PROJECTION_CATEGORY_MODES: ReadonlyArray<ProjectionPayloadCategoryMode> = [
+  'variable_pace',
+  'monthly_commitment',
+  'investment_allocation',
+];
 export const PROJECTION_REASON_CODES: ReadonlyArray<ProjectionPayloadReasonCode> = [
   'covered_months_below_minimum',
 ];
@@ -113,6 +128,17 @@ export type ProjectionPayloadReferenceKind = 'current' | 'past';
 export type ProjectionPayloadDeviation = 'above' | 'below' | 'equal';
 export type ProjectionPayloadComparisonBasis = 'expected_to_date' | 'monthly_mean';
 export type ProjectionPayloadReasonCode = 'covered_months_below_minimum';
+
+/**
+ * Modo de card de uma categoria (PESSOAL-13C4A-E3.3), lista fechada espelhando
+ * o motor. variable_pace = ritmo proporcional até hoje (mês atual);
+ * monthly_commitment = compromissos fixos/dívidas com média mensal completa;
+ * investment_allocation = aportes/investimentos com média mensal de aportes.
+ */
+export type ProjectionPayloadCategoryMode =
+  | 'variable_pace'
+  | 'monthly_commitment'
+  | 'investment_allocation';
 
 export interface ProjectionPayloadReferenceV1 {
   month: string;
@@ -169,7 +195,13 @@ export interface ProjectionPayloadCategoryV1 {
   annualScenarioCents: number;
   /** Realizado no mês atual (até hoje) ou no mês selecionado — mapeado do motor. */
   realizedCents: number;
-  /** Base da comparação da categoria (mesmo basis da comparação geral). */
+  /** Base da comparação DA CATEGORIA (PESSOAL-13C4A-E3.3): proporcional até
+   * hoje para rodadas variáveis do mês atual; média mensal completa para
+   * compromissos fixos/investimentos do mês atual e para qualquer mês passado. */
+  referenceBasis: ProjectionPayloadComparisonBasis;
+  /** Modo de card da categoria (lista fechada). */
+  mode: ProjectionPayloadCategoryMode;
+  /** Valores comparativos mapeados direto do motor. */
   referenceCents: number;
   deviationCents: number;
   deviation: ProjectionPayloadDeviation;
@@ -326,6 +358,8 @@ export function mapProjectionToPayloadV1(
       monthlyMeanCents: c.monthlyMeanCents,
       annualScenarioCents: c.annualScenarioCents,
       realizedCents: c.actualCents,
+      referenceBasis: c.referenceBasis,
+      mode: c.mode,
       referenceCents: c.referenceCents,
       deviationCents: c.deviationCents,
       deviation: c.deviation,
@@ -524,7 +558,10 @@ function sanitizeComparison(
   };
 }
 
-function sanitizeCategories(rawInput: unknown): ProjectionPayloadCategoryV1[] | undefined {
+function sanitizeCategories(
+  rawInput: unknown,
+  referenceKind: ProjectionPayloadReferenceKind,
+): ProjectionPayloadCategoryV1[] | undefined {
   if (!Array.isArray(rawInput)) return undefined;
   const out: ProjectionPayloadCategoryV1[] = [];
   for (const item of rawInput) {
@@ -535,6 +572,8 @@ function sanitizeCategories(rawInput: unknown): ProjectionPayloadCategoryV1[] | 
     const monthlyMeanCents = amountValue(raw.monthlyMeanCents);
     const annualScenarioCents = amountValue(raw.annualScenarioCents);
     const realizedCents = amountValue(raw.realizedCents);
+    const referenceBasis = enumValue(raw.referenceBasis, PROJECTION_COMPARISON_BASIS);
+    const mode = enumValue(raw.mode, PROJECTION_CATEGORY_MODES);
     const referenceCents = amountValue(raw.referenceCents);
     const deviationCents = deltaValue(raw.deviationCents);
     const deviation = enumValue(raw.deviation, PROJECTION_DEVIATIONS);
@@ -543,10 +582,23 @@ function sanitizeCategories(rawInput: unknown): ProjectionPayloadCategoryV1[] | 
       monthlyMeanCents === undefined ||
       annualScenarioCents === undefined ||
       realizedCents === undefined ||
+      !referenceBasis ||
+      !mode ||
       referenceCents === undefined ||
       deviationCents === undefined ||
       !deviation
     ) {
+      return undefined;
+    }
+    // PESSOAL-13C4A-E3.3 — coerência cruzada modo ↔ referenceBasis ↔ kind:
+    //   mês atual: variable_pace exige expected_to_date; monthly_commitment e
+    //   investment_allocation exigem monthly_mean;
+    //   mês passado: toda categoria exige monthly_mean.
+    if (referenceKind === 'past') {
+      if (referenceBasis !== 'monthly_mean') return undefined;
+    } else if (mode === 'variable_pace') {
+      if (referenceBasis !== 'expected_to_date') return undefined;
+    } else if (referenceBasis !== 'monthly_mean') {
       return undefined;
     }
     out.push({
@@ -554,6 +606,8 @@ function sanitizeCategories(rawInput: unknown): ProjectionPayloadCategoryV1[] | 
       monthlyMeanCents,
       annualScenarioCents,
       realizedCents,
+      referenceBasis,
+      mode,
       referenceCents,
       deviationCents,
       deviation,
@@ -646,7 +700,7 @@ export function sanitizeProjectionPayloadV1(input: unknown): ProjectionPayloadV1
     if (!quality) return undefined;
     const summary = sanitizeSummary(raw.summary);
     const comparison = sanitizeComparison(raw.comparison, reference.kind);
-    const categories = sanitizeCategories(raw.categories);
+    const categories = sanitizeCategories(raw.categories, reference.kind);
     if (!summary || !comparison || categories === undefined) return undefined;
     const payload: ProjectionPayloadSuccessV1 = {
       version: PROJECTION_PAYLOAD_VERSION,

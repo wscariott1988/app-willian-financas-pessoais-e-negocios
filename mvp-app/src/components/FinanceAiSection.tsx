@@ -80,7 +80,7 @@ function formatPeriod(p?: { start: string; end: string } | null): string {
 
 function engineLabel(m: UiMessage): string | null {
   if (m.engine === 'deterministic') {
-    return 'Resposta instantânea calculada a partir dos seus dados (IA não foi acionada).';
+    return 'Resposta calculada diretamente a partir dos seus dados (IA não foi acionada).';
   }
   if (m.engine) {
     return 'Resposta gerada pela inteligência artificial a partir dos seus dados.';

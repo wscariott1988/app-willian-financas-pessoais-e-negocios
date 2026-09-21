@@ -265,14 +265,18 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       referenceCents: 53333,
       deviationCents: 46667,
       deviation: 'above',
+      referenceBasis: 'expected_to_date',
+      mode: 'variable_pace',
     });
     expect(Object.keys(p.categories[0]).sort()).toEqual([
       'annualScenarioCents',
       'deviation',
       'deviationCents',
       'label',
+      'mode',
       'monthlyMeanCents',
       'realizedCents',
+      'referenceBasis',
       'referenceCents',
     ]);
     expect('remaining' in p).toBe(false);
@@ -384,14 +388,18 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
         'deviation',
         'deviationCents',
         'label',
+        'mode',
         'monthlyMeanCents',
         'realizedCents',
+        'referenceBasis',
         'referenceCents',
       ]);
       expect(c.monthlyMeanCents).toBe(100000);
       expect(c.annualScenarioCents).toBe(1200000);
       expect(c.realizedCents).toBe(0);
       expect(c.referenceCents).toBe(53333);
+      expect(c.referenceBasis).toBe('expected_to_date');
+      expect(c.mode).toBe('variable_pace');
       expect(c.deviationCents).toBe(-53333);
       expect(c.deviation).toBe('below');
     }
@@ -449,6 +457,8 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
           monthlyMeanCents: 0,
           annualScenarioCents: 0,
           realizedCents: 0,
+          referenceBasis: 'expected_to_date',
+          mode: 'variable_pace',
           referenceCents: 0,
           deviationCents: 0,
           deviation: 'equal',

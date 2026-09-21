@@ -498,6 +498,13 @@ describe('PESSOAL-13C4A-E3.1A — Conversa A (handler real): auditorias 1, 2, 3 
     expect(lensCategory).toBeDefined();
     expect((lensCategory as { realizedCents: number }).realizedCents).toBeGreaterThanOrEqual(50000);
     expect((p3.categories as Array<{ label: string }>).some((cat) => cat.label.includes('Mercado Livre'))).toBe(false);
+    // PESSOAL-13C4A-E3.3: o card da lente carrega a semântica por categoria —
+    // Supermercado (variável) no mês atual usa a referência proporcional.
+    const superMode = (p3.categories as Array<{ label: string; mode: string; referenceBasis: string }>).find(
+      (cat) => cat.label.includes('Supermercado'),
+    ) as { mode: string; referenceBasis: string };
+    expect(superMode.mode).toBe('variable_pace');
+    expect(superMode.referenceBasis).toBe('expected_to_date');
     const ctx3 = c.state.chat_conversations[0].context as { projection?: { lensPath?: string; lensLabel?: string } } | null;
     expect(ctx3?.projection?.lensPath).toBe('Alimentação > Supermercado');
     expect(ctx3?.projection?.lensLabel).toBe('Supermercado');
@@ -516,6 +523,11 @@ describe('PESSOAL-13C4A-E3.1A — Conversa A (handler real): auditorias 1, 2, 3 
     expect(p4.lens).toEqual({ label: 'Supermercado' });
     expect((p4.comparison as { referenceBasis: string }).referenceBasis).toBe('expected_to_date');
     expect((p4.comparison as { closingProjectionCents: number | null }).closingProjectionCents).not.toBeNull();
+    const superCurrent = (p4.categories as Array<{ label: string; mode: string; referenceBasis: string }>).find(
+      (cat) => cat.label.includes('Supermercado'),
+    ) as { mode: string; referenceBasis: string };
+    expect(superCurrent.mode).toBe('variable_pace');
+    expect(superCurrent.referenceBasis).toBe('expected_to_date');
     expect(p4).not.toHaveProperty('expectedToDateCents');
     expect(sanitizeProjectionPayloadV1(p4)).toEqual(p4);
 
@@ -533,6 +545,13 @@ describe('PESSOAL-13C4A-E3.1A — Conversa A (handler real): auditorias 1, 2, 3 
     expect(p5.reference).toEqual({ month: '2026-08', kind: 'past' });
     expect(p5.lens).toEqual({ label: 'Supermercado' });
     expect((p5.comparison as { referenceBasis: string }).referenceBasis).toBe('monthly_mean');
+    // PESSOAL-13C4A-E3.3: mês passado preserva o MODO do rótulo, mas usa
+    // sempre a média mensal completa — nenhuma referência proporcional.
+    const superPast = (p5.categories as Array<{ label: string; mode: string; referenceBasis: string }>).find(
+      (cat) => cat.label.includes('Supermercado'),
+    ) as { mode: string; referenceBasis: string };
+    expect(superPast.mode).toBe('variable_pace');
+    expect(superPast.referenceBasis).toBe('monthly_mean');
     assertNoCurrentOnlyFields(p5);
     const ctx5 = c.state.chat_conversations[0].context as { projection?: { referenceMonth?: string } } | null;
     expect(ctx5?.projection?.referenceMonth).toBe('2026-08');
@@ -693,6 +712,8 @@ describe('PESSOAL-13C4A-E3.1A — idempotência: fresh === cache === listMessage
           monthlyMeanCents: 104166,
           annualScenarioCents: 1249992,
           realizedCents: 150000,
+          referenceBasis: 'monthly_mean',
+          mode: 'variable_pace',
           referenceCents: 104166,
           deviationCents: 45834,
           deviation: 'above',
@@ -740,6 +761,8 @@ describe('PESSOAL-13C4A-E3.1A — idempotência: fresh === cache === listMessage
           monthlyMeanCents: 104166,
           annualScenarioCents: 1249992,
           realizedCents: 50000,
+          referenceBasis: 'expected_to_date',
+          mode: 'variable_pace',
           referenceCents: 19355,
           deviationCents: 30645,
           deviation: 'above',
@@ -748,8 +771,13 @@ describe('PESSOAL-13C4A-E3.1A — idempotência: fresh === cache === listMessage
       lens: { label: 'Supermercado' },
     };
     render(<ProjectionCards projection={current} />);
-    expect(screen.getByText(/A referência até hoje distribui a média histórica/)).toBeDefined();
+    expect(
+      screen.getByText(
+        'A referência até hoje compara o realizado com a parcela da média histórica correspondente aos dias já transcorridos.',
+      ),
+    ).toBeDefined();
     expect(screen.getByText('Diferença no ritmo até hoje')).toBeDefined();
     expect(screen.getByText('Realizado até hoje')).toBeDefined();
+    expect(screen.getByText('Referência até hoje (média proporcional)')).toBeDefined();
   });
 });

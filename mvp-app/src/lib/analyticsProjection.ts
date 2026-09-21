@@ -12,7 +12,17 @@
 //   - status NÃO filtra totais (mesmo contrato do resumo/analytics).
 //   - categoria null cai no bucket "Sem categoria".
 //   - compromissos fixos, dívidas, saúde e investimentos entram na projeção
-//     (projeção NÃO é recomendação de economia; não reusa classifySavingsCategory).
+//     (projeção NÃO é recomendação de economia).
+//   - o MODO de card de cada categoria reusa a classificação conservadora
+//     classifySavingsCategory (PESSOAL-13C4A-E3.3): compromissos fixos e
+//     dívidas viram monthly_commitment; alocação patrimonial vira
+//     investment_allocation; todo o resto vira variable_pace. O modo NÃO
+//     altera os totais — apenas escolhe a base de comparação POR CATEGORIA:
+//       variable_pace       mês atual → referência proporcional até hoje;
+//       monthly_commitment  mês atual → média mensal completa (contas pagas
+//                            em uma ou poucas datas não se distribuem por dia);
+//       investment_allocation mês atual → média mensal de aportes;
+//       mês passado         qualquer modo → média mensal completa.
 //   - uma transação só participa quando o período da própria accountId cobre a
 //     data de ocorrência (a validade nunca é "da conta mais antiga").
 //
@@ -44,6 +54,7 @@
 // Lançamentos futuros (occurredOn > todayISO) NUNCA se misturam ao realizado.
 
 import { addMonths, daysInMonth, toLocalISODate } from './period.js';
+import { classifySavingsCategory } from './analyticsTrends.js';
 
 // ============ Constantes da política ============
 
@@ -170,12 +181,49 @@ export interface ProjectionComparisonPast {
 
 export type ProjectionComparison = ProjectionComparisonCurrent | ProjectionComparisonPast;
 
+/**
+ * MODO DE CARD de uma categoria de projeção (PESSOAL-13C4A-E3.3). Deriva da
+ * classificação conservadora de economia (classifySavingsCategory), mas é
+ * definido aqui como lista FECHADA própria do motor — o modo nunca altera
+ * totais, apenas a base de comparação exibida por categoria.
+ */
+export type ProjectionCategoryMode =
+  | 'variable_pace' // gastos variáveis/sem contrato: ritmo proporcional até hoje
+  | 'monthly_commitment' // compromissos fixos e dívidas: média mensal completa
+  | 'investment_allocation'; // aportes/investimentos: média mensal de aportes
+
+/** Base de comparação POR CATEGORIA (independente da comparação geral). */
+export type ProjectionCategoryBasis = 'expected_to_date' | 'monthly_mean';
+
+/**
+ * Modo de card de uma categoria a partir do rótulo canônico. Reaproveita
+ * classifySavingsCategory (NUNCA duplica a lista de termos): fixed_contract e
+ * debt_commitment → monthly_commitment; asset_allocation →
+ * investment_allocation; todo o resto (variável, saúde sem contrato, etc.) →
+ * variable_pace.
+ */
+export function projectionCategoryMode(label: string): ProjectionCategoryMode {
+  const c = classifySavingsCategory(label);
+  if (c === 'fixed_contract' || c === 'debt_commitment') return 'monthly_commitment';
+  if (c === 'asset_allocation') return 'investment_allocation';
+  return 'variable_pace';
+}
+
 export interface ProjectionCategory {
   label: string;
   monthlyMeanCents: number;
   annualScenarioCents: number;
   shareBps: number;
   actualCents: number;
+  /**
+   * Base de comparação DA CATEGORIA (PESSOAL-13C4A-E3.3): 'expected_to_date'
+   * somente para rodadas variáveis do mês atual (referência proporcional);
+   * 'monthly_mean' para mês passado e para compromissos fixos/investimentos no
+   * mês atual (referência = média mensal completa).
+   */
+  referenceBasis: ProjectionCategoryBasis;
+  /** Modo de card da categoria (lista fechada acima). */
+  mode: ProjectionCategoryMode;
   referenceCents: number;
   deviationCents: number;
   deviation: ProjectionDeviation;
@@ -539,7 +587,13 @@ function buildCategories(
   for (const bucket of base.categories.values()) {
     const mean = Math.round(bucket.cents / coveredMonths);
     const actual = realizedCategories.get(categoryKey(bucket.categoryId))?.cents ?? 0;
-    const reference = isCurrent
+    // PESSOAL-13C4A-E3.3: a base de comparação é POR CATEGORIA, derivada do
+    // modo. Somente rodadas variáveis do mês atual usam a referência
+    // proporcional até hoje; compromissos fixos, dívidas e investimentos usam
+    // a média mensal completa; mês passado sempre usa a média mensal completa.
+    const mode = projectionCategoryMode(bucket.label);
+    const proportional = isCurrent && mode === 'variable_pace';
+    const reference = proportional
       ? Math.round((mean * elapsedDays) / currentDays)
       : mean;
     rows.push({
@@ -550,6 +604,8 @@ function buildCategories(
         annualScenarioCents: mean * 12,
         shareBps: shareBps(bucket.cents, base.totalBaseCents),
         actualCents: actual,
+        referenceBasis: proportional ? 'expected_to_date' : 'monthly_mean',
+        mode,
         referenceCents: reference,
         deviationCents: actual - reference,
         deviation: deviationLabel(actual - reference),

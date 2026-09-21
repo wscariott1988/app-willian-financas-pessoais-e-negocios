@@ -132,6 +132,8 @@ function cat(label: string, over: Partial<ProjectionPayloadCategoryV1> = {}): Pr
     monthlyMeanCents: 10000,
     annualScenarioCents: 120000,
     realizedCents: 9000,
+    referenceBasis: 'expected_to_date',
+    mode: 'variable_pace',
     referenceCents: 10000,
     deviationCents: -1000,
     deviation: 'below',
