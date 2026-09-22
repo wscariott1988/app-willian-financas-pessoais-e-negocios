@@ -14,8 +14,6 @@ import {
   type UiMessage,
   type UiTrendCard,
 } from './chatState';
-// Type-only (apagado no build): fonte única do contrato de projeção.
-import type { ProjectionPayloadV1 } from '../../server/finance-ai/projectionPayloadV1';
 
 interface RawChatRow {
   id: string;
@@ -33,7 +31,6 @@ interface RawMessageRow {
     evidence?: Array<{ label: string; value: string }>;
     cards?: UiTrendCard[];
     notice?: string;
-    projection?: ProjectionPayloadV1;
   } | null;
   engine: string | null;
   period_analyzed: { start: string; end: string } | null;
@@ -84,9 +81,6 @@ function toUiMessage(row: RawMessageRow): UiMessage {
     evidence: row.payload?.evidence,
     cards: row.payload?.cards,
     notice: row.payload?.notice,
-    // PESSOAL-13C4A-E2: projection lido do payload persistido (já sanitizado no
-    // servidor) — sem reinterpretação, para listMessages == fresh == cache.
-    projection: row.payload?.projection,
     error: status === 'failed' ? (row.error ?? 'Não foi possível responder agora.') : null,
   };
 }

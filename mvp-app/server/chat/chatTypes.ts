@@ -7,7 +7,6 @@
 // identidade vem exclusivamente do JWT do usuário em cada requisição.
 
 import type { TrendCard } from '../finance-ai/types.js';
-import type { ProjectionPayloadV1 } from '../finance-ai/projectionPayloadV1.js';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -56,39 +55,6 @@ export interface ChatAnalysisContext {
   categoryPath?: string;
 }
 
-// ── Contexto de projeção persistente (PESSOAL-13C4A-E3) ─────────
-
-export type ChatProjectionIntent =
-  | 'projection_base'
-  | 'projection_current_month'
-  | 'projection_month_comparison'
-  | 'projection_categories';
-
-export type ChatProjectionLensKind = 'category' | 'uncategorized';
-
-/**
- * Contexto de projeção persistido na conversa para follow-ups elípticos
- * ("E em maio?", "E só supermercado?", "E a comparação?", "E sem filtro?").
- * Regras PESSOAL-13C4A-E3:
- *   - Pode persistir: intent, mês de referência (YYYY-MM) e a lente (path
- *     canônico internamente + rótulo de exibição);
- *   - JAMAIS persiste valores monetários, agregados, payloads nem UUIDs (o
- *     follow-up SEMPRE re-consulta os dados e re-deriva o payload);
- *   - ausente = turno sem projeção (retrocompatível com contextos legados).
- */
-export interface ChatProjectionContext {
-  version: 1;
-  intent: ChatProjectionIntent;
-  /** Mês de referência efetivamente aplicado na última projeção (YYYY-MM). */
-  referenceMonth: string;
-  /** Tipo de lente ativa (ausente = lente geral/nenhuma). */
-  lensKind?: ChatProjectionLensKind;
-  /** Path canônico do segmento casado (matchTerm de resolveCategory), quando category. */
-  lensPath?: string;
-  /** Rótulo de exibição da lente ("Supermercado" | "Sem categoria"); null quando sem lente. */
-  lensLabel?: string | null;
-}
-
 /**
  * Contexto de continuidade persistido na conversa (coluna context jsonb) e
  * usado como fator de UX para resolver follow-ups ("E em maio?"). NUNCA é
@@ -109,12 +75,6 @@ export interface ChatContextState {
    * legados não o contêm (retrocompatível).
    */
   analysis?: ChatAnalysisContext | null;
-  /**
-   * Contexto de projeção persistente (PESSOAL-13C4A-E3). Presente somente após
-   * turno de projeção real; turnos não-projeção o limpam e contextos legados
-   * não o contêm (retrocompatível).
-   */
-  projection?: ChatProjectionContext | null;
 }
 
 /** Payload SANITIZADO da resposta assistant (reconstrói os cards no UI). */
@@ -131,14 +91,6 @@ export interface ChatMessagePayload {
    * vazios"; ausente significa "turno sem cards" (retrocompatível).
    */
   cards?: TrendCard[];
-  /**
-   * Payload de projeção versionado já sanitizado (PESSOAL-13C4A-E2): presente
-   * somente em turnos de projeção reais (full/preliminary/insufficient),
-   * jamais em clarification ou falha. Ausente = turno sem projeção
-   * (retrocompatível). A leitura (cache/listMessages) devolve EXATAMENTE a
-   * forma sanitizada gravada aqui.
-   */
-  projection?: ProjectionPayloadV1;
 }
 
 export interface ChatConversationRow {

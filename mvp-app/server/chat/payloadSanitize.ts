@@ -21,7 +21,6 @@
 
 import type { ChatMessagePayload } from './chatTypes.js';
 import type { TrendCard, TrendCardKind, TrendCardRow } from '../finance-ai/types.js';
-import { sanitizeProjectionPayloadV1 } from '../finance-ai/projectionPayloadV1.js';
 
 export const PAYLOAD_CARDS_MAX = 3;
 export const PAYLOAD_CARD_ROWS_MAX = 7;
@@ -183,14 +182,6 @@ export function sanitizeChatPayload(input: unknown): ChatMessagePayload {
     } else {
       out.cards = [];
     }
-  }
-  // PESSOAL-13C4A-E2: projeção atravessa a fronteira SOMENTE na forma versionada
-  // válida (sanitizador idempotente do contrato). Payload inválido → omitido
-  // (nunca objeto parcial); ausente → campo ausente (turno sem projeção). IDs e
-  // propriedades desconhecidas não sobrevivem ao sanitizador do contrato.
-  if (raw.projection !== undefined) {
-    const projection = sanitizeProjectionPayloadV1(raw.projection);
-    if (projection !== undefined) out.projection = projection;
   }
   return out;
 }

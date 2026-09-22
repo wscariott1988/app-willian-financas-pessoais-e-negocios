@@ -311,8 +311,6 @@ export interface SanitizedFailureEvent {
   providerCode?: AskProviderCode;
   retryable: boolean;
   elapsedMs: number;
-  /** Intent determinístico preservado quando a falha veio de uma rota determinística. */
-  intent?: string;
 }
 
 export function newRequestId(): string {
@@ -337,7 +335,6 @@ export function buildFailureEvent(opts: {
   providerCode?: AskProviderCode;
   retryable: boolean;
   elapsedMs: number;
-  intent?: string;
 }): SanitizedFailureEvent {
   const event: SanitizedFailureEvent = {
     event: 'ask_failure',
@@ -351,7 +348,6 @@ export function buildFailureEvent(opts: {
   };
   if (opts.providerStatus !== undefined) event.providerStatus = opts.providerStatus;
   if (opts.providerCode !== undefined) event.providerCode = opts.providerCode;
-  if (opts.intent !== undefined) event.intent = opts.intent;
   return event;
 }
 
@@ -372,14 +368,12 @@ export function getSanitizedEventSink(): SanitizedEventSink | null {
 }
 
 export function emitSanitizedFailureEvent(event: SanitizedFailureEvent): void {
-  // PESSOAL-13C4A (Fase 6): telemetria NUNCA pode derrubar a response — o
-  // sink (inclusive um que lance exceção) também fica sob guarda.
+  if (eventSink) {
+    eventSink(event);
+    return;
+  }
+  const line = `[finance-ask] ${JSON.stringify(event)}`;
   try {
-    if (eventSink) {
-      eventSink(event);
-      return;
-    }
-    const line = `[finance-ask] ${JSON.stringify(event)}`;
     // eslint-disable-next-line no-console
     console.error(line);
   } catch {
@@ -398,7 +392,6 @@ export const OBSERVABILITY_FIELDS = [
   'providerCode',
   'retryable',
   'elapsedMs',
-  'intent',
 ] as const;
 
 // PESSOAL-13C3B-E4: nome canônico do conjunto FECHADO do evento de FALHA
@@ -411,26 +404,6 @@ export const OBSERVABILITY_FAILURE_FIELDS = OBSERVABILITY_FIELDS;
 // chamadas. NUNCA contém pergunta, resposta, valores financeiros, UUIDs, JWT,
 // tokens ou conteúdo do Gemini.
 
-// PESSOAL-13C4A (Fase 6): allowlists FECHADAS do trio opcional que documenta
-// uma resposta de projeção determinística — nenhum valor fora destes conjuntos
-// é admissível em evento de sucesso.
-export const PROJECTION_SUCCESS_OUTCOMES = [
-  'full',
-  'preliminary',
-  'insufficient',
-  'clarification',
-] as const;
-export type ProjectionSuccessOutcome = (typeof PROJECTION_SUCCESS_OUTCOMES)[number];
-
-export const PROJECTION_CACHE_STATES = ['fresh', 'hit'] as const;
-export type ProjectionCacheState = (typeof PROJECTION_CACHE_STATES)[number];
-
-// PESSOAL-13C4A-E3: como a resposta de projeção fresca surgiu — pergunta
-// explícita completa ('direct') ou follow-up contextual da conversa ('follow_up').
-// Cache-hit não carrega route (o modo é desconhecido ao reenviar a resposta).
-export const PROJECTION_ROUTE_MODES = ['direct', 'follow_up'] as const;
-export type ProjectionRouteMode = (typeof PROJECTION_ROUTE_MODES)[number];
-
 export const OBSERVABILITY_SUCCESS_FIELDS = [
   'event',
   'requestId',
@@ -438,10 +411,6 @@ export const OBSERVABILITY_SUCCESS_FIELDS = [
   'intent',
   'elapsedMs',
   'geminiCallCount',
-  'source',
-  'outcome',
-  'cache',
-  'route',
 ] as const;
 
 export interface SanitizedSuccessEvent {
@@ -452,18 +421,6 @@ export interface SanitizedSuccessEvent {
   intent?: string;
   elapsedMs: number;
   geminiCallCount: number;
-  /** Sempre 'deterministic'; presente apenas em respostas de projeção. */
-  source?: 'deterministic';
-  /** Qualidade da projeção; presente apenas em respostas de projeção. */
-  outcome?: ProjectionSuccessOutcome;
-  /** fresh = calculada agora; hit = reutilização idempotente do cache de chat. */
-  cache?: ProjectionCacheState;
-  /**
-   * PESSOAL-13C4A-E3: como a projeção fresca surgiu ('direct' = pergunta
-   * explícita completa; 'follow_up' = follow-up contextual). Omitido no
-   * cache-hit (o modo é desconhecido ao reenviar a resposta).
-   */
-  route?: ProjectionRouteMode;
 }
 
 export function buildSuccessEvent(opts: {
@@ -472,10 +429,6 @@ export function buildSuccessEvent(opts: {
   intent?: string;
   elapsedMs: number;
   geminiCallCount: number;
-  source?: 'deterministic';
-  outcome?: ProjectionSuccessOutcome;
-  cache?: ProjectionCacheState;
-  route?: ProjectionRouteMode;
 }): SanitizedSuccessEvent {
   const event: SanitizedSuccessEvent = {
     event: 'ask_resolved',
@@ -485,28 +438,6 @@ export function buildSuccessEvent(opts: {
     geminiCallCount: opts.geminiCallCount,
   };
   if (opts.intent && opts.engine === 'deterministic') event.intent = opts.intent;
-  // PESSOAL-13C4A (Fase 6): o trio source/outcome/cache só entra completo e
-  // vindo de allowlist fechada — nunca parcial, nunca fora do conjunto.
-  if (
-    opts.source === 'deterministic' &&
-    opts.outcome !== undefined &&
-    (PROJECTION_SUCCESS_OUTCOMES as readonly string[]).includes(opts.outcome) &&
-    opts.cache !== undefined &&
-    (PROJECTION_CACHE_STATES as readonly string[]).includes(opts.cache)
-  ) {
-    event.source = opts.source;
-    event.outcome = opts.outcome;
-    event.cache = opts.cache;
-    // PESSOAL-13C4A-E3: route segue o mesmo princípio — só entra com a projeção
-    // fresca, vindo de allowlist fechada, e nunca no cache-hit.
-    if (
-      opts.route !== undefined &&
-      opts.cache === 'fresh' &&
-      (PROJECTION_ROUTE_MODES as readonly string[]).includes(opts.route)
-    ) {
-      event.route = opts.route;
-    }
-  }
   return event;
 }
 
@@ -523,14 +454,12 @@ export function getSanitizedSuccessSink(): SanitizedSuccessSink | null {
 }
 
 export function emitSanitizedSuccessEvent(event: SanitizedSuccessEvent): void {
-  // PESSOAL-13C4A (Fase 6): telemetria NUNCA pode derrubar a response — o
-  // sink (inclusive um que lance exceção) também fica sob guarda.
+  if (successSink) {
+    successSink(event);
+    return;
+  }
+  const line = `[finance-ask] ${JSON.stringify(event)}`;
   try {
-    if (successSink) {
-      successSink(event);
-      return;
-    }
-    const line = `[finance-ask] ${JSON.stringify(event)}`;
     // eslint-disable-next-line no-console
     console.info(line);
   } catch {

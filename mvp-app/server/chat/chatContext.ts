@@ -16,7 +16,6 @@ import {
   type ChatAnalysisContext,
   type ChatContextState,
   type ChatPeriod,
-  type ChatProjectionContext,
 } from './chatTypes.js';
 
 export function emptyContext(): ChatContextState {
@@ -59,13 +58,6 @@ export interface ContextTurnInput {
    * sobrevive a um turno não analítico.
    */
   analysis?: ChatAnalysisContext | null;
-  /**
-   * Contexto de projeção persistente (PESSOAL-13C4A-E3). Quando definido, o
-   * turno era de projeção real e o contexto é (re)gravado; quando ausente
-   * (turno comum ou Gemini) o contexto de projeção é LIMPO — nenhum follow-up
-   * de projeção sobrevive a um turno não-projeção.
-   */
-  projection?: ChatProjectionContext | null;
 }
 
 /**
@@ -84,7 +76,6 @@ export function contextFromTurn(
     period: input.periodAnalyzed ?? null,
     summaries: appendSummary(base, summaryOf(input.answer)),
     analysis: input.analysis ?? null,
-    projection: input.projection ?? null,
   };
 }
 
