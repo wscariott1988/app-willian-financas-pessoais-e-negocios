@@ -11,6 +11,9 @@
 //   - página de mensagens: página mais recente carregada primeiro, "ver mais
 //     antigas" prepend sem duplicar.
 
+// Type-only (apagado no build): fonte única do contrato de projeção.
+import type { ProjectionPayloadV1 } from '../../server/finance-ai/projectionPayloadV1';
+
 export interface ChatConversationItem {
   id: string;
   title: string;
@@ -50,6 +53,8 @@ export interface UiMessage {
   cards?: UiTrendCard[];
   /** Aviso adicional sanitizado (ex.: simulação de redução). */
   notice?: string;
+  /** Payload de projeção sanitizado (PESSOAL-13C4A-E2) — via resposta fresca ou listMessages. */
+  projection?: ProjectionPayloadV1;
   error?: string | null;
 }
 
@@ -71,6 +76,7 @@ export interface SentPayload {
   evidence?: Array<{ label: string; value: string }>;
   cards?: UiTrendCard[];
   notice?: string;
+  projection?: ProjectionPayloadV1;
 }
 
 export type ChatAction =
@@ -304,6 +310,7 @@ export function chatReducer(state: ChatUiState, action: ChatAction): ChatUiState
                 evidence: p.evidence ?? undefined,
                 cards: p.cards ?? undefined,
                 notice: p.notice ?? undefined,
+                projection: p.projection ?? undefined,
                 error: null,
               }
             : m,
