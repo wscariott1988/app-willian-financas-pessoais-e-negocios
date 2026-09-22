@@ -23,6 +23,12 @@
 //   - falha de LEITURA vira mensagem amigável de carregamento (nunca "lista
 //     vazia" nem "Serviço de inteligência indisponível").
 //
+// PESSOAL-13C4A-E5:
+//   - no mobile o formulário de pergunta (finance-ai-composer) vem ANTES do
+//     painel "Nova conversa"/histórico (finance-ai-chats) na ordem DOM, visual
+//     e de leitor/teclado; no desktop o grid mantém chats | main e coloca o
+//     composer abaixo das mensagens via grid-template-areas (sem duplicar).
+//
 // Regras invariantes mantidas: nunca expõe config técnica/secrets para o
 // usuário final; o perfil da conversa nunca vem do cliente (RLS decide).
 
@@ -388,6 +394,36 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       </h2>
 
       <div className="finance-ai-layout">
+        <div className="finance-ai-composer">
+          <form className="finance-ai-form" onSubmit={handleSubmit}>
+            <textarea
+              className="finance-ai-input"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ex.: E em maio, quanto gastei no supermercado?"
+              rows={3}
+              maxLength={1000}
+              disabled={loading}
+              aria-label="Sua pergunta sobre as finanças"
+            />
+            <p className="finance-ai-key-hint">Enter envia · Shift+Enter quebra linha</p>
+            <button
+              type="submit"
+              className="finance-ai-submit"
+              disabled={loading || !question.trim()}
+              aria-busy={loading}
+            >
+              {loading ? <Loader2 size={16} className="spin-animation" /> : <Send size={16} />}
+              <span>{loading ? 'Analisando…' : 'Perguntar'}</span>
+            </button>
+          </form>
+          <p className="finance-ai-meta">
+            Análise gerada com base nos seus dados; transferências não são consideradas
+            receita ou despesa.
+          </p>
+        </div>
+
         <aside className="finance-ai-chats" aria-label="Histórico de conversas">
           <button
             type="button"
@@ -607,34 +643,6 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
               <span>{error}</span>
             </div>
           )}
-
-          <form className="finance-ai-form" onSubmit={handleSubmit}>
-            <textarea
-              className="finance-ai-input"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ex.: E em maio, quanto gastei no supermercado?"
-              rows={3}
-              maxLength={1000}
-              disabled={loading}
-              aria-label="Sua pergunta sobre as finanças"
-            />
-            <p className="finance-ai-key-hint">Enter envia · Shift+Enter quebra linha</p>
-            <button
-              type="submit"
-              className="finance-ai-submit"
-              disabled={loading || !question.trim()}
-              aria-busy={loading}
-            >
-              {loading ? <Loader2 size={16} className="spin-animation" /> : <Send size={16} />}
-              <span>{loading ? 'Analisando…' : 'Perguntar'}</span>
-            </button>
-          </form>
-          <p className="finance-ai-meta">
-            Análise gerada com base nos seus dados; transferências não são consideradas
-            receita ou despesa.
-          </p>
         </div>
       </div>
     </section>
