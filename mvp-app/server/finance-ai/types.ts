@@ -3,6 +3,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Content } from '@google/genai';
+import type { ProjectionPayloadV1 } from './projectionPayloadV1.js';
 
 // ── Tool registry ──────────────────────────────────────────────
 
@@ -217,4 +218,12 @@ export interface AskResponse {
   cards?: TrendCard[];
   /** Aviso adicional (ex.: simulação de redução) — opcional e retrocompatível. */
   notice?: string;
+  /**
+   * Payload de projeção JÁ SANITIZADO (PESSOAL-13C4A-E2): presente somente em
+   * turnos de projeção reais (projection_base/current_month/month_comparison/
+   * categories) com quality full/preliminary ou insufficient. NUNCA em
+   * clarification nem em falha de infraestrutura (HTTP ≠ 200). Idêntico entre
+   * resposta fresca, cache/idempotência e listMessages.
+   */
+  projection?: ProjectionPayloadV1;
 }

@@ -5,6 +5,9 @@
 
 import { supabase } from '../supabaseClient';
 import type { UiTrendCard } from './chatState';
+// Type-only: apagado no build do browser (zero acoplamento de runtime);
+// fonte única do contrato de projeção (PESSOAL-13C4A-E2).
+import type { ProjectionPayloadV1 } from '../../server/finance-ai/projectionPayloadV1';
 
 export interface AskApiResponse {
   answer: string;
@@ -18,6 +21,8 @@ export interface AskApiResponse {
   cards?: UiTrendCard[];
   /** Aviso adicional sanitizado (ex.: simulação de redução). */
   notice?: string;
+  /** Payload de projeção sanitizado (PESSOAL-13C4A-E2) — resposta fresca. */
+  projection?: ProjectionPayloadV1;
 }
 
 /**
@@ -141,6 +146,14 @@ export async function askFinance(params: AskFinanceParams): Promise<AskApiRespon
         ? (payload.cards as UiTrendCard[])
         : undefined,
       notice: typeof payload.notice === 'string' ? payload.notice : undefined,
+      // PESSOAL-13C4A-E2: projection (já sanitizado pelo servidor) é transportado
+      // sem reinterpretação — o cache/listMessages devolvem a mesma forma.
+      projection:
+        payload.projection &&
+        typeof payload.projection === 'object' &&
+        !Array.isArray(payload.projection)
+          ? (payload.projection as ProjectionPayloadV1)
+          : undefined,
     };
   }
 

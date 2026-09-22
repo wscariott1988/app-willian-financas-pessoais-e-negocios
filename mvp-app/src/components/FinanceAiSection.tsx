@@ -53,6 +53,7 @@ import {
   type SentPayload,
   type UiMessage,
 } from '../lib/chatState';
+import { ProjectionCards } from './ProjectionCards';
 import * as chatApi from '../lib/chatApi';
 
 const SUGGESTIONS = [
@@ -79,7 +80,7 @@ function formatPeriod(p?: { start: string; end: string } | null): string {
 
 function engineLabel(m: UiMessage): string | null {
   if (m.engine === 'deterministic') {
-    return 'Resposta instantânea calculada a partir dos seus dados (IA não foi acionada).';
+    return 'Resposta calculada diretamente a partir dos seus dados (IA não foi acionada).';
   }
   if (m.engine) {
     return 'Resposta gerada pela inteligência artificial a partir dos seus dados.';
@@ -273,6 +274,9 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       payload.evidence = response.evidence ?? undefined;
       payload.cards = response.cards ?? undefined;
       payload.notice = response.notice ?? undefined;
+      // PESSOAL-13C4A-E2: projeção sanitizada da resposta fresca → UiMessage
+      // otimista (mesma forma que cache/listMessages devolvem).
+      payload.projection = response.projection ?? undefined;
       pendingScrollRef.current = 'smooth';
       dispatch({ type: 'send_success', clientRequestId: crid, payload });
       // PESSOAL-13C2B.6: resposta concluída → atualiza lastMessageAt e move a
@@ -560,6 +564,9 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
                        <div className="finance-ai-notice" role="note">
                          {m.notice}
                        </div>
+                     )}
+                     {m.projection && m.status === 'completed' && (
+                       <ProjectionCards projection={m.projection} />
                      )}
                     {engineLabel(m) && m.status === 'completed' && (
                       <p className="finance-ai-engine" data-engine={m.engine}>

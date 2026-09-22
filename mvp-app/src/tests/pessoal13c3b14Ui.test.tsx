@@ -64,7 +64,7 @@ const ALUGUEL_ANSWER =
   'A categoria Moradia > Aluguel representa um compromisso fixo e não entra na simulação percentual. O histórico de pagamentos sozinho não permite estimar uma economia real; seria necessário avaliar o contrato e suas condições.';
 
 const DETERMINISTIC_FOOTER =
-  'Resposta instantânea calculada a partir dos seus dados (IA não foi acionada).';
+  'Resposta calculada diretamente a partir dos seus dados (IA não foi acionada).';
 
 beforeEach(() => {
   vi.clearAllMocks();
