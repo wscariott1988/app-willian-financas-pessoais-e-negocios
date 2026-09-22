@@ -1,20 +1,28 @@
 // @vitest-environment jsdom
 
-// pessoal13c4aE5MobileQuestionOrder.test.tsx — PESSOAL-13C4A-E5: no mobile o
-// formulário de pergunta vem ANTES do painel "Nova conversa"/histórico, sem
-// duplicar o composer e sem depender só de CSS order (a ordem DOM/leitor/
-// teclado coincide com a visual). No desktop o layout visual é preservado via
-// grid-template-areas (chats | main com composer abaixo das mensagens).
+// pessoal13c4aE5MobileQuestionOrder.test.tsx — PESSOAL-13C4A-E5.2: no mobile o
+// formulário de pergunta vem ANTES da conversa atual (perguntas, respostas,
+// cards, loading/erro) e o histórico "+ Nova conversa" fica por ÚLTIMO. O
+// histórico nunca fica entre o composer e as mensagens da conversa ativa — a
+// partida de pergunta-resposta nunca é cortada. Sem duplicar o composer. No
+// desktop o layout visual é preservado via grid-template-areas (chats | main
+// com composer abaixo das mensagens).
 //
 // Provas:
-//   a. em viewports mobile (375×667 e 390×844) o composer precede o histórico
-//      e o histórico precede as mensagens na ordem DOM/acessível;
-//   b. o campo e o botão de envio vêm antes de "Nova conversa";
+//   a. em viewports mobile (375×667 e 390×844) a ordem DOM/acessível é
+//      composer → conversa atual → histórico;
+//   b. o campo e o botão de envio vêm antes da conversa atual e a última
+//      resposta vem antes do histórico;
 //   c. existe exatamente UMA instância do composer (sem duplicação);
 //   d. o CSS desktop mantém as áreas/layout esperados (chats | main/composer);
-//   e. o CSS mobile (≤820px) define o fluxo único composer → chats → main;
-//   f. envio e seleção de conversa continuam funcionando;
-//   g. mensagens antigas (cache/F5) e cards de projeção continuam renderizando.
+//   e. o CSS mobile (≤820px) define o fluxo único composer → main → chats;
+//   f. envio mantém pergunta e resposta na conversa ativa (antes do histórico);
+//   g. o scroll ao enviar termina na última mensagem (.finance-ai-messages),
+//      sem avançar até o histórico que vem abaixo;
+//   h. "Nova conversa" continua funcionando dentro do painel de histórico;
+//   i. seleção de conversa antiga continua funcionando;
+//   j. mensagens antigas (cache/F5), cards de projeção e isolamento continuam
+//      renderizando.
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -161,11 +169,11 @@ afterEach(() => {
   cleanup();
 });
 
-describe('PESSOAL-13C4A-E5 — mobile: composer antes do histórico (ordem DOM/acessível = visual)', () => {
+describe('PESSOAL-13C4A-E5.2 — mobile: composer → conversa atual → histórico (ordem DOM/acessível = visual)', () => {
   it.each([
     { width: 375, height: 667 },
     { width: 390, height: 844 },
-  ])('$width×$height: composer → histórico → mensagens, e o envio vem antes de "Nova conversa"', async ({ width, height }) => {
+  ])('$width×$height: composer → conversa atual → histórico, e a última resposta vem antes do histórico', async ({ width, height }) => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, get: () => width });
     Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => height });
     vi.mocked(chatApi.listConversations).mockResolvedValue([
@@ -182,23 +190,27 @@ describe('PESSOAL-13C4A-E5 — mobile: composer antes do histórico (ordem DOM/a
     expect(await screen.findByText('Resposta A')).toBeTruthy();
 
     const composer = container.querySelector('.finance-ai-composer') as HTMLElement;
-    const chats = container.querySelector('.finance-ai-chats') as HTMLElement;
     const main = container.querySelector('.finance-ai-main') as HTMLElement;
+    const chats = container.querySelector('.finance-ai-chats') as HTMLElement;
     expect(composer).toBeTruthy();
-    expect(chats).toBeTruthy();
     expect(main).toBeTruthy();
+    expect(chats).toBeTruthy();
 
-    // Ordem DOM/leitor/teclado: composer < histórico < mensagens.
-    expect(follows(composer, chats)).toBe(true);
-    expect(follows(chats, main)).toBe(true);
+    // Ordem DOM/leitor/teclado: composer < conversa atual < histórico.
+    expect(follows(composer, main)).toBe(true);
+    expect(follows(main, chats)).toBe(true);
 
-    // O campo e o botão de envio vêm antes do painel "Nova conversa" + lista.
+    // O campo e o botão de envio vêm antes da conversa atual; a última
+    // resposta vem antes do histórico; "Nova conversa" mora no painel.
     const input = screen.getByLabelText('Sua pergunta sobre as finanças');
     const submit = screen.getByRole('button', { name: 'Perguntar' });
+    const answer = container.querySelector('.finance-ai-msg.is-assistant') as HTMLElement;
     const newChat = screen.getByRole('button', { name: 'Nova conversa' });
-    expect(follows(input, newChat)).toBe(true);
-    expect(follows(submit, newChat)).toBe(true);
-    expect(follows(newChat, main)).toBe(true);
+    expect(follows(input, main)).toBe(true);
+    expect(follows(submit, main)).toBe(true);
+    expect(follows(main, newChat)).toBe(true);
+    expect(follows(answer, chats)).toBe(true);
+    expect(chats.contains(newChat)).toBe(true);
   });
 
   it('existe exatamente UM composer: um único form, textarea e botão de envio', async () => {
@@ -221,7 +233,7 @@ describe('PESSOAL-13C4A-E5 — mobile: composer antes do histórico (ordem DOM/a
   });
 });
 
-describe('PESSOAL-13C4A-E5 — desktop preserva as áreas e o layout', () => {
+describe('PESSOAL-13C4A-E5.2 — desktop preserva as áreas e o layout', () => {
   it('grid base: colunas 220px|1fr com áreas chats|main e composer abaixo das mensagens', () => {
     const layout = ruleBlock(css, '.finance-ai-layout');
     expect(layout).toContain('grid-template-columns: 220px minmax(0, 1fr)');
@@ -238,23 +250,23 @@ describe('PESSOAL-13C4A-E5 — desktop preserva as áreas e o layout', () => {
     expect(ruleBlock(css, '.finance-ai-main')).toContain('min-width: 0');
   });
 
-  it('mobile ≤820px: fluxo único composer → chats → main (sem colunas que gerem overflow)', () => {
+  it('mobile ≤820px: fluxo único composer → main → chats (sem colunas que gerem overflow)', () => {
     const tail = css.slice(css.indexOf('@media (max-width: 820px)'));
     const layout = ruleBlock(tail, '.finance-ai-layout');
     expect(layout).toContain('grid-template-columns: 1fr');
     const first = layout?.indexOf("'composer'") ?? -1;
-    const second = layout?.indexOf("'chats'") ?? -1;
-    const third = layout?.indexOf("'main'") ?? -1;
+    const second = layout?.indexOf("'main'") ?? -1;
+    const third = layout?.indexOf("'chats'") ?? -1;
     expect(first).toBeGreaterThanOrEqual(0);
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
   });
 });
 
-describe('PESSOAL-13C4A-E5 — envio e seleção de conversa continuam funcionando', () => {
+describe('PESSOAL-13C4A-E5.2 — envio, scroll e seleção continuam funcionando', () => {
   it('enviar pergunta pelo composer dispara askFinance e renderiza a resposta', async () => {
     vi.mocked(chatApi.createConversation).mockResolvedValue({ id: 'c-local' });
-    render(<FinanceAiSection />);
+    const { container } = render(<FinanceAiSection />);
     await screen.findByRole('group', { name: 'Sugestões de perguntas' });
 
     const input = screen.getByLabelText('Sua pergunta sobre as finanças') as HTMLTextAreaElement;
@@ -265,6 +277,78 @@ describe('PESSOAL-13C4A-E5 — envio e seleção de conversa continuam funcionan
     expect(askFinance).toHaveBeenCalledWith(
       expect.objectContaining({ question: 'Quanto gastei em junho?', conversationId: 'c-local' }),
     );
+
+    // A pergunta e a resposta entram na CONVERSA ATIVA (main), antes do
+    // histórico — a dupla nunca fica separada pelo painel ao lado/abaixo.
+    const composer = container.querySelector('.finance-ai-composer') as HTMLElement;
+    const main = container.querySelector('.finance-ai-main') as HTMLElement;
+    const chats = container.querySelector('.finance-ai-chats') as HTMLElement;
+    const qBubble = container.querySelector('.finance-ai-msg.is-user .finance-ai-bubble') as HTMLElement;
+    const a = screen.getByText('Resposta simulada.');
+    expect(qBubble.textContent).toContain('Quanto gastei em junho?');
+    expect(main.contains(qBubble)).toBe(true);
+    expect(main.contains(a)).toBe(true);
+    expect(follows(composer, qBubble)).toBe(true);
+    expect(follows(a, chats)).toBe(true);
+  });
+
+  it('ao enviar, o scroll termina na última mensagem da conversa (não avança ao histórico)', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue([
+      conv('c1', 'Conversa A', '2026-08-01T00:00:00.000Z'),
+    ]);
+    vi.mocked(chatApi.listMessages).mockResolvedValue({
+      messages: [
+        msg({ key: 'u0', role: 'user', text: 'Pergunta inicial' }),
+        msg({ key: 'a0', role: 'assistant', text: 'Resposta inicial', engine: 'deterministic' }),
+      ],
+      hasMore: false,
+    });
+
+    const { container } = render(<FinanceAiSection />);
+    expect(await screen.findByText('Resposta inicial')).toBeTruthy();
+
+    const messagesEl = container.querySelector('.finance-ai-messages') as HTMLElement;
+    Object.defineProperty(messagesEl, 'scrollHeight', { configurable: true, get: () => 2100 });
+
+    fireEvent.change(screen.getByLabelText('Sua pergunta sobre as finanças'), {
+      target: { value: 'E em julho?' },
+    });
+    fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+
+    expect(await screen.findByText('Resposta simulada.')).toBeTruthy();
+    // O alvo do scroll é o contêiner das mensagens (última mensagem)…
+    expect(messagesEl.scrollTop).toBe(2100);
+    // …que fica com limite próprio e ANTES do histórico na DOM: rolar até o
+    // scrollHeight do contêiner termina na última resposta, nunca no histórico.
+    const msgs = ruleBlock(css, '.finance-ai-messages');
+    expect(msgs).toContain('overflow-y: auto');
+    expect(msgs).toContain('max-height');
+    const main = container.querySelector('.finance-ai-main') as HTMLElement;
+    const chats = container.querySelector('.finance-ai-chats') as HTMLElement;
+    expect(messagesEl.closest('.finance-ai-main')).toBe(main);
+    expect(follows(main, chats)).toBe(true);
+  });
+
+  it('"Nova conversa" continua funcionando dentro do painel de histórico', async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue([
+      conv('c1', 'Conversa A', '2026-08-01T00:00:00.000Z'),
+    ]);
+    vi.mocked(chatApi.listMessages).mockResolvedValue({
+      messages: [msg({ key: 'a1', role: 'assistant', text: 'Resposta A', engine: 'deterministic' })],
+      hasMore: false,
+    });
+
+    const { container } = render(<FinanceAiSection />);
+    expect(await screen.findByText('Resposta A')).toBeTruthy();
+
+    const newChat = screen.getByRole('button', { name: 'Nova conversa' });
+    const chats = container.querySelector('.finance-ai-chats') as HTMLElement;
+    expect(chats.contains(newChat)).toBe(true);
+
+    fireEvent.click(newChat);
+    // Abre uma conversa vazia (sugestões visíveis), sem mensagens antigas.
+    expect(await screen.findByRole('group', { name: 'Sugestões de perguntas' })).toBeTruthy();
+    expect(screen.queryByText('Resposta A')).toBeNull();
   });
 
   it('selecionar uma conversa do histórico carrega as mensagens dela', async () => {
@@ -294,7 +378,7 @@ describe('PESSOAL-13C4A-E5 — envio e seleção de conversa continuam funcionan
   });
 });
 
-describe('PESSOAL-13C4A-E5 — mensagens antigas (F5/cache) e projection cards', () => {
+describe('PESSOAL-13C4A-E5.2 — mensagens antigas (F5/cache) e projection cards', () => {
   it('histórico persistido renderiza mensagens e cards de projeção no main', async () => {
     const projection = successBase();
     vi.mocked(chatApi.listConversations).mockResolvedValue([

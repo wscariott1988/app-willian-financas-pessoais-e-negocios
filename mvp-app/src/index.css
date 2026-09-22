@@ -3344,8 +3344,9 @@ button.period-range-custom {
   grid-template-columns: 220px minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
-  /* PESSOAL-13C4A-E5: o DOM é mobile-first (composer antes de chats/main);
-     no desktop as áreas recolocam o composer abaixo das mensagens. */
+  /* PESSOAL-13C4A-E5/E5.2: o DOM é mobile-first (composer → conversa atual →
+     histórico); no desktop as áreas recolocam o composer abaixo das mensagens
+     e o histórico à esquerda, preservando o layout. */
   grid-template-areas:
     'chats main'
     'chats composer';
@@ -4011,12 +4012,13 @@ button.period-range-custom {
 @media (max-width: 820px) {
   .finance-ai-layout {
     grid-template-columns: 1fr;
-    /* PESSOAL-13C4A-E5: no mobile a ordem visual = ordem DOM (composer →
-       chats → main), então o campo de pergunta vem antes do histórico. */
+    /* PESSOAL-13C4A-E5.2: no mobile a ordem visual = ordem DOM (composer →
+       conversa atual → histórico), então a pergunta nunca fica separada da
+       resposta pelo painel "Nova conversa"/histórico. */
     grid-template-areas:
       'composer'
-      'chats'
-      'main';
+      'main'
+      'chats';
   }
 
   .finance-ai-chats {
