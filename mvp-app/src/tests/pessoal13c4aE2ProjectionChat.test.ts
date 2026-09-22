@@ -494,13 +494,15 @@ describe('PESSOAL-13C4A-E2 — resposta fresca carrega o payload de projeção s
       annualScenarioCents: 1200000,
       totalBaseCents: 1200000,
     });
-    expect(p.comparison.referenceBasis).toBe('expected_to_date');
-    expect(p.comparison.referenceCents).toBeTypeOf('number');
+    expect(p.comparison.referenceBasis).toBe('monthly_mean');
+    expect(p.comparison.referenceCents).toBe(100000);
     expect(p.comparison.realizedCents).toBe(50000);
-    expect(p.comparison.expectedToDateCents).toBeTypeOf('number');
-    expect(p.comparison.futureRegisteredCents).toBe(0);
-    expect(p.comparison.committedCents).toBe(50000);
-    expect(typeof p.comparison.closingProjectionCents).toBe('number');
+    expect(p.comparison.deviationCents).toBe(-50000);
+    expect(p.comparison.deviation).toBe('below');
+    expect(p.comparison.expectedToDateCents).toBeUndefined();
+    expect(p.comparison.futureRegisteredCents).toBeUndefined();
+    expect(p.comparison.committedCents).toBeUndefined();
+    expect(p.comparison.closingProjectionCents).toBeUndefined();
     expect(Array.isArray(p.categories)).toBe(true);
     expect(p.categories.length).toBeGreaterThan(0);
     expect(p.categories.length).toBeLessThanOrEqual(8);

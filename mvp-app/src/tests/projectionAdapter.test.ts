@@ -468,8 +468,8 @@ describe('ProjectionAdapter — categoria nula vira "Sem categoria" no motor', (
   });
 });
 
-describe('ProjectionAdapter — mês atual carrega até o fim do mês (inclui futuros)', () => {
-  it('inclui lançamentos futuros registrados do mês, sem vazar para o mês seguinte', async () => {
+describe('ProjectionAdapter — mês atual carrega até o fim do mês (mês inteiro)', () => {
+  it('soma todos os lançamentos do mês (inclusive após o todayISO), sem vazar para o mês seguinte', async () => {
     const rows = [
       ...anchorRows(),
       tx('ref-05', { occurred_on: '2026-08-05', amount: 300 }),
@@ -486,9 +486,7 @@ describe('ProjectionAdapter — mês atual carrega até o fim do mês (inclui fu
     expectSuccess(r);
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind === 'current') {
-      expect(r.comparison.realizedCents).toBe(centsOf(500));
-      expect(r.comparison.futureCents).toBe(centsOf(500));
-      expect(r.comparison.committedCents).toBe(centsOf(1000));
+      expect(r.comparison.realizedCents).toBe(centsOf(1000));
     }
   });
 });

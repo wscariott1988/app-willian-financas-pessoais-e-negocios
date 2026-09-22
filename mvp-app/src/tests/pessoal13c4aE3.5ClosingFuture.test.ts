@@ -1,21 +1,21 @@
-// pessoal13c4aE3.5ClosingFuture.test.ts — PESSOAL-13C4A-E3.5: lançamentos
-// futuros participam do fechamento do mês atual e são expostos POR CATEGORIA.
-// No nível do motor + contrato:
+// pessoal13c4aE3.5ClosingFuture.test.ts — PESSOAL-13C4A-E3.5, revisto em
+// PESSOAL-13C4A-E3.7: com o mês atual avaliado pelo MÊS INTEIRO contra a média
+// mensal, os conceitos de "fechamento estimado por ritmo" e de
+// "futuros/comprometido por categoria" deixaram de existir no motor e no
+// contrato (ficando apenas como LEITURA LEGADA no sanitizador). Esta prova
+// verifica, no nível motor + contrato:
 //
-//   1. comparison do mês atual: closingProjectionCents = ritmo do realizado
-//      (round(realized*30/elapsed)) + futuros já registrados, com mínimo =
-//      committedCents (realizado + futuros) — NUNCA abaixo dele;
-//   2. antes do 7º dia, closing é null, MAS futuros/comprometido continuam
-//      presentes no comparison;
-//   3. dias completos (29): fechamento ≈ realizado (futuro já virou
-//      realizado) e continua >= committed;
-//   4. por categoria, no mês atual: futureRegisteredCents e committedCents
-//      presentes — variáveis comparam o REALIZADO contra a referência
-//      proporcional; compromissos fixos e aportes comparam o JÁ LANÇADO
-//      (realizado + futuros) contra a média mensal completa;
-//   5. mês passado: NENHUMA dessas informações existe (nem por categoria);
-//   6. contrato: mapeador só as expõe no mês atual; sanitizador rejeita
-//      payload de mês passado que as carregue e exige ambas no mês atual.
+//   1. comparison do mês atual: realizedCents soma o mês INTEIRO (inclusive os
+//      lançamentos com data POSTERIOR ao todayISO) e referenceCents é a média
+//      mensal completa — NENHUM campo de ritmo/fechamento/futuro existe;
+//   2. o saldo do mês independe do dia do todayISO (03, 21 e 29 → idênticos);
+//   3. por categoria: realizedCents = total do mês na categoria contra a média
+//      mensal (mesma base monthly_mean em todos os modos);
+//   4. mês passado: continua avaliado por mês inteiro, sem qualquer campo do
+//      mês atual;
+//   5. contrato: o mapeador emite SEMPRE monthly_mean (mês atual e passado); o
+//      sanitizador rejeita payload com os campos do legado injetados e aceita a
+//      leitura LEGADA (expected_to_date) com os quatro campos.
 import { describe, it, expect } from 'vitest';
 import {
   buildProjection,
@@ -82,25 +82,22 @@ const FULL_12 = { year: 2025, month: 9 };
 const AUG_2026 = { year: 2026, month: 8 };
 
 /**
- * Fixture canônica da E3.5: Aluguel (monthly_commitment), Supermercado e
+ * Fixture canônica do E3.5/E3.7: Aluguel (monthly_commitment), Supermercado e
  * mercado (variable_pace, mesmos valores → empate de médias resolvido por
- * label, nunca por índice) com histórico de 12 meses (2025-09..2026-08).
- * Hoje = 2026-09-21 → fração do mês = 21/30.
+ * label) com histórico de 12 meses (2025-09..2026-08). Hoje = 2026-09-21.
  *
- * Realizado em setembro: Supermercado 10/09 12.398 + Aluguel 12/09 50.500.
- * Futuros registrados (após 21/09): Aluguel 22/09 180.000 + Supermercado
- * 22/09 77.500 + mercado 26/09 10.000 → 267.500.
+ * Lançamentos de setembro (TODOS no mês): Supermercado 10/09 12.398 + 22/09
+ * 77.500; Aluguel 12/09 50.500 + 22/09 180.000; mercado 26/09 10.000.
  *
- * comparison: realizado 62.898, futuros 267.500, comprometido = 330.398;
- * média mensal = 504.919 → esperado 21/30 = 353.443;
- * ritmo = round(62.898*30/21) = 89.854 → fechamento 89.854 + 267.500 =
- * 357.354 (jamais < 330.398).
+ * comparison: realizedCents = 330.398 (mês INTEIRO, inclusive os lançamentos
+ * de 22/09 e 26/09, posteriores ao todayISO); média mensal = 504.919 →
+ * −174.521 abaixo.
  *
- * Categorias: Aluguel comprometido 230.500 contra média 184.659 → +45.841
- * above; Supermercado realizado 12.398 contra proporcional round(160130*21/30)
- * = 112.091 → −99.693 below; mercado realizado 0 contra 112.091 → −112.091.
+ * Categorias (base monthly_mean): Aluguel 230.500 contra 184.659 → +45.841
+ * above; Supermercado 89.898 contra 160.130 → −70.232 below; mercado 10.000
+ * contra 160.130 → −150.130 below.
  */
-function closingFutureFixture(): ProjectionEngineInput {
+function fullMonthFixture(): ProjectionEngineInput {
   return {
     todayISO: '2026-09-21',
     transactions: [
@@ -124,112 +121,97 @@ function clonePayload(p: ProjectionPayloadV1): Raw {
 }
 
 function currentPayload(): ProjectionPayloadSuccessV1 {
-  const r = buildProjection(closingFutureFixture());
+  const r = buildProjection(fullMonthFixture());
   if (r.status !== 'success') throw new Error('fixture deveria ser success');
   return mapProjectionToPayloadV1(r, 'projection_categories') as ProjectionPayloadSuccessV1;
 }
 
 function pastPayload(): ProjectionPayloadSuccessV1 {
   const r = buildProjection({
-    ...closingFutureFixture(),
+    ...fullMonthFixture(),
     referenceMonth: { year: 2026, month: 8 },
   });
   if (r.status !== 'success') throw new Error('fixture deveria ser success');
   return mapProjectionToPayloadV1(r, 'projection_month_comparison') as ProjectionPayloadSuccessV1;
 }
 
-describe('PESSOAL-13C4A-E3.5 — fechamento soma lançamentos futuros (comparison)', () => {
-  it('rumo do mês atual: realizado + futuros + ritmo → fechamento 357354 >= comprometido 330398', () => {
-    const r = buildProjection(closingFutureFixture());
+describe('PESSOAL-13C4A-E3.5 — mês atual: total do mês inteiro vs média mensal', () => {
+  it('comparison: realizado 330398 (mês inteiro) vs média 504919 → −174521 below', () => {
+    const r = buildProjection(fullMonthFixture());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     const c = r.comparison;
     if (c.kind !== 'current') throw new Error('comparison deveria ser current');
     expect(c.kind).toBe('current');
-    expect(c.realizedCents).toBe(62898);
-    expect(c.futureCents).toBe(267500);
-    expect(c.committedCents).toBe(330398);
-    expect(c.expectedToDateCents).toBe(353443);
-    // O ritmo (sem campo próprio) é formado INLINE no fechamento:
-    // round(realizado*30/21) + futuros, com mínimo = comprometido.
-    const paceInline = Math.round(c.realizedCents * 30 / 21);
-    expect(c.closingProjectionCents).toBe(paceInline + c.futureCents);
-    expect(c.closingProjectionCents).toBe(357354);
-    expect((c.closingProjectionCents as number) >= c.committedCents).toBe(true);
-  });
-
-  it('antes do 7º dia o fechamento é null, MAS futuros e comprometido seguem presentes', () => {
-    const r = buildProjection({ ...closingFutureFixture(), todayISO: '2026-09-03' });
-    if (r.status !== 'success') throw new Error('fixture deveria ser success');
-    const c = r.comparison;
-    if (c.kind !== 'current') throw new Error('comparison deveria ser current');
-    expect(c.kind).toBe('current');
-    // Nada foi realizado antes de 03/09; todo o conteúdo virou futuro.
-    expect(c.realizedCents).toBe(0);
-    expect(c.futureCents).toBe(330398);
-    expect(c.committedCents).toBe(330398);
-    expect(c.closingProjectionCents).toBeNull();
-  });
-
-  it('dia 29 (mês quase completo): futuro virou realizado e o fechamento nunca cai abaixo do comprometido', () => {
-    const r = buildProjection({ ...closingFutureFixture(), todayISO: '2026-09-29' });
-    if (r.status !== 'success') throw new Error('fixture deveria ser success');
-    const c = r.comparison;
-    if (c.kind !== 'current') throw new Error('comparison deveria ser current');
-    expect(c.kind).toBe('current');
+    // Lançamentos de 22/09 e 26/09 (posteriores ao todayISO) entram no total.
     expect(c.realizedCents).toBe(330398);
-    expect(c.futureCents).toBe(0);
-    expect(c.committedCents).toBe(330398);
-    expect((c.closingProjectionCents as number) >= c.committedCents).toBe(true);
-    expect(c.closingProjectionCents).toBe(341791);
+    expect(c.referenceCents).toBe(504919);
+    expect(c.deviationCents).toBe(-174521);
+    expect(c.deviation).toBe('below');
+    expect('closingProjectionCents' in c).toBe(false);
+    expect('futureCents' in c).toBe(false);
+    expect('committedCents' in c).toBe(false);
+    expect('expectedToDateCents' in c).toBe(false);
+  });
+
+  it('o saldo do mês independe do dia do todayISO (03, 21 e 29 → idênticos)', () => {
+    const r3 = buildProjection({ ...fullMonthFixture(), todayISO: '2026-09-03' });
+    const r21 = buildProjection(fullMonthFixture());
+    const r29 = buildProjection({ ...fullMonthFixture(), todayISO: '2026-09-29' });
+    for (const r of [r3, r21, r29]) {
+      expect(r.status).toBe('success');
+      if (r.status !== 'success') continue;
+      if (r.comparison.kind !== 'current') throw new Error('comparison deveria ser current');
+      expect(r.comparison.realizedCents).toBe(330398);
+      expect(r.comparison.deviation).toBe('below');
+    }
+    expect(JSON.stringify(r3)).toBe(JSON.stringify(r21));
+    expect(JSON.stringify(r29)).toBe(JSON.stringify(r21));
   });
 });
 
-describe('PESSOAL-13C4A-E3.5 — futuros por categoria no mês atual', () => {
-  it('Aluguel (monthly_commitment) compara o JÁ LANÇADO contra a média completa: +45841 above', () => {
-    const aluguel = buildProjection(closingFutureFixture());
+describe('PESSOAL-13C4A-E3.5 — categorias: total do mês vs média mensal', () => {
+  it('Aluguel (monthly_commitment): 230500 contra 184659 → +45841 above', () => {
+    const aluguel = buildProjection(fullMonthFixture());
     if (aluguel.status !== 'success') throw new Error('fixture deveria ser success');
     const c = aluguel.categories.find((x) => x.label === 'Aluguel');
     if (!c) throw new Error('Aluguel não encontrado');
-    expect(c.actualCents).toBe(50500);
-    expect(c.futureRegisteredCents).toBe(180000);
-    expect(c.committedCents).toBe(230500);
+    expect(c.actualCents).toBe(230500);
     expect(c.referenceCents).toBe(184659);
+    expect(c.referenceBasis).toBe('monthly_mean');
     expect(c.deviationCents).toBe(45841);
     expect(c.deviation).toBe('above');
+    expect('futureRegisteredCents' in c).toBe(false);
+    expect('committedCents' in c).toBe(false);
   });
 
-  it('variáveis comparam o REALIZADO: Supermercado −99693 e mercado −112091, com futuros expostos', () => {
-    const r = buildProjection(closingFutureFixture());
+  it('variáveis usam a mesma base mensal: Supermercado −70232 e mercado −150130', () => {
+    const r = buildProjection(fullMonthFixture());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     const supermercado = r.categories.find((x) => x.label === 'Supermercado');
     const mercado = r.categories.find((x) => x.label === 'mercado');
     if (!supermercado || !mercado) throw new Error('categorias variáveis não encontradas');
-    expect(supermercado.actualCents).toBe(12398);
-    expect(supermercado.futureRegisteredCents).toBe(77500);
-    expect(supermercado.committedCents).toBe(89898);
-    expect(supermercado.referenceCents).toBe(112091);
-    expect(supermercado.deviationCents).toBe(-99693);
+    expect(supermercado.actualCents).toBe(89898);
+    expect(supermercado.referenceCents).toBe(160130);
+    expect(supermercado.deviationCents).toBe(-70232);
     expect(supermercado.deviation).toBe('below');
-    expect(mercado.actualCents).toBe(0);
-    expect(mercado.futureRegisteredCents).toBe(10000);
-    expect(mercado.committedCents).toBe(10000);
-    expect(mercado.referenceCents).toBe(112091);
-    expect(mercado.deviationCents).toBe(-112091);
+    expect(mercado.actualCents).toBe(10000);
+    expect(mercado.referenceCents).toBe(160130);
+    expect(mercado.deviationCents).toBe(-150130);
     expect(mercado.deviation).toBe('below');
   });
 
   it('empate de médias (Supermercado × mercado): `.find` por rótulo, nunca por índice', () => {
-    const r = buildProjection(closingFutureFixture());
+    const r = buildProjection(fullMonthFixture());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     expect(r.categories.length).toBe(3);
     expect(r.categories[0].monthlyMeanCents).toBe(184659);
   });
 });
 
-describe('PESSOAL-13C4A-E3.5 — mês passado NÃO guarda futuros por categoria', () => {
-  it('categorias de agosto/2026 sem futureRegisteredCents/committedCents e sem comparação com fechamento', () => {
+describe('PESSOAL-13C4A-E3.5 — mês passado NÃO guarda campos do mês atual', () => {
+  it('categorias de agosto/2026 sem futureRegisteredCents/committedCents e sem fechamento', () => {
     const r = buildProjection({
-      ...closingFutureFixture(),
+      ...fullMonthFixture(),
       referenceMonth: { year: 2026, month: 8 },
     });
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
@@ -248,20 +230,24 @@ describe('PESSOAL-13C4A-E3.5 — mês passado NÃO guarda futuros por categoria'
   });
 });
 
-describe('PESSOAL-13C4A-E3.5 — contrato: mapeador e sanitizador por categoria', () => {
-  it('payload do mês atual expõe futuros/comprometido por categoria e sobrevive ao round-trip', () => {
+describe('PESSOAL-13C4A-E3.5 — contrato: mapeador e sanitizador', () => {
+  it('payload do mês atual é monthly_mean (sem futuros/comprometido) e sobrevive ao round-trip', () => {
     const p = currentPayload();
     expect(p.reference.kind).toBe('current');
     const aluguel = p.categories.find((c) => c.label === 'Aluguel') as ProjectionPayloadSuccessV1['categories'][number];
     const supermercado = p.categories.find((c) => c.label === 'Supermercado') as ProjectionPayloadSuccessV1['categories'][number];
-    expect(aluguel.futureRegisteredCents).toBe(180000);
-    expect(aluguel.committedCents).toBe(230500);
-    expect(supermercado.futureRegisteredCents).toBe(77500);
-    expect(supermercado.committedCents).toBe(89898);
-    expect(p.comparison).toMatchObject({
-      futureRegisteredCents: 267500,
-      committedCents: 330398,
-      closingProjectionCents: 357354,
+    expect(aluguel.referenceBasis).toBe('monthly_mean');
+    expect(supermercado.referenceBasis).toBe('monthly_mean');
+    expect('futureRegisteredCents' in aluguel).toBe(false);
+    expect('committedCents' in aluguel).toBe(false);
+    expect('futureRegisteredCents' in supermercado).toBe(false);
+    expect('committedCents' in supermercado).toBe(false);
+    expect(p.comparison).toEqual({
+      deviation: 'below',
+      deviationCents: -174521,
+      referenceBasis: 'monthly_mean',
+      referenceCents: 504919,
+      realizedCents: 330398,
     });
     expect(sanitizeProjectionPayloadV1(clonePayload(p))).toEqual(p);
   });
@@ -272,6 +258,7 @@ describe('PESSOAL-13C4A-E3.5 — contrato: mapeador e sanitizador por categoria'
     for (const c of p.categories) {
       expect('futureRegisteredCents' in c).toBe(false);
       expect('committedCents' in c).toBe(false);
+      expect(c.referenceBasis).toBe('monthly_mean');
     }
     expect(sanitizeProjectionPayloadV1(clonePayload(p))).toEqual(p);
   });
@@ -287,14 +274,13 @@ describe('PESSOAL-13C4A-E3.5 — contrato: mapeador e sanitizador por categoria'
     expect(sanitizeProjectionPayloadV1(raw2)).toBeUndefined();
   });
 
-  it('mês atual exige AMBAS as novas por categoria: faltando uma → payload undefined', () => {
+  it('mês atual novo com campos do legado injetados (comparison ou categoria) → payload undefined', () => {
     const raw = clonePayload(currentPayload());
-    const categories = raw.categories as Array<Record<string, unknown>>;
-    delete categories[0].committedCents;
+    (raw.comparison as Record<string, unknown>).futureRegisteredCents = 267500;
     expect(sanitizeProjectionPayloadV1(raw)).toBeUndefined();
     const raw2 = clonePayload(currentPayload());
     const categories2 = raw2.categories as Array<Record<string, unknown>>;
-    delete categories2[1].futureRegisteredCents;
+    categories2[0].committedCents = 1;
     expect(sanitizeProjectionPayloadV1(raw2)).toBeUndefined();
   });
 });

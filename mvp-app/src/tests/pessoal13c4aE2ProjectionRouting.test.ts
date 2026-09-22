@@ -326,7 +326,7 @@ describe('PESSOAL-13C4A-E2 — intents de projeção (determinístico, despacho 
     expect(tables).toContain('account_profile_periods');
   });
 
-  it('mês atual: "Quanto vou fechar o mês?" → fechamento estimado pelo ritmo', async () => {
+  it('mês atual: "Quanto vou fechar o mês?" → o mês inteiro contra a média mensal (sem ritmo)', async () => {
     const { fake } = projClient(fullRows());
     const ans = await runDeterministicAsk({ supabase: fake as never, question: 'Quanto vou fechar o mês?', nowISO: NOW });
     expect(ans).not.toBeNull();
@@ -334,9 +334,13 @@ describe('PESSOAL-13C4A-E2 — intents de projeção (determinístico, despacho 
     expect(ans?.response.engine).toBe('deterministic');
     expect(ans?.response.geminiCallCount).toBe(0);
     expect(ans?.response.answer).toContain(brlReais(500));
-    expect(ans?.response.answer).toContain('esperado proporcional');
-    expect(ans?.response.answer).toContain('fechamento estimado do mês é de');
-    expect(ans?.response.answer).not.toContain('média mensal');
+    expect(ans?.response.answer).toContain('contra a média mensal de ' + brlReais(1000) + ' dos 12 meses anteriores');
+    expect(ans?.response.answer).toContain('abaixo da média mensal');
+    expect(ans?.response.answer).toContain('Novos lançamentos ainda podem alterar o total do mês.');
+    expect(ans?.response.answer).not.toContain('esperado proporcional');
+    expect(ans?.response.answer).not.toContain('fechamento estimado do mês é de');
+    expect(ans?.response.answer).not.toContain('ritmo');
+    expect(ans?.response.answer).not.toContain('comprometido');
   });
 
   it('comparação: "Qual a previsão para o mês passado comparada à média dos 12 anteriores?"', async () => {
@@ -466,22 +470,29 @@ describe('PESSOAL-13C4A-E2 — qualidade full/preliminary/insufficient e falha d
 });
 
 describe('PESSOAL-13C4A-E2 — textos pt-BR por intent derivados exclusivamente do ProjectionPayloadV1', () => {
-  it('current antes do dia 7: fechamento null e aviso do 7º dia, sem inventar valor', async () => {
-    const { fake } = projClient([...fullRows(), expRow('2026-08-09', 300, 'transporte')]);
-    const ans = await runDeterministicAsk({
-      supabase: fake as never,
+  it('current: o total não depende do dia do todayISO (06/08 e 10/08 → idêntico), sem aviso de 7º dia', async () => {
+    const extra = expRow('2026-08-09', 300, 'transporte');
+    const a6 = await runDeterministicAsk({
+      supabase: projClient([...fullRows(), extra]).fake as never,
       question: 'Quanto vou fechar o mês?',
       nowISO: '2026-08-06',
     });
-    expect(ans).not.toBeNull();
-    expect(ans?.intent).toBe('projection_current_month');
-    expect(ans?.response.answer).toContain('Ainda é cedo');
-    expect(ans?.response.answer).toContain('7º dia');
-    expect(ans?.response.answer).not.toContain('fechamento estimado do mês é de');
-    expect(ans?.response.answer).not.toContain('média mensal');
+    const a10 = await runDeterministicAsk({
+      supabase: projClient([...fullRows(), extra]).fake as never,
+      question: 'Quanto vou fechar o mês?',
+      nowISO: '2026-08-10',
+    });
+    expect(a6).not.toBeNull();
+    expect(a10).not.toBeNull();
+    expect(a6?.intent).toBe('projection_current_month');
+    // 500 (05/08) + 300 (09/08) = 800 no MÊS INTEIRO, em ambos os dias.
+    expect(a6?.response.answer).toContain(brlReais(800));
+    expect(a6?.response.answer).toBe(a10?.response.answer);
+    expect(a6?.response.answer).not.toContain('Ainda é cedo');
+    expect(a6?.response.answer).not.toContain('7º dia');
   });
 
-  it('current: futuros e comprometido apresentados separadamente, como dados do payload', async () => {
+  it('current: todos os lançamentos do mês entram no total, inclusive os de data posterior a hoje', async () => {
     const { fake } = projClient([...fullRows(), expRow('2026-08-09', 300, 'transporte')]);
     const ans = await runDeterministicAsk({
       supabase: fake as never,
@@ -489,13 +500,12 @@ describe('PESSOAL-13C4A-E2 — textos pt-BR por intent derivados exclusivamente 
       nowISO: '2026-08-06',
     });
     expect(ans).not.toBeNull();
-    expect(ans?.response.answer).toContain(
-      'Lançamentos futuros já registrados somam ' + brlReais(300),
-    );
-    expect(ans?.response.answer).toContain(
-      'comprometido (realizado + futuros) fica em ' + brlReais(800),
-    );
-    expect(ans?.response.answer).toContain('realizado até hoje é de ' + brlReais(500));
+    // 500 (05/08) + 300 (09/08, após o todayISO) = 800 no total do mês.
+    expect(ans?.response.answer).toContain(brlReais(800));
+    expect(ans?.response.answer).not.toContain('futuros');
+    expect(ans?.response.answer).not.toContain('comprometido');
+    expect(ans?.response.answer).not.toContain('realizado até hoje');
+    expect(ans?.response.answer).not.toContain('ritmo');
   });
 
   it.each([

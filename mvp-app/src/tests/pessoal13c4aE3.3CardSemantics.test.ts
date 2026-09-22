@@ -1,21 +1,21 @@
 // pessoal13c4aE3.3CardSemantics.test.ts — PESSOAL-13C4A-E3.3: semântica de card
-// POR CATEGORIA. Prova, no nível do motor + contrato:
+// POR CATEGORIA no motor + contrato (formalizada com E3.7):
 //
 //   1. projectionCategoryMode deriva do RÓTULO reaproveitando
 //      classifySavingsCategory (NUNCA duplica a lista de termos): fixed_contract
 //      / debt_commitment → monthly_commitment; asset_allocation →
 //      investment_allocation; todo o resto (variável e saúde sem contrato) →
 //      variable_pace;
-//   2. a base de comparação é POR CATEGORIA: só rodadas variáveis do mês atual
-//      usam a referência proporcional (expected_to_date); compromissos fixos,
-//      dívidas e investimentos usam a média mensal completa (monthly_mean);
-//      mês passado SEMPRE usa monthly_mean — nada de "ritmo" no passado;
-//   3. exemplo fechado (Aluguel × Supermercado): o card do aluguel usa a média
-//      R$ 1.846,59 (nunca o proporcional R$ 1.292,61) com +R$ 81,21; o card do
-//      supermercado usa a referência proporcional R$ 1.120,91 com −R$ 996,93;
-//   4. o mapeador expõe mode/referenceBasis por categoria e o sanitizador valida
-//      a coerência cruzada modo ↔ referenceBasis ↔ kind (combinações inválidas
-//      → payload undefined, nunca objeto parcial enganoso).
+//   2. a base de comparação é POR CATEGORIA, mas SEMPRE a MÉDIA MENSAL COMPLETA
+//      (monthly_mean) — no mês atual E no passado (PESSOAL-13C4A-E3.7): nada de
+//      "ritmo" proporcional; o modo só muda a LINGUAGEM do card, nunca a base;
+//   3. exemplo fechado (Aluguel × Supermercado): ambos usam a média mensal
+//      completa (R$ 1.846,59 e R$ 1.601,30); o aluguel fica +R$ 81,21 acima e o
+//      supermercado R$ 1.477,32 abaixo — o proporcional R$ 1.120,91 NUNCA entra;
+//   4. o mapeador expõe mode/referenceBasis por categoria ('monthly_mean' sempre)
+//      e o sanitizador valida a coerência cruzada modo ↔ referenceBasis ↔ kind:
+//      categorias 'expected_to_date' ou com future/committed fora de payload
+//      legado → payload undefined, nunca objeto parcial enganoso.
 import { describe, it, expect } from 'vitest';
 import {
   buildProjection,
@@ -86,14 +86,17 @@ const AUG_2026 = { year: 2026, month: 8 };
 /**
  * Fixture canônica da semântica de cards: Aluguel (contrato fixo) e
  * Supermercado (variável) com histórico de 12 meses (2025-09..2026-08) e
- * realizado de setembro/2026. Hoje = 2026-09-21 → fração do mês = 21/30.
+ * realizado de setembro/2026. Hoje = 2026-09-21.
  *
- * Aluguel: 12 × 184659 → média 184659; realizado setembro 192780; como
- * monthly_commitment a referência é a MÉDIA COMPLETA (184659), desvio +8121
- * (R$ 81,21 acima) — o proporcional 129261 (R$ 1.292,61) NUNCA entra no card.
- * Supermercado: 12 × 160130 → média 160130; realizado setembro 12398; como
- * variable_pace a referência é proporcional round(160130*21/30) = 112091
- * (R$ 1.120,91), desvio 12398 − 112091 = −99693 (R$ 996,93 abaixo do ritmo).
+ * PESSOAL-13C4A-E3.7: a referência é SEMPRE a média mensal completa, para
+ * qualquer modo, no mês atual e no passado.
+ *
+ * Aluguel: 12 × 184659 → média 184659; realizado setembro 192780; referência
+ * 184659, desvio +8121 (R$ 81,21 acima da média mensal) — o proporcional
+ * 129261 (R$ 1.292,61) NUNCA entra no card.
+ * Supermercado: 12 × 160130 → média 160130; realizado setembro 12398;
+ * referência 160130 (média completa), desvio 12398 − 160130 = −147732
+ * (R$ 1.477,32 abaixo da média mensal) — o proporcional 112091 não existe.
  */
 function cardFixture(): ProjectionEngineInput {
   return {
@@ -138,7 +141,7 @@ describe('PESSOAL-13C4A-E3.3 — projeçãoCategoryMode deriva do rótulo (reuso
 });
 
 describe('PESSOAL-13C4A-E3.3 — semântica por categoria no motor (mês atual)', () => {
-  it('Aluguel usa média completa (nunca o proporcional) e Supermercado usa referência proporcional', () => {
+  it('Aluguel e Supermercado usam a MESMA média mensal completa (nunca o proporcional do ritmo)', () => {
     const r = buildProjection(cardFixture());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     const [aluguel, supermercado] = r.categories;
@@ -155,11 +158,12 @@ describe('PESSOAL-13C4A-E3.3 — semântica por categoria no motor (mês atual)'
 
     expect(supermercado.label).toBe('Supermercado');
     expect(supermercado.mode).toBe('variable_pace');
-    expect(supermercado.referenceBasis).toBe('expected_to_date');
+    expect(supermercado.referenceBasis).toBe('monthly_mean');
     expect(supermercado.monthlyMeanCents).toBe(160130);
-    expect(supermercado.referenceCents).toBe(112091);
+    expect(supermercado.referenceCents).toBe(160130);
+    expect(supermercado.referenceCents).not.toBe(112091);
     expect(supermercado.actualCents).toBe(12398);
-    expect(supermercado.deviationCents).toBe(-99693);
+    expect(supermercado.deviationCents).toBe(-147732);
     expect(supermercado.deviation).toBe('below');
   });
 });
@@ -174,7 +178,7 @@ describe('PESSOAL-13C4A-E3.3 — matriz de modos (fixos, dívidas, investimentos
     };
   }
 
-  it('mês atual: commitments/investments usam monthly_mean; variáveis usam expected_to_date', () => {
+  it('mês atual (E3.7): TODOS os modos usam monthly_mean — a base não depende do modo', () => {
     const r = buildProjection(matrix());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     const byLabel = new Map(r.categories.map((c) => [c.label, c]));
@@ -182,8 +186,8 @@ describe('PESSOAL-13C4A-E3.3 — matriz de modos (fixos, dívidas, investimentos
     expect(byLabel.get('Empréstimo')).toMatchObject({ mode: 'monthly_commitment', referenceBasis: 'monthly_mean' });
     expect(byLabel.get('Plano de Saúde')).toMatchObject({ mode: 'monthly_commitment', referenceBasis: 'monthly_mean' });
     expect(byLabel.get('Investimentos')).toMatchObject({ mode: 'investment_allocation', referenceBasis: 'monthly_mean' });
-    expect(byLabel.get('Farmácia')).toMatchObject({ mode: 'variable_pace', referenceBasis: 'expected_to_date' });
-    expect(byLabel.get('Supermercado')).toMatchObject({ mode: 'variable_pace', referenceBasis: 'expected_to_date' });
+    expect(byLabel.get('Farmácia')).toMatchObject({ mode: 'variable_pace', referenceBasis: 'monthly_mean' });
+    expect(byLabel.get('Supermercado')).toMatchObject({ mode: 'variable_pace', referenceBasis: 'monthly_mean' });
   });
 
   it('mês passado: TODAS as categorias usam monthly_mean, mesmo com modo preservado do rótulo', () => {
@@ -219,50 +223,55 @@ describe('PESSOAL-13C4A-E3.3 — mapeador e sanitizador (mode/referenceBasis por
       deviation: 'above',
       referenceBasis: 'monthly_mean',
       mode: 'monthly_commitment',
-      futureRegisteredCents: 0,
-      committedCents: 192780,
     });
     expect(supermercado).toEqual({
       label: 'Supermercado',
       monthlyMeanCents: 160130,
       annualScenarioCents: 1921560,
       realizedCents: 12398,
-      referenceCents: 112091,
-      deviationCents: -99693,
+      referenceCents: 160130,
+      deviationCents: -147732,
       deviation: 'below',
-      referenceBasis: 'expected_to_date',
+      referenceBasis: 'monthly_mean',
       mode: 'variable_pace',
-      futureRegisteredCents: 0,
-      committedCents: 12398,
     });
     expect(sanitizeProjectionPayloadV1(clonePayload(p))).toEqual(p);
   });
 
   it('combinações inválidas de modo ↔ referenceBasis ↔ kind → payload undefined', () => {
-    const invalidModes: Array<{
+    const invalidCombos: Array<{
       kind: 'current' | 'past';
       basis: unknown;
       mode: unknown;
     }> = [
-      // mês atual variável JAMAIS usa a média mensal completa na referência.
-      { kind: 'current', basis: 'monthly_mean', mode: 'variable_pace' },
-      // mês atual de compromisso fixo JAMAIS distribui proporcionalmente.
+      // E3.7: mês atual novo JAMAIS carrega a referência proporcional do legado.
+      { kind: 'current', basis: 'expected_to_date', mode: 'variable_pace' },
+      // compromisso fixo/divisão e aportes também nunca distribuem proporcionalmente.
       { kind: 'current', basis: 'expected_to_date', mode: 'monthly_commitment' },
-      // mês atual de aportes também distribui JAMAIS proporcionalmente.
       { kind: 'current', basis: 'expected_to_date', mode: 'investment_allocation' },
-      // mês passado nunca carrega campos do mês atual.
+      // mês passado nunca carrega expected_to_date nem campos do mês atual.
       { kind: 'past', basis: 'expected_to_date', mode: 'variable_pace' },
       { kind: 'past', basis: 'expected_to_date', mode: 'monthly_commitment' },
       // modo fora da lista fechada.
-      { kind: 'current', basis: 'expected_to_date', mode: 'monthly_pace' },
+      { kind: 'current', basis: 'monthly_mean', mode: 'monthly_pace' },
     ];
-    for (const combo of invalidModes) {
+    for (const combo of invalidCombos) {
       const raw = combo.kind === 'past' ? pastPayloadRaw() : clonePayload(currentPayload());
       const categories = raw.categories as Array<Record<string, unknown>>;
       const cat = categories[0];
       cat.referenceBasis = combo.basis;
       cat.mode = combo.mode;
       expect(sanitizeProjectionPayloadV1(raw), JSON.stringify(combo)).toBeUndefined();
+    }
+  });
+
+  it('future/committed por categoria fora de payload legado → undefined', () => {
+    for (const kind of ['current', 'past'] as const) {
+      const raw = kind === 'past' ? pastPayloadRaw() : clonePayload(currentPayload());
+      const categories = raw.categories as Array<Record<string, unknown>>;
+      categories[0].futureRegisteredCents = 1;
+      categories[0].committedCents = 1;
+      expect(sanitizeProjectionPayloadV1(raw), kind).toBeUndefined();
     }
   });
 

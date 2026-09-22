@@ -475,7 +475,7 @@ describe('PESSOAL-13C4A-E3.1 — conversa 1: cadeia de projeção com sinônimo 
     expect(p5).toBeDefined();
     expect(p5.intent).toBe('projection_month_comparison');
     expect(p5.reference).toEqual({ month: '2026-08', kind: 'current' });
-    expect(p5.comparison.referenceBasis).toBe('expected_to_date');
+    expect(p5.comparison.referenceBasis).toBe('monthly_mean');
     expect(p5.lens).toEqual({ label: 'Supermercado' });
     expect(sanitizeProjectionPayloadV1(p5)).toEqual(p5);
 

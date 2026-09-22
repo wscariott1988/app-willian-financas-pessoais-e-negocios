@@ -2034,7 +2034,7 @@ async function buildSavingsOpportunities(
 //
 // Fase 3 cobre APENAS os intents diretos e o despacho ao adapter:
 //   projection_base                 próximos 12 meses / anualizada
-//   projection_current_month        fechamento estimado do mês atual
+//   projection_current_month        total do mês atual vs média mensal dos 12 anteriores
 //   projection_month_comparison     mês atual ou passado vs média dos 12 anteriores
 //   projection_categories           projeção geral por categorias
 //   projection_clarification        esclarecimento determinístico SEM banco
@@ -2626,37 +2626,37 @@ function projectionBaseText(p: ProjectionPayloadSuccessV1): string {
 
 function projectionCurrentMonthText(p: ProjectionPayloadSuccessV1): string {
   const c = p.comparison;
-  if (c.referenceBasis !== 'expected_to_date') {
-    throw new Error('Mês atual com comparação fora de expected_to_date.');
+  if (c.referenceBasis !== 'monthly_mean') {
+    throw new Error('Mês atual com comparação fora de monthly_mean.');
   }
-  const closing =
-    c.closingProjectionCents === null
-      ? ' Ainda é cedo para estimar o fechamento: ele passa a ser calculado a partir do 7º dia do mês.'
-      : ` Somando o ritmo do realizado aos lançamentos futuros já registrados, o fechamento estimado do mês é de ${brlCents(c.closingProjectionCents)}.`;
+  // PESSOAL-13C4A-E3.7: o mês atual é comparado pelo MÊS INTEIRO contra a média
+  // mensal dos 12 meses anteriores — sem ritmo, fechamento estimado, futuros
+  // nem comprometido. Aviso curto de que novos lançamentos podem alterar o total.
+  const direction =
+    c.deviation === 'above'
+      ? 'acima da média mensal'
+      : c.deviation === 'below'
+        ? 'abaixo da média mensal'
+        : 'igual à média mensal';
   return (
-    `No mês atual, o realizado até hoje é de ${brlCents(c.realizedCents)}, contra um esperado ` +
-    `proporcional de ${brlCents(c.expectedToDateCents)} (${directionLabel(c.deviation)}). ` +
-    `Lançamentos futuros já registrados somam ${brlCents(c.futureRegisteredCents)} e o comprometido ` +
-    `(realizado + futuros) fica em ${brlCents(c.committedCents)}.` +
-    closing +
+    `No mês atual, o total lançado é de ${brlCents(c.realizedCents)}, contra a média mensal de ` +
+    `${brlCents(c.referenceCents)} dos 12 meses anteriores ` +
+    `(${brlCents(Math.abs(c.deviationCents))} ${direction}). ` +
+    `Novos lançamentos ainda podem alterar o total do mês.` +
     PROJECTION_DISCLAIMER
   );
 }
 
 function projectionMonthComparisonText(p: ProjectionPayloadSuccessV1): string {
   const c = p.comparison;
-  if (c.referenceBasis === 'monthly_mean') {
-    return (
-      `Em ${monthLabelOf(monthKeyOfPayload(p.reference.month))}, a despesa foi de ${brlCents(
-        c.realizedCents,
-      )}, contra a média mensal de ${brlCents(c.referenceCents)} dos 12 meses anteriores ` +
-      `(${directionLabel(c.deviation)}).` + PROJECTION_DISCLAIMER
-    );
+  if (c.referenceBasis !== 'monthly_mean') {
+    throw new Error('Comparação mensal esperava monthly_mean.');
   }
   return (
-    `No mês atual, o realizado até hoje é de ${brlCents(c.realizedCents)}, contra o esperado ` +
-    `proporcional de ${brlCents(c.referenceCents)} (${directionLabel(c.deviation)}).` +
-    PROJECTION_DISCLAIMER
+    `Em ${monthLabelOf(monthKeyOfPayload(p.reference.month))}, a despesa foi de ${brlCents(
+      c.realizedCents,
+    )}, contra a média mensal de ${brlCents(c.referenceCents)} dos 12 meses anteriores ` +
+    `(${directionLabel(c.deviation)}).` + PROJECTION_DISCLAIMER
   );
 }
 

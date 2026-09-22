@@ -498,19 +498,20 @@ describe('PESSOAL-13C4A-E3.1A — Conversa A (handler real): auditorias 1, 2, 3 
     expect(lensCategory).toBeDefined();
     expect((lensCategory as { realizedCents: number }).realizedCents).toBeGreaterThanOrEqual(50000);
     expect((p3.categories as Array<{ label: string }>).some((cat) => cat.label.includes('Mercado Livre'))).toBe(false);
-    // PESSOAL-13C4A-E3.3: o card da lente carrega a semântica por categoria —
-    // Supermercado (variável) no mês atual usa a referência proporcional.
+    // PESSOAL-13C4A-E3.3/E3.7: o card da lente carrega a semântica por
+    // categoria — Supermercado (variável) no mês atual usa a MESMA média
+    // mensal completa do mês passado.
     const superMode = (p3.categories as Array<{ label: string; mode: string; referenceBasis: string }>).find(
       (cat) => cat.label.includes('Supermercado'),
     ) as { mode: string; referenceBasis: string };
     expect(superMode.mode).toBe('variable_pace');
-    expect(superMode.referenceBasis).toBe('expected_to_date');
+    expect(superMode.referenceBasis).toBe('monthly_mean');
     const ctx3 = c.state.chat_conversations[0].context as { projection?: { lensPath?: string; lensLabel?: string } } | null;
     expect(ctx3?.projection?.lensPath).toBe('Alimentação > Supermercado');
     expect(ctx3?.projection?.lensLabel).toBe('Supermercado');
 
-    // m4 — fechamento: mês atual com a MESMA lente; comparação expected_to_date
-    // (mês atual tem os campos exclusivos, e o aviso do "ritmo" cabe aqui).
+    // m4 — fechamento: mês atual com a MESMA lente; MESMA forma do passado:
+    // média mensal completa (mês inteiro), sem campos exclusivos/ritmo.
     const res4 = await handler(
       postRequest({ question: 'E o fechamento?', conversationId: 'conv-a', clientRequestId: 'a-m4' }),
     );
@@ -521,13 +522,14 @@ describe('PESSOAL-13C4A-E3.1A — Conversa A (handler real): auditorias 1, 2, 3 
     expect(p4.intent).toBe('projection_current_month');
     expect(p4.reference).toEqual({ month: '2026-09', kind: 'current' });
     expect(p4.lens).toEqual({ label: 'Supermercado' });
-    expect((p4.comparison as { referenceBasis: string }).referenceBasis).toBe('expected_to_date');
-    expect((p4.comparison as { closingProjectionCents: number | null }).closingProjectionCents).not.toBeNull();
+    expect((p4.comparison as { referenceBasis: string }).referenceBasis).toBe('monthly_mean');
+    expect(p4.comparison).not.toHaveProperty('closingProjectionCents');
+    expect((p4.comparison as { referenceCents: number }).referenceCents).toBeGreaterThan(0);
     const superCurrent = (p4.categories as Array<{ label: string; mode: string; referenceBasis: string }>).find(
       (cat) => cat.label.includes('Supermercado'),
     ) as { mode: string; referenceBasis: string };
     expect(superCurrent.mode).toBe('variable_pace');
-    expect(superCurrent.referenceBasis).toBe('expected_to_date');
+    expect(superCurrent.referenceBasis).toBe('monthly_mean');
     expect(p4).not.toHaveProperty('expectedToDateCents');
     expect(sanitizeProjectionPayloadV1(p4)).toEqual(p4);
 
@@ -728,7 +730,7 @@ describe('PESSOAL-13C4A-E3.1A — idempotência: fresh === cache === listMessage
     expect(screen.queryByText('Diferença no ritmo até hoje')).toBeNull();
   });
 
-  it('cards: payload current (expected_to_date) exibe o aviso TO_DATE_NOTICE e os rótulos de ritmo', () => {
+  it('cards: payload current (monthly_mean) exibe o aviso de alteração e a linguagem do mês inteiro, sem ritmo', () => {
     const current: ProjectionPayloadSuccessV1 = {
       version: 1,
       status: 'success',
@@ -746,38 +748,34 @@ describe('PESSOAL-13C4A-E3.1A — idempotência: fresh === cache === listMessage
       summary: { monthlyMeanCents: 100000, annualScenarioCents: 1200000, totalBaseCents: 1200000 },
       comparison: {
         deviation: 'above',
-        deviationCents: 5000,
-        referenceBasis: 'expected_to_date',
-        referenceCents: 19355,
-        realizedCents: 50000,
-        expectedToDateCents: 19355,
-        futureRegisteredCents: 0,
-        committedCents: 50000,
-        closingProjectionCents: 155000,
+        deviationCents: 445834,
+        referenceBasis: 'monthly_mean',
+        referenceCents: 104166,
+        realizedCents: 150000,
       },
       categories: [
         {
           label: 'Alimentação > Supermercado',
           monthlyMeanCents: 104166,
           annualScenarioCents: 1249992,
-          realizedCents: 50000,
-          referenceBasis: 'expected_to_date',
+          realizedCents: 150000,
+          referenceBasis: 'monthly_mean',
           mode: 'variable_pace',
-          referenceCents: 19355,
-          deviationCents: 30645,
+          referenceCents: 104166,
+          deviationCents: 45834,
           deviation: 'above',
         },
       ],
       lens: { label: 'Supermercado' },
     };
     render(<ProjectionCards projection={current} />);
-    expect(
-      screen.getByText(
-        'A referência até hoje compara o realizado com a parcela da média histórica correspondente aos dias já transcorridos.',
-      ),
-    ).toBeDefined();
-    expect(screen.getByText('Diferença no ritmo até hoje')).toBeDefined();
-    expect(screen.getByText('Realizado até hoje')).toBeDefined();
-    expect(screen.getByText('Referência até hoje (média proporcional)')).toBeDefined();
+    expect(screen.getByText('Total lançado no mês')).toBeDefined();
+    expect(screen.getByText('Média mensal histórica')).toBeDefined();
+    expect(screen.getByText('Diferença para a média mensal')).toBeDefined();
+    expect(screen.getByText('acima da média mensal')).toBeDefined();
+    expect(screen.getByText('Novos lançamentos ainda podem alterar o total do mês.')).toBeDefined();
+    expect(screen.queryByText('Realizado até hoje')).toBeNull();
+    expect(screen.queryByText(/ritmo/)).toBeNull();
+    expect(screen.queryByText('Disponível a partir do 7º dia')).toBeNull();
   });
 });

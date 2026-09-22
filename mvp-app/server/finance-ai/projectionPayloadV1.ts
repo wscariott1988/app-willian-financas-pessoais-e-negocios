@@ -16,22 +16,26 @@
 //   - cobertura e limites usados;
 //   - agregados mensais/anuais/totais em centavos;
 //   - comparação geral = UNIÃO DISCRIMINADA por referenceBasis:
-//       'expected_to_date' → mês atual: expectedToDateCents obrigatório
+//       'monthly_mean'     → MÊS PASSADO e MÊS ATUAL NOVO (PESSOAL-13C4A-E3.7):
+//                            a referência é a média mensal completa da base nos
+//                            DOIS casos (mesma forma; só reference.kind difere).
+//                            SEM campos exclusivos do mês atual;
+//       'expected_to_date' → SOMENTE LEITURA de payload LEGADO (pré-E3.7) do
+//                            mês atual: expectedToDateCents obrigatório
 //                            (referência proporcional até o dia),
 //                            futureRegisteredCents e committedCents, e
-//                            closingProjectionCents number|null (null antes do
-//                            7º dia; inteiro seguro, inclusive 0, a partir do 7º);
-//       'monthly_mean'     → mês passado (média mensal completa da base), SEM
-//                            campos exclusivos do mês atual;
+//                            closingProjectionCents number|null. O mapeador
+//                            NUNCA gera essa forma — apenas o sanitizador a
+//                            aceita para ler mensagens persistidas antigas;
 //   - comparação above | below | equal quando aplicável;
 //   - categorias (≤ 8): rótulo, média dos meses cobertos e os comparativos que
 //     o motor JÁ fornece por categoria — realizado no mês atual/selecionado,
 //     referência, diferença e desvio (mapeados direto, NUNCA recalculados);
 //     cada categoria carrega AINDA o modo de card fechado (variable_pace |
-//     monthly_commitment | investment_allocation) e a base de comparação usada
-//     (PESSOAL-13C4A-E3.3): rodadas variáveis do mês atual → expected_to_date
-//     (referência proporcional), compromissos fixos/investimentos do mês atual
-//     e qualquer categoria de mês passado → monthly_mean (média completa);
+//     monthly_commitment | investment_allocation) e a base de comparação usada:
+//     no mês atual E no passado, SEMPRE 'monthly_mean' (média completa);
+//     categorias legadas do mês atual (leitura) podem carregar
+//     futureRegisteredCents/committedCents com a coerência modo ↔ base antiga;
 //   - agregado `remaining` quando existir (count > 0): apenas count/média/anual
 //     — o motor NÃO fornece comparativos do remaining, então não são inventados.
 //   - insufficient: somente contexto seguro, cobertura, motivo permitido e
@@ -41,15 +45,18 @@
 // Sanitizador:
 //   - entrada tratada como unknown; allowlists fechadas (version, intent,
 //     quality, reference kind, reason code, deviation, MODO de categoria);
-//   - valida coerência cruzada da comparação: reference.kind 'current' exige
-//     união 'expected_to_date'; 'past' exige 'monthly_mean'; combinações
-//     trocadas ou campos exclusivos do mês atual injetados num payload passado
-//     → undefined;
-//   - valida coerência cruzada POR CATEGORIA (PESSOAL-13C4A-E3.3): no mês
-//     atual, variable_pace exige referenceBasis 'expected_to_date' e
-//     monthly_commitment/investment_allocation exigem 'monthly_mean'; no mês
-//     passado toda categoria exige 'monthly_mean' — qualquer combinação fora
-//     disso → undefined;
+//   - valida coerência cruzada da comparação (PESSOAL-13C4A-E3.7):
+//     referenceBasis 'monthly_mean' vale para 'current' (novo) e 'past';
+//     'expected_to_date' vale SOMENTE para 'current' LEGADO e exige os QUATRO
+//     campos exclusivos; campos exclusivos do mês atual injetados numa
+//     comparação monthly_mean (atual novo ou passado) → undefined;
+//   - valida coerência cruzada POR CATEGORIA: passado → 'monthly_mean' sempre e
+//     nunca future/committed; mês atual NOVO (comparaçção monthly_mean) →
+//     'monthly_mean' e nunca future/committed; mês atual LEGADO (comparação
+//     expected_to_date) → mantém a regra pré-E3.7: variable_pace exige
+//     'expected_to_date', monthly_commitment/investment_allocation exigem
+//     'monthly_mean' e future/committed são obrigatórios — qualquer combinação
+//     fora disso → undefined;
 //   - apenas inteiros seguros e finitos (preserva 0 legitimamente);
 //   - closingProjectionCents: null preservado exatamente; inteiro seguro
 //     (inclusive 0) também preservado;
@@ -160,13 +167,18 @@ export interface ProjectionPayloadSummaryV1 {
   totalBaseCents: number;
 }
 
-export interface ProjectionPayloadCurrentComparisonV1 {
+/**
+ * Comparação LEGADA do mês atual (pré-PESSOAL-13C4A-E3.7): referência
+ * proporcional até o dia. O mapeador NUNCA gera esta forma; o sanitizador a
+ * aceita SOMENTE como leitura de mensagens persistidas antigas.
+ */
+export interface ProjectionPayloadLegacyCurrentComparisonV1 {
   deviation: ProjectionPayloadDeviation;
   deviationCents: number;
   referenceBasis: 'expected_to_date';
   referenceCents: number;
   realizedCents: number;
-  /** Esperado linear até o dia (obrigatório no mês atual). */
+  /** Esperado linear até o dia (obrigatório no legado do mês atual). */
   expectedToDateCents: number;
   /** Lançamentos futuros registrados (occurredOn > todayISO). */
   futureRegisteredCents: number;
@@ -176,7 +188,11 @@ export interface ProjectionPayloadCurrentComparisonV1 {
   closingProjectionCents: number | null;
 }
 
-export interface ProjectionPayloadPastComparisonV1 {
+/**
+ * Comparação por MÉDIA MENSAL (mês passado e mês atual novo — E3.7): a mesma
+ * forma nos dois casos; apenas reference.kind diferencia.
+ */
+export interface ProjectionPayloadMonthlyMeanComparisonV1 {
   deviation: ProjectionPayloadDeviation;
   deviationCents: number;
   referenceBasis: 'monthly_mean';
@@ -185,8 +201,8 @@ export interface ProjectionPayloadPastComparisonV1 {
 }
 
 export type ProjectionPayloadComparisonV1 =
-  | ProjectionPayloadCurrentComparisonV1
-  | ProjectionPayloadPastComparisonV1;
+  | ProjectionPayloadLegacyCurrentComparisonV1
+  | ProjectionPayloadMonthlyMeanComparisonV1;
 
 export interface ProjectionPayloadCategoryV1 {
   label: string;
@@ -195,9 +211,9 @@ export interface ProjectionPayloadCategoryV1 {
   annualScenarioCents: number;
   /** Realizado no mês atual (até hoje) ou no mês selecionado — mapeado do motor. */
   realizedCents: number;
-  /** Base da comparação DA CATEGORIA (PESSOAL-13C4A-E3.3): proporcional até
-   * hoje para rodadas variáveis do mês atual; média mensal completa para
-   * compromissos fixos/investimentos do mês atual e para qualquer mês passado. */
+  /** Base da comparação DA CATEGORIA: SEMPRE 'monthly_mean' (média completa) no
+   * mês atual e no passado (PESSOAL-13C4A-E3.7). Categorias legadas do mês
+   * atual podem carregar 'expected_to_date' apenas em leitura (pré-E3.7). */
   referenceBasis: ProjectionPayloadComparisonBasis;
   /** Modo de card da categoria (lista fechada). */
   mode: ProjectionPayloadCategoryMode;
@@ -206,10 +222,11 @@ export interface ProjectionPayloadCategoryV1 {
   deviationCents: number;
   deviation: ProjectionPayloadDeviation;
   /**
-   * PESSOAL-13C4A-E3.5 — lançamentos futuros da categoria no mês atual e
-   * realizado + futuros. Presentes SOMENTE em categorias do mês atual
-   * (reference.kind 'current'); o sanitizador os exige no mês atual e REJEITA
-   * payloads de mês passado que os carreguem.
+   * LEITURA LEGADA (pré-E3.7) — lançamentos futuros da categoria no mês atual e
+   * realizado + futuros, presentes SOMENTE em categorias de payloads legados do
+   * mês atual. O mapeador novo NUNCA os emite; o sanitizador os exige em
+   * payloads legados e REJEITA tanto em payloads de mês passado quanto no mês
+   * atual novo (monthly_mean).
    */
   futureRegisteredCents?: number;
   committedCents?: number;
@@ -327,26 +344,13 @@ export function mapProjectionToPayloadV1(
     return payload;
   }
 
-  const comparison: ProjectionPayloadComparisonV1 =
-    result.comparison.kind === 'current'
-      ? {
-          deviation: result.comparison.deviation,
-          deviationCents: result.comparison.deviationCents,
-          referenceBasis: 'expected_to_date',
-          referenceCents: result.comparison.referenceCents,
-          realizedCents: result.comparison.realizedCents,
-          expectedToDateCents: result.comparison.expectedToDateCents,
-          futureRegisteredCents: result.comparison.futureCents,
-          committedCents: result.comparison.committedCents,
-          closingProjectionCents: result.comparison.closingProjectionCents,
-        }
-      : {
-          deviation: result.comparison.deviation,
-          deviationCents: result.comparison.deviationCents,
-          referenceBasis: 'monthly_mean',
-          referenceCents: result.comparison.referenceCents,
-          realizedCents: result.comparison.realizedCents,
-        };
+  const comparison: ProjectionPayloadComparisonV1 = {
+    deviation: result.comparison.deviation,
+    deviationCents: result.comparison.deviationCents,
+    referenceBasis: 'monthly_mean',
+    referenceCents: result.comparison.referenceCents,
+    realizedCents: result.comparison.realizedCents,
+  };
 
   const payload: ProjectionPayloadSuccessV1 = {
     version: PROJECTION_PAYLOAD_VERSION,
@@ -362,7 +366,9 @@ export function mapProjectionToPayloadV1(
     },
     comparison,
     categories: result.categories.slice(0, PROJECTION_CATEGORIES_MAX).map((c) => {
-      const category = {
+      // PESSOAL-13C4A-E3.7: nunca expõe futuros/comprometido por categoria —
+      // a comparação do mês atual é pelo mês INTEIRO (monthly_mean).
+      return {
         label: c.label,
         monthlyMeanCents: c.monthlyMeanCents,
         annualScenarioCents: c.annualScenarioCents,
@@ -373,16 +379,6 @@ export function mapProjectionToPayloadV1(
         deviationCents: c.deviationCents,
         deviation: c.deviation,
       };
-      // PESSOAL-13C4A-E3.5: só o mês atual expõe futuros/comprometido por
-      // categoria (nunca no passado, onde não existem).
-      if (result.comparison.kind === 'current') {
-        return {
-          ...category,
-          futureRegisteredCents: c.futureRegisteredCents ?? 0,
-          committedCents: c.committedCents ?? c.actualCents,
-        };
-      }
-      return category;
     }),
   };
   if (result.remainingCategories.remainingCategoriesCount > 0) {
@@ -532,6 +528,8 @@ function sanitizeComparison(
     return undefined;
   }
 
+  // PESSOAL-13C4A-E3.7: expected_to_date é LEITURA LEGADA exclusiva do mês
+  // atual (pré-E3.7): exige os quatro campos. O mapeador nunca a gera.
   if (referenceBasis === 'expected_to_date') {
     if (referenceKind !== 'current') return undefined;
     const expectedToDateCents = amountValue(raw.expectedToDateCents);
@@ -565,7 +563,8 @@ function sanitizeComparison(
     };
   }
 
-  if (referenceKind !== 'past') return undefined;
+  // monthly_mean: mês passado OU mês atual NOVO (E3.7). Campos exclusivos do
+  // legado do mês atual são REJEITADOS em qualquer um dos dois.
   for (const field of PROJECTION_CURRENT_COMPARISON_FIELDS) {
     if ((raw as Record<string, unknown>)[field] !== undefined) return undefined;
   }
@@ -581,8 +580,13 @@ function sanitizeComparison(
 function sanitizeCategories(
   rawInput: unknown,
   referenceKind: ProjectionPayloadReferenceKind,
+  comparisonBasis: ProjectionPayloadComparisonBasis,
 ): ProjectionPayloadCategoryV1[] | undefined {
   if (!Array.isArray(rawInput)) return undefined;
+  // Mês atual LEGADO (comparação expected_to_date, pré-E3.7): categorias com
+  // futuros/comprometido e a coerência modo ↔ base antiga. Mês atual NOVO e
+  // passado: monthly_mean SEMPRE, e futuros/comprometido são REJEITADOS.
+  const legacyCurrent = referenceKind === 'current' && comparisonBasis === 'expected_to_date';
   const out: ProjectionPayloadCategoryV1[] = [];
   for (const item of rawInput) {
     if (out.length >= PROJECTION_CATEGORIES_MAX) break;
@@ -597,8 +601,9 @@ function sanitizeCategories(
     const referenceCents = amountValue(raw.referenceCents);
     const deviationCents = deltaValue(raw.deviationCents);
     const deviation = enumValue(raw.deviation, PROJECTION_DEVIATIONS);
-    // PESSOAL-13C4A-E3.5: futuros/comprometido por categoria existem SOMENTE
-    // no mês atual (obrigatórios e numéricos); no passado são REJEITADOS.
+    // future/committed por categoria existem SOMENTE em payloads LEGADOS do
+    // mês atual (obrigatórios e numéricos lá); no mês atual novo e no passado
+    // são REJEITADOS.
     const hasCurrentCategoryFields =
       raw.futureRegisteredCents !== undefined || raw.committedCents !== undefined;
     const futureRegisteredCents = amountValue(raw.futureRegisteredCents);
@@ -616,39 +621,48 @@ function sanitizeCategories(
     ) {
       return undefined;
     }
-    if (referenceKind === 'past' && hasCurrentCategoryFields) return undefined;
-    if (referenceKind === 'current') {
+    if (legacyCurrent) {
+      // Mês atual LEGADO (pré-E3.7): exige future/committed e a coerência
+      // antiga modo ↔ referenceBasis.
       if (!hasCurrentCategoryFields) return undefined;
-      if (futureRegisteredCents === undefined || committedCents === undefined) return undefined;
-    }
-    // PESSOAL-13C4A-E3.3 — coerência cruzada modo ↔ referenceBasis ↔ kind:
-    //   mês atual: variable_pace exige expected_to_date; monthly_commitment e
-    //   investment_allocation exigem monthly_mean;
-    //   mês passado: toda categoria exige monthly_mean.
-    if (referenceKind === 'past') {
+      if (futureRegisteredCents === undefined || committedCents === undefined) {
+        return undefined;
+      }
+      if (mode === 'variable_pace') {
+        if (referenceBasis !== 'expected_to_date') return undefined;
+      } else if (referenceBasis !== 'monthly_mean') {
+        return undefined;
+      }
+      out.push({
+        label,
+        monthlyMeanCents,
+        annualScenarioCents,
+        realizedCents,
+        referenceBasis,
+        mode,
+        referenceCents,
+        deviationCents,
+        deviation,
+        futureRegisteredCents: futureRegisteredCents as number,
+        committedCents: committedCents as number,
+      });
+    } else {
+      // Mês atual NOVO (E3.7) e mês passado: monthly_mean SEMPRE; os campos do
+      // mês atual legado nunca podem ser injetados.
+      if (hasCurrentCategoryFields) return undefined;
       if (referenceBasis !== 'monthly_mean') return undefined;
-    } else if (mode === 'variable_pace') {
-      if (referenceBasis !== 'expected_to_date') return undefined;
-    } else if (referenceBasis !== 'monthly_mean') {
-      return undefined;
+      out.push({
+        label,
+        monthlyMeanCents,
+        annualScenarioCents,
+        realizedCents,
+        referenceBasis,
+        mode,
+        referenceCents,
+        deviationCents,
+        deviation,
+      });
     }
-    out.push({
-      label,
-      monthlyMeanCents,
-      annualScenarioCents,
-      realizedCents,
-      referenceBasis,
-      mode,
-      referenceCents,
-      deviationCents,
-      deviation,
-      ...(referenceKind === 'current'
-        ? {
-            futureRegisteredCents: futureRegisteredCents as number,
-            committedCents: committedCents as number,
-          }
-        : {}),
-    });
   }
   return out;
 }
@@ -737,7 +751,10 @@ export function sanitizeProjectionPayloadV1(input: unknown): ProjectionPayloadV1
     if (!quality) return undefined;
     const summary = sanitizeSummary(raw.summary);
     const comparison = sanitizeComparison(raw.comparison, reference.kind);
-    const categories = sanitizeCategories(raw.categories, reference.kind);
+    const categories =
+      comparison === undefined
+        ? undefined
+        : sanitizeCategories(raw.categories, reference.kind, comparison.referenceBasis);
     if (!summary || !comparison || categories === undefined) return undefined;
     const payload: ProjectionPayloadSuccessV1 = {
       version: PROJECTION_PAYLOAD_VERSION,

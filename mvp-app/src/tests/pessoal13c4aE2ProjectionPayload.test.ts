@@ -7,23 +7,28 @@
 // follow-ups — prova apenas o contrato novo.
 //
 // Prova que:
-//   1. mapeamento full/current: quality 'full', mês corrente, cobertura,
-//      resumo e comparação 'expected_to_date' (união discriminada): esperado
-//      até o dia + futuros + comprometido + fechamento, e categorias com média
-//      + realizado + referência + desvio; sem remaining quando count = 0;
-//   2. mapeamento preliminary → união 'expected_to_date';
+//   1. mapeamento full/current (PESSOAL-13C4A-E3.7): quality 'full', mês
+//      corrente, cobertura, resumo e comparação SEMPRE 'monthly_mean' (mês
+//      INTEIRO contra a média mensal) — a mesma forma do mês passado; só o
+//      reference.kind difere. Categorias com média + realizado + referência +
+//      desvio; sem remaining quando count = 0;
+//   2. mapeamento preliminary → união 'monthly_mean' igualmente;
 //   3. mapeamento full/past: reference.kind 'past', união 'monthly_mean' SEM
 //      expectedToDateCents/futuros/comprometido/fechamento;
 //   4. mapeamento insufficient: só contexto seguro, cobertura, motivo e
 //      realizado — nunca summary/comparação/categorias/remaining;
 //   5. no máximo oito categorias (com comparativos diretos do motor) +
 //      remaining agregado SEM comparativos (o motor não os fornece);
-//   6. fechamento: dia < 7 → null; dia ≥ 7 → inteiro seguro (inclusive 0
-//      com realizado zero);
-//   7. coerência cruzada do sanitizador: current exige 'expected_to_date', past
-//      exige 'monthly_mean'; combinações trocadas ou campos atuais injetados no
-//      passado → undefined;
-//   8. zeros legítimos (inclusive closingProjectionCents 0) são preservados;
+//   6. leitura LEGADA (pré-E3.7): current + 'expected_to_date' exige os QUATRO
+//      campos (expectedToDateCents/futuros/comprometido/fechamento) e categorias
+//      com futureRegisteredCents/committedCents + coerência modo ↔ base antiga.
+//      O mapeador NUNCA gera essa forma — só o sanitizador a lê;
+//   7. coerência cruzada do sanitizador: 'monthly_mean' vale para o mês atual
+//      NOVO e para o passado (campos do legado injetados → undefined);
+//      'expected_to_date' vale somente para o mês atual LEGADO e exige os
+//      quatro campos;
+//   8. zeros legítimos (inclusive closingProjectionCents 0 no legado) são
+//      preservados;
 //   9. NaN/Infinity/não inteiro/inteiro inseguro → undefined;
 //  10. enums fora da allowlist (intent/quality/deviation/referenceBasis/reason)
 //      → undefined;
@@ -45,8 +50,9 @@ import {
   mapProjectionToPayloadV1,
   sanitizeProjectionPayloadV1,
   PROJECTION_LABEL_MAX,
-  type ProjectionPayloadCurrentComparisonV1,
+  type ProjectionPayloadComparisonV1,
   type ProjectionPayloadInsufficientV1,
+  type ProjectionPayloadLegacyCurrentComparisonV1,
   type ProjectionPayloadSuccessV1,
   type ProjectionPayloadV1,
 } from '../../server/finance-ai/projectionPayloadV1';
@@ -204,11 +210,46 @@ function pastPayload(): ProjectionPayloadSuccessV1 {
   return mapProjectionToPayloadV1(r, 'projection_month_comparison') as ProjectionPayloadSuccessV1;
 }
 
-function currentComparison(p: ProjectionPayloadSuccessV1): ProjectionPayloadCurrentComparisonV1 {
-  if (p.comparison.referenceBasis !== 'expected_to_date') {
-    throw new Error('fixture deveria ser comparação do mês atual');
-  }
+function currentComparison(p: ProjectionPayloadSuccessV1): ProjectionPayloadComparisonV1 {
   return p.comparison;
+}
+
+// ============ fixtures LEGADAS (pré-E3.7): leitura apenas ============
+
+function legacyCurrentRaw(): Raw {
+  const base = clonePayload(fullPayload());
+  base.comparison = {
+    deviation: 'above',
+    deviationCents: 46667,
+    referenceBasis: 'expected_to_date',
+    referenceCents: 53333,
+    realizedCents: 100000,
+    expectedToDateCents: 53333,
+    futureRegisteredCents: 0,
+    committedCents: 100000,
+    closingProjectionCents: 187500,
+  };
+  (base.categories as Raw[])[0] = {
+    label: 'Mercado',
+    monthlyMeanCents: 100000,
+    annualScenarioCents: 1200000,
+    realizedCents: 100000,
+    referenceBasis: 'expected_to_date',
+    mode: 'variable_pace',
+    referenceCents: 53333,
+    deviationCents: 46667,
+    deviation: 'above',
+    futureRegisteredCents: 0,
+    committedCents: 100000,
+  };
+  return base;
+}
+
+function legacyCurrentComparison(cmp: ProjectionPayloadComparisonV1): ProjectionPayloadLegacyCurrentComparisonV1 {
+  if (cmp.referenceBasis !== 'expected_to_date') {
+    throw new Error('fixture deveria ser comparação legada do mês atual');
+  }
+  return cmp;
 }
 
 // ============ 1..5. Mapeador único ============
@@ -235,23 +276,15 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       totalBaseCents: 1200000,
     });
     expect(p.comparison).toEqual({
-      deviation: 'above',
-      deviationCents: 46667,
-      referenceBasis: 'expected_to_date',
-      referenceCents: 53333,
+      deviation: 'equal',
+      deviationCents: 0,
+      referenceBasis: 'monthly_mean',
+      referenceCents: 100000,
       realizedCents: 100000,
-      expectedToDateCents: 53333,
-      futureRegisteredCents: 0,
-      committedCents: 100000,
-      closingProjectionCents: 187500,
     });
     expect(Object.keys(p.comparison).sort()).toEqual([
-      'closingProjectionCents',
-      'committedCents',
       'deviation',
       'deviationCents',
-      'expectedToDateCents',
-      'futureRegisteredCents',
       'realizedCents',
       'referenceBasis',
       'referenceCents',
@@ -262,20 +295,16 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       monthlyMeanCents: 100000,
       annualScenarioCents: 1200000,
       realizedCents: 100000,
-      referenceCents: 53333,
-      deviationCents: 46667,
-      deviation: 'above',
-      referenceBasis: 'expected_to_date',
+      referenceCents: 100000,
+      deviationCents: 0,
+      deviation: 'equal',
+      referenceBasis: 'monthly_mean',
       mode: 'variable_pace',
-      futureRegisteredCents: 0,
-      committedCents: 100000,
     });
     expect(Object.keys(p.categories[0]).sort()).toEqual([
       'annualScenarioCents',
-      'committedCents',
       'deviation',
       'deviationCents',
-      'futureRegisteredCents',
       'label',
       'mode',
       'monthlyMeanCents',
@@ -286,7 +315,7 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
     expect('remaining' in p).toBe(false);
   });
 
-  it('2. preliminary: quality preliminary, cobertura de 6 meses e base expected_to_date', () => {
+  it('2. preliminary: quality preliminary, cobertura de 6 meses e base monthly_mean', () => {
     const r = buildProjection(engineInputs.preliminary());
     if (r.status !== 'success') throw new Error('fixture deveria ser success');
     const p = mapProjectionToPayloadV1(r, 'projection_base');
@@ -297,37 +326,34 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
     expect(p.coverage.windowMonths).toBe(12);
     expect(p.reference.month).toBe('2026-09');
     const cmp = currentComparison(p);
-    expect(cmp.referenceBasis).toBe('expected_to_date');
-    expect(cmp.expectedToDateCents).toBe(53333);
-    expect(cmp.referenceCents).toBe(53333);
+    expect(cmp.referenceBasis).toBe('monthly_mean');
+    expect(cmp.referenceCents).toBe(100000);
     expect(cmp.realizedCents).toBe(0);
     expect(cmp.deviation).toBe('below');
-    expect(cmp.deviationCents).toBe(-53333);
-    expect(cmp.closingProjectionCents).toBe(0);
+    expect(cmp.deviationCents).toBe(-100000);
   });
 
-  it('3b. fechamento mapeado do motor: dia 6 → null; dia 7 com realizado zero → 0', () => {
+  it('3b. mês atual novo independe do dia do todayISO (média mensal, sem fechamento)', () => {
     const mk = (input: ProjectionEngineInput) => {
       const r = buildProjection(input);
       if (r.status !== 'success') throw new Error('fixture deveria ser success');
       return mapProjectionToPayloadV1(r, 'projection_base') as ProjectionPayloadSuccessV1;
     };
     const d6 = mk(engineInputs.day6());
-    const cmp6 = currentComparison(d6);
-    expect(d6.reference.kind).toBe('current');
-    expect(cmp6.referenceBasis).toBe('expected_to_date');
-    expect(cmp6.closingProjectionCents).toBeNull();
-    expect('closingProjectionCents' in cmp6).toBe(true);
-    expect(cmp6.expectedToDateCents).toBe(20000);
-    expect(cmp6.futureRegisteredCents).toBe(0);
-    expect(cmp6.committedCents).toBe(0);
-
     const d7 = mk(engineInputs.day7Zero());
+    const cmp6 = currentComparison(d6);
     const cmp7 = currentComparison(d7);
+    expect(d6.reference.kind).toBe('current');
     expect(d7.reference.kind).toBe('current');
-    expect(cmp7.closingProjectionCents).toBe(0);
+    expect(cmp6.referenceBasis).toBe('monthly_mean');
+    expect(cmp7.referenceBasis).toBe('monthly_mean');
+    expect(cmp6.realizedCents).toBe(0);
     expect(cmp7.realizedCents).toBe(0);
-    expect(cmp7.expectedToDateCents).toBe(23333);
+    expect(cmp6.referenceCents).toBe(100000);
+    expect(cmp7.referenceCents).toBe(100000);
+    expect('closingProjectionCents' in cmp6).toBe(false);
+    expect('expectedToDateCents' in cmp6).toBe(false);
+    expect(JSON.stringify(d6)).toBe(JSON.stringify(d7));
   });
 
   it('3. mês passado: reference.kind past e comparação sem futuros/comprometido/fechamento', () => {
@@ -389,10 +415,8 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
     for (const c of p.categories) {
       expect(Object.keys(c).sort()).toEqual([
         'annualScenarioCents',
-        'committedCents',
         'deviation',
         'deviationCents',
-        'futureRegisteredCents',
         'label',
         'mode',
         'monthlyMeanCents',
@@ -403,13 +427,11 @@ describe('PESSOAL-13C4A Fase 4A — mapeador (mapProjectionToPayloadV1)', () => 
       expect(c.monthlyMeanCents).toBe(100000);
       expect(c.annualScenarioCents).toBe(1200000);
       expect(c.realizedCents).toBe(0);
-      expect(c.referenceCents).toBe(53333);
-      expect(c.referenceBasis).toBe('expected_to_date');
+      expect(c.referenceCents).toBe(100000);
+      expect(c.referenceBasis).toBe('monthly_mean');
       expect(c.mode).toBe('variable_pace');
-      expect(c.deviationCents).toBe(-53333);
+      expect(c.deviationCents).toBe(-100000);
       expect(c.deviation).toBe('below');
-      expect(c.futureRegisteredCents).toBe(0);
-      expect(c.committedCents).toBe(0);
     }
     expect(p.remaining).toEqual({
       categoriesCount: 2,
@@ -478,7 +500,7 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     const s = sanitizeProjectionPayloadV1(zeroSuccess);
     expect(s).toBeDefined();
     if (s === undefined || s.status !== 'success') return;
-    const cmp = currentComparison(s);
+    const cmp = legacyCurrentComparison(currentComparison(s));
     expect(s.summary.monthlyMeanCents).toBe(0);
     expect(cmp.realizedCents).toBe(0);
     expect(cmp.closingProjectionCents).toBe(0);
@@ -517,14 +539,27 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     expect(si.realizedCents).toBe(0);
   });
 
-  it('8. coerência cruzada: current exige expected_to_date; past exige monthly_mean', () => {
-    const currentWithMonthlyMean = clonePayload(fullPayload());
-    (currentWithMonthlyMean.comparison as Raw).referenceBasis = 'monthly_mean';
-    expect(sanitizeProjectionPayloadV1(currentWithMonthlyMean)).toBeUndefined();
+  it('8. coerência cruzada: monthly_mean vale para current novo e past; expected_to_date só legacy current', () => {
+    // Mês atual NOVO (mapeado): monthly_mean é aceito e os campos do legado são
+    // injetáveis sem corromper nada (round-trip diagonal).
+    const currentNew = sanitizeProjectionPayloadV1(fullPayload());
+    expect(currentNew).toBeDefined();
+    expect(currentNew).toStrictEqual(fullPayload());
 
+    // Mês passado: monthly_mean aceito; expected_to_date nunca.
+    const pastOk = sanitizeProjectionPayloadV1(pastPayload());
+    expect(pastOk).toBeDefined();
     const pastWithExpectedToDate = clonePayload(pastPayload());
     (pastWithExpectedToDate.comparison as Raw).referenceBasis = 'expected_to_date';
     expect(sanitizeProjectionPayloadV1(pastWithExpectedToDate)).toBeUndefined();
+
+    // Mês atual novo (monthly_mean): campo do legado injetado → undefined.
+    const currentNewWithLegacyField = clonePayload(fullPayload());
+    (currentNewWithLegacyField.comparison as Raw).expectedToDateCents = 53333;
+    expect(sanitizeProjectionPayloadV1(currentNewWithLegacyField)).toBeUndefined();
+
+    // Mês atual LEGADO: expected_to_date com os quatro campos → aceito.
+    expect(sanitizeProjectionPayloadV1(legacyCurrentRaw())).toBeDefined();
   });
 
   it('9. campos exclusivos do mês atual injetados no passado → undefined', () => {
@@ -541,7 +576,7 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     }
   });
 
-  it('10. round-trip/idempotência preservando closingProjectionCents null e 0', () => {
+  it('10. round-trip/idempotência do mês atual novo e da leitura legada (null preservado)', () => {
     const r6 = buildProjection(engineInputs.day6());
     const r7 = buildProjection(engineInputs.day7Zero());
     if (r6.status !== 'success' || r7.status !== 'success') {
@@ -557,11 +592,17 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     expect(s7).toStrictEqual(mapped7);
     if (!s6 || s6.status !== 'success' || !s7 || s7.status !== 'success') return;
     const cmp6 = currentComparison(s6);
-    const cmp7 = currentComparison(s7);
-    expect(cmp6.closingProjectionCents).toBeNull();
-    expect(cmp7.closingProjectionCents).toBe(0);
+    expect(cmp6.referenceBasis).toBe('monthly_mean');
     expect(JSON.stringify(sanitizeProjectionPayloadV1(s6))).toBe(JSON.stringify(s6));
     expect(JSON.stringify(sanitizeProjectionPayloadV1(s7))).toBe(JSON.stringify(s7));
+
+    // Leitura legada: closingProjectionCents null é preservado exatamente.
+    const legacyNull: Raw = legacyCurrentRaw();
+    (legacyNull.comparison as Raw).closingProjectionCents = null;
+    const sLegacy = sanitizeProjectionPayloadV1(legacyNull);
+    expect(sLegacy).toBeDefined();
+    if (sLegacy === undefined || sLegacy.status !== 'success') return;
+    expect(legacyCurrentComparison(currentComparison(sLegacy)).closingProjectionCents).toBeNull();
   });
 
   it('11. NaN/Infinity/não inteiro/inteiro inseguro → undefined', () => {
@@ -722,19 +763,19 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     delete (missingBasis.comparison as Raw).referenceBasis;
     expect(sanitizeProjectionPayloadV1(missingBasis)).toBeUndefined();
 
-    const missingExpectedToDate = clonePayload(fullPayload());
+    const missingExpectedToDate = legacyCurrentRaw();
     delete (missingExpectedToDate.comparison as Raw).expectedToDateCents;
     expect(sanitizeProjectionPayloadV1(missingExpectedToDate)).toBeUndefined();
 
-    const missingFuture = clonePayload(fullPayload());
+    const missingFuture = legacyCurrentRaw();
     delete (missingFuture.comparison as Raw).futureRegisteredCents;
     expect(sanitizeProjectionPayloadV1(missingFuture)).toBeUndefined();
 
-    const missingCommitted = clonePayload(fullPayload());
+    const missingCommitted = legacyCurrentRaw();
     delete (missingCommitted.comparison as Raw).committedCents;
     expect(sanitizeProjectionPayloadV1(missingCommitted)).toBeUndefined();
 
-    const missingClosing = clonePayload(fullPayload());
+    const missingClosing = legacyCurrentRaw();
     delete (missingClosing.comparison as Raw).closingProjectionCents;
     expect(sanitizeProjectionPayloadV1(missingClosing)).toBeUndefined();
 
@@ -742,11 +783,11 @@ describe('PESSOAL-13C4A Fase 4A — sanitizador (sanitizeProjectionPayloadV1)', 
     delete ((missingCategoryRealized.categories as Raw[])[0] as Raw).realizedCents;
     expect(sanitizeProjectionPayloadV1(missingCategoryRealized)).toBeUndefined();
 
-    const missingCategoryFuture = clonePayload(fullPayload());
+    const missingCategoryFuture = legacyCurrentRaw();
     delete ((missingCategoryFuture.categories as Raw[])[0] as Raw).futureRegisteredCents;
     expect(sanitizeProjectionPayloadV1(missingCategoryFuture)).toBeUndefined();
 
-    const missingCategoryCommitted = clonePayload(fullPayload());
+    const missingCategoryCommitted = legacyCurrentRaw();
     delete ((missingCategoryCommitted.categories as Raw[])[0] as Raw).committedCents;
     expect(sanitizeProjectionPayloadV1(missingCategoryCommitted)).toBeUndefined();
 

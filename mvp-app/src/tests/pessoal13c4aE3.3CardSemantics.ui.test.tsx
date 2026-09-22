@@ -4,18 +4,22 @@
 // projeção renderizam a semântica por categoria que o servidor já calculou.
 // O navegador só formata (nunca recalcula média/desvio/fechamento).
 //
-//   1. compromisso fixo (Aluguel, monthly_commitment): "Valor já lançado no
-//      mês", média mensal completa "R$ 1.846,59" e "+R$ 81,21" — NUNCA o
-//      proporcional "R$ 1.292,61", nunca "ritmo";
-//   2. gasto variável (Supermercado, variable_pace): "Referência até hoje
-//      (média proporcional)" "R$ 1.120,91" e "R$ 996,93" abaixo do ritmo;
+// PESSOAL-13C4A-E3.7: a base de comparação é SEMPRE a média mensal completa
+// (monthly_mean), no mês atual e no passado. O MODO da categoria (derivado do
+// rótulo) muda SOMENTE a linguagem, nunca a base — nunca há "ritmo".
+//
+//   1. compromisso fixo (Aluguel, monthly_commitment): "Valor lançado no mês",
+//      "Média mensal histórica" R$ 1.846,59 e "acima da média mensal" +R$ 81,21
+//      — nunca o proporcional R$ 1.292,61, nunca "ritmo";
+//   2. gasto variável (Supermercado, variable_pace): MESMA base — "Total lançado
+//      no mês", "Média mensal histórica" R$ 1.601,30 e "abaixo da média mensal"
+//      R$ 1.477,32 — nunca a referência proporcional R$ 1.120,91;
 //   3. aportes (Investimentos, investment_allocation): rótulos próprios de
 //      aportes e cenário de 12 meses de aportes — nunca gasto/consumo;
 //   4. mês passado (kind past): rótulos genéricos "Realizado no mês" /
 //      "Média histórica" / "Diferença", SEM ritmo e SEM notas por modo;
-//   5. notas: VARIABLE_PACE_NOTICE/MONTHLY_COMMITMENT_NOTICE por modo presente
-//      (deduplicadas) só no mês atual; CLOSING_NOTICE apenas em
-//      projection_current_month.
+//   5. notas: apenas CURRENT_CHANGE_NOTICE no mês atual (deduplicada) para
+//      categorias e para projection_current_month — nunca notas por modo.
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { ProjectionCards } from '../components/ProjectionCards';
@@ -26,12 +30,7 @@ import type {
   ProjectionPayloadSuccessV1,
 } from '../../server/finance-ai/projectionPayloadV1';
 
-const VARIABLE_PACE_NOTICE =
-  'A referência até hoje compara o realizado com a parcela da média histórica correspondente aos dias já transcorridos.';
-const MONTHLY_COMMITMENT_NOTICE =
-  'Esta categoria costuma ser paga em uma ou poucas datas. Por isso, a comparação usa a média mensal completa, e não uma distribuição diária.';
-const CLOSING_NOTICE =
-  'O fechamento soma o ritmo do realizado aos lançamentos futuros já registrados e pode oscilar quando contas mensais são pagas no início do mês.';
+const CURRENT_CHANGE_NOTICE = 'Novos lançamentos ainda podem alterar o total do mês.';
 
 let originalActEnv: unknown;
 
@@ -118,17 +117,13 @@ function success(parts: {
 const CURRENT_COMPARISON = {
   deviation: 'below' as const,
   deviationCents: -36174,
-  referenceBasis: 'expected_to_date' as const,
+  referenceBasis: 'monthly_mean' as const,
   referenceCents: 241352,
   realizedCents: 205178,
-  expectedToDateCents: 241352,
-  futureRegisteredCents: 0,
-  committedCents: 205178,
-  closingProjectionCents: 293111,
 };
 
-describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
-  it('Aluguel (monthly_commitment) usa a média mensal completa e Supermercado (variable_pace) a referência proporcional', () => {
+describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria (base sempre monthly_mean — E3.7)', () => {
+  it('Aluguel (monthly_commitment) e Supermercado (variable_pace) usam a MESMA média mensal completa', () => {
     const p = success({
       intent: 'projection_categories',
       kind: 'current',
@@ -142,11 +137,11 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
           deviationCents: 8121,
           deviation: 'above',
         }),
-        cat('Supermercado', 'variable_pace', 'expected_to_date', {
+        cat('Supermercado', 'variable_pace', 'monthly_mean', {
           monthlyMeanCents: 160130,
           realizedCents: 12398,
-          referenceCents: 112091,
-          deviationCents: -99693,
+          referenceCents: 160130,
+          deviationCents: -147732,
           deviation: 'below',
         }),
       ],
@@ -154,29 +149,32 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
     render(<ProjectionCards projection={p} />);
 
     // Aluguel: rótulos de compromisso fixo + valores da média (nunca o proporcional).
-    expect(screen.getByText('Valor já lançado no mês')).toBeDefined();
-    expect(screen.getAllByText('Média mensal histórica').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Diferença da média mensal até agora')).toBeDefined();
+    expect(screen.getByText('Valor lançado no mês')).toBeDefined();
+    expect(screen.getAllByText('Média mensal histórica').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Diferença para a média mensal').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('acima da média mensal')).toBeDefined();
     expect(screen.getByText(/1\.927,80/)).toBeDefined();
     expect(screen.getByText(/1\.846,59/)).toBeDefined();
     expect(screen.getByText(/81,21/)).toBeDefined();
     expect(screen.queryByText(/1\.292,61/)).toBeNull();
 
-    // Supermercado: rótulos de ritmo proporcional.
-    expect(screen.getAllByText('Realizado até hoje').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Referência até hoje (média proporcional)')).toBeDefined();
-    expect(screen.getByText('Diferença no ritmo até hoje')).toBeDefined();
-    expect(screen.getByText('abaixo do ritmo até hoje')).toBeDefined();
-    expect(screen.getByText(/1\.120,91/)).toBeDefined();
-    expect(screen.getByText(/123,98/)).toBeDefined();
-    expect(screen.getByText(/996,93/)).toBeDefined();
+    // Supermercado: MESMA base — nenhum rótulo proporcional/ritmo.
+    expect(screen.getByText('Total lançado no mês')).toBeDefined();
     expect(screen.getByText(/1\.601,30/)).toBeDefined();
+    expect(screen.getByText(/123,98/)).toBeDefined();
+    expect(screen.getByText(/1\.477,32/)).toBeDefined();
+    expect(screen.getByText('abaixo da média mensal')).toBeDefined();
+    expect(screen.queryByText('Referência até hoje (média proporcional)')).toBeNull();
+    expect(screen.queryByText('Realizado até hoje')).toBeNull();
+    expect(screen.queryByText(/ritmo/)).toBeNull();
+    expect(screen.queryByText(/até hoje/)).toBeNull();
 
-    // Ambas as notas por modo, deduplicadas; fechamento NÃO cabe em categorias.
-    expect(screen.getByText(MONTHLY_COMMITMENT_NOTICE)).toBeDefined();
-    expect(screen.getByText(VARIABLE_PACE_NOTICE)).toBeDefined();
-    expect(screen.queryByText(CLOSING_NOTICE)).toBeNull();
+    // Apenas o aviso unificado do mês atual (deduplicado); sem notas por modo,
+    // sem fechamento em categorias.
+    expect(screen.getAllByText(CURRENT_CHANGE_NOTICE).length).toBe(1);
+    expect(screen.queryByText(/distribuição diária/)).toBeNull();
+    expect(screen.queryByText(/dias já transcorridos/)).toBeNull();
+    expect(screen.queryByText(/conta do fechamento/)).toBeNull();
   });
 
   it('Investimentos (investment_allocation) usa rótulos de aportes e o cenário de 12 meses de aportes', () => {
@@ -196,18 +194,17 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
       ],
     });
     render(<ProjectionCards projection={p} />);
-    expect(screen.getByText('Aportes já lançados no mês')).toBeDefined();
+    expect(screen.getByText('Aportes lançados no mês')).toBeDefined();
     expect(screen.getByText('Média mensal histórica de aportes')).toBeDefined();
-    expect(screen.getByText('Diferença da média de aportes')).toBeDefined();
+    expect(screen.getByText('Diferença para a média de aportes')).toBeDefined();
     expect(screen.getByText('acima da média de aportes')).toBeDefined();
     expect(screen.getByText(/2\.050,00/)).toBeDefined();
     expect(
       screen.getByText('Cenário se a média de aportes se repetir por 12 meses'),
     ).toBeDefined();
-    expect(screen.queryByText('Realizado até hoje')).toBeNull();
+    expect(screen.queryByText('Total lançado no mês')).toBeNull();
     expect(screen.queryByText(/Cenário se a média se repetir por 12 meses/)).toBeNull();
-    expect(screen.queryByText(VARIABLE_PACE_NOTICE)).toBeNull();
-    expect(screen.queryByText(MONTHLY_COMMITMENT_NOTICE)).toBeNull();
+    expect(screen.queryByText(/ritmo/)).toBeNull();
   });
 
   it('mês passado: rótulos genéricos (Realizado no mês / Média histórica / Diferença), sem ritmo e sem notas', () => {
@@ -237,16 +234,14 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
     expect(screen.getAllByText('Média histórica').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Diferença')).toBeDefined();
     expect(screen.getByText('abaixo da referência')).toBeDefined();
-    expect(screen.queryByText('Valor já lançado no mês')).toBeNull();
-    expect(screen.queryByText('Diferença da média mensal até agora')).toBeNull();
+    expect(screen.queryByText('Valor lançado no mês')).toBeNull();
+    expect(screen.queryByText('Diferença para a média mensal')).toBeNull();
     expect(screen.queryByText(/ritmo/)).toBeNull();
     expect(screen.queryByText(/até hoje/)).toBeNull();
-    expect(screen.queryByText(VARIABLE_PACE_NOTICE)).toBeNull();
-    expect(screen.queryByText(MONTHLY_COMMITMENT_NOTICE)).toBeNull();
-    expect(screen.queryByText(CLOSING_NOTICE)).toBeNull();
+    expect(screen.queryByText(CURRENT_CHANGE_NOTICE)).toBeNull();
   });
 
-  it('fechamento do mês atual (projection_current_month) exibe o CLOSING_NOTICE', () => {
+  it('fechamento do mês atual (projection_current_month) exibe a forma unificada e o aviso de alteração', () => {
     const p = success({
       intent: 'projection_current_month',
       kind: 'current',
@@ -255,8 +250,13 @@ describe('PESSOAL-13C4A-E3.3 — cards por modo de categoria', () => {
       comparison: CURRENT_COMPARISON,
     });
     render(<ProjectionCards projection={p} />);
-    expect(screen.getByText('Realizado até hoje')).toBeDefined();
-    expect(screen.getByText('Esperado até hoje')).toBeDefined();
-    expect(screen.getByText(CLOSING_NOTICE)).toBeDefined();
+    expect(screen.getByText('Realizado no mês')).toBeDefined();
+    expect(screen.getByText('Média mensal histórica')).toBeDefined();
+    expect(screen.getByText('Diferença')).toBeDefined();
+    expect(screen.getByText('abaixo da média mensal')).toBeDefined();
+    expect(screen.getByText(CURRENT_CHANGE_NOTICE)).toBeDefined();
+    expect(screen.queryByText('Realizado até hoje')).toBeNull();
+    expect(screen.queryByText('Esperado até hoje')).toBeNull();
+    expect(screen.queryByText('Fechamento estimado')).toBeNull();
   });
 });

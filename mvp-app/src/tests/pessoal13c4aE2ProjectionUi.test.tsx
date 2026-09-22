@@ -112,14 +112,10 @@ function success(over: Partial<ProjectionPayloadSuccessV1> = {}): ProjectionPayl
     summary: { monthlyMeanCents: 100000, annualScenarioCents: 1200000, totalBaseCents: 1200000 },
     comparison: {
       deviation: 'above',
-      deviationCents: 5000,
-      referenceBasis: 'expected_to_date',
+      deviationCents: 30645,
+      referenceBasis: 'monthly_mean',
       referenceCents: 19355,
       realizedCents: 50000,
-      expectedToDateCents: 19355,
-      futureRegisteredCents: 30000,
-      committedCents: 80000,
-      closingProjectionCents: 155000,
     },
     categories: [],
     ...over,
@@ -132,7 +128,7 @@ function cat(label: string, over: Partial<ProjectionPayloadCategoryV1> = {}): Pr
     monthlyMeanCents: 10000,
     annualScenarioCents: 120000,
     realizedCents: 9000,
-    referenceBasis: 'expected_to_date',
+    referenceBasis: 'monthly_mean',
     mode: 'variable_pace',
     referenceCents: 10000,
     deviationCents: -1000,
@@ -217,7 +213,7 @@ describe('PESSOAL-13C4A-E2 — cards gerais por intent (somente valores do paylo
     expect(await screen.findByText('Base preliminar · 7/12 meses')).toBeDefined();
   });
 
-  it('current com fechamento: card Mês atual com as cinco linhas do payload', async () => {
+  it('current: card Mês atual (mês inteiro vs média mensal), sem linhas de ritmo/fechamento', async () => {
     const projection = success({ intent: 'projection_current_month' });
     vi.mocked(chatApi.listMessages).mockResolvedValue({
       messages: [
@@ -229,32 +225,31 @@ describe('PESSOAL-13C4A-E2 — cards gerais por intent (somente valores do paylo
     render(<FinanceAiSection />);
 
     expect(await screen.findByText('Mês atual')).toBeDefined();
-    expect(screen.getByText('Realizado até hoje')).toBeDefined();
+    expect(screen.getByText('Realizado no mês')).toBeDefined();
     expect(screen.getByText(brl(50000))).toBeDefined();
-    expect(screen.getByText('Esperado até hoje')).toBeDefined();
+    expect(screen.getByText('Média mensal histórica')).toBeDefined();
     expect(screen.getByText(brl(19355))).toBeDefined();
-    expect(screen.getByText('Futuros registrados')).toBeDefined();
-    expect(screen.getByText(brl(30000))).toBeDefined();
-    expect(screen.getByText('Comprometido')).toBeDefined();
-    expect(screen.getByText(brl(80000))).toBeDefined();
-    expect(screen.getByText('Fechamento estimado')).toBeDefined();
-    expect(screen.getByText(brl(155000))).toBeDefined();
+    expect(screen.getByText('Diferença')).toBeDefined();
+    expect(screen.getByText('acima da média mensal')).toBeDefined();
+    expect(screen.getByText('Novos lançamentos ainda podem alterar o total do mês.')).toBeDefined();
+    expect(screen.queryByText('Realizado até hoje')).toBeNull();
+    expect(screen.queryByText('Esperado até hoje')).toBeNull();
+    expect(screen.queryByText('Futuros registrados')).toBeNull();
+    expect(screen.queryByText('Comprometido')).toBeNull();
+    expect(screen.queryByText('Fechamento estimado')).toBeNull();
+    expect(screen.queryByText('Disponível a partir do 7º dia')).toBeNull();
     expect(screen.queryByText('Visão geral')).toBeNull();
   });
 
-  it('current antes do dia 7: fechamento null → "Disponível a partir do 7º dia"', async () => {
+  it('current: não há aviso de 7º dia nem "Disponível a partir do 7º dia"', async () => {
     const projection = success({
       intent: 'projection_current_month',
       comparison: {
         deviation: 'above',
         deviationCents: 30645,
-        referenceBasis: 'expected_to_date',
+        referenceBasis: 'monthly_mean',
         referenceCents: 19355,
         realizedCents: 50000,
-        expectedToDateCents: 19355,
-        futureRegisteredCents: 30000,
-        committedCents: 80000,
-        closingProjectionCents: null,
       },
     });
     vi.mocked(chatApi.listMessages).mockResolvedValue({
@@ -266,22 +261,21 @@ describe('PESSOAL-13C4A-E2 — cards gerais por intent (somente valores do paylo
 
     render(<FinanceAiSection />);
 
-    expect(await screen.findByText('Disponível a partir do 7º dia')).toBeDefined();
+    expect(await screen.findByText('Mês atual')).toBeDefined();
+    expect(screen.getByText('Realizado no mês')).toBeDefined();
+    expect(screen.queryByText('Disponível a partir do 7º dia')).toBeNull();
+    expect(screen.queryByText('7º dia')).toBeNull();
   });
 
-  it('zero legítimo: fechamento 0 mostra "R$ 0,00" (e nunca o aviso do 7º dia)', async () => {
+  it('zero legítimo: valores zero mostram "R$ 0,00" (e nunca o aviso do 7º dia)', async () => {
     const projection = success({
       intent: 'projection_current_month',
       comparison: {
         deviation: 'equal',
         deviationCents: 0,
-        referenceBasis: 'expected_to_date',
+        referenceBasis: 'monthly_mean',
         referenceCents: 0,
         realizedCents: 0,
-        expectedToDateCents: 0,
-        futureRegisteredCents: 0,
-        committedCents: 0,
-        closingProjectionCents: 0,
       },
     });
     vi.mocked(chatApi.listMessages).mockResolvedValue({
@@ -294,7 +288,7 @@ describe('PESSOAL-13C4A-E2 — cards gerais por intent (somente valores do paylo
     render(<FinanceAiSection />);
 
     expect(await screen.findByText('Mês atual')).toBeDefined();
-    expect(screen.getAllByText(brl(0)).length).toBeGreaterThanOrEqual(5);
+    expect(screen.getAllByText(brl(0)).length).toBeGreaterThanOrEqual(3);
     expect(screen.queryByText('Disponível a partir do 7º dia')).toBeNull();
   });
 
@@ -406,13 +400,16 @@ describe('PESSOAL-13C4A-E2 — categorias, remaining e insufficient', () => {
 
     expect(await screen.findByText('Categoria 1')).toBeDefined();
     expect(screen.getByText('Categoria 8')).toBeDefined();
-    expect(screen.getAllByText('Referência até hoje (média proporcional)').length).toBe(8);
-    expect(screen.getAllByText('Realizado até hoje').length).toBe(8);
+    expect(screen.getAllByText('Total lançado no mês').length).toBe(8);
     expect(screen.getAllByText('Média mensal histórica').length).toBe(9);
     expect(screen.getAllByText('Cenário se a média se repetir por 12 meses').length).toBe(9);
+    expect(screen.getAllByText('abaixo da média mensal').length).toBe(8);
+    expect(screen.getByText('Novos lançamentos ainda podem alterar o total do mês.')).toBeDefined();
     expect(screen.getByText('Outras 4 categorias')).toBeDefined();
     expect(screen.getByText(brl(40000))).toBeDefined();
     expect(screen.getByText(brl(480000))).toBeDefined();
+    expect(screen.queryByText('Referência até hoje (média proporcional)')).toBeNull();
+    expect(screen.queryByText('Realizado até hoje')).toBeNull();
     expect(screen.queryByText('Visão geral')).toBeNull();
     expect(screen.queryByText('Mês atual')).toBeNull();
   });

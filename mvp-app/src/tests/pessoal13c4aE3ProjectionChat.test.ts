@@ -577,7 +577,10 @@ describe('PESSOAL-13C4A-E3 — contexto de projeção é persistido e reutilizad
     expect(p3.reference).toEqual({ month: '2026-08', kind: 'current' });
     expect(p3.lens).toEqual({ label: 'Mercado' });
     expect(p3.comparison).toBeDefined();
-    expect(body3.answer as string).toContain('realizado até hoje');
+    expect(body3.answer as string).toContain('contra a média mensal de');
+    expect(body3.answer as string).toContain('igual à média mensal');
+    expect(body3.answer as string).toContain('Novos lançamentos ainda podem alterar o total do mês.');
+    expect(body3.answer as string).not.toContain('realizado até hoje');
 
     const ctx3 = c.state.chat_conversations[0].context as {
       projection?: { intent?: string; lensKind?: string; lensLabel?: string };

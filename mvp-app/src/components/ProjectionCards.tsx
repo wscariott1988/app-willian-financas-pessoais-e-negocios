@@ -40,44 +40,52 @@ function DirIcon({ d }: { d: ProjectionPayloadDeviation }) {
 }
 
 /**
- * Rótulos e teses de direção de UMA categoria (PESSOAL-13C4A-E3.3), derivados
- * do modo de card e do tipo de referência. Mês passado é sempre genérico;
- * mês atual diferencia variável (ritmo proporcional), compromisso fixo
- * (média mensal completa) e alocação patrimonial (média de aportes).
+ * Rótulos e teses de direção de UMA categoria (PESSOAL-13C4A-E3.3 + E3.7).
+ * O modo de card apenas escolhe a LINGUAGEM; a base de comparação é SEMPRE a
+ * média mensal completa (mês atual e passado) — nunca há referência
+ * proporcional/ritmo até o dia.
  */
 function categoryDirection(
   kind: ProjectionPayloadReferenceKind,
   mode: ProjectionPayloadCategoryMode,
-): { row: string; above: string; below: string; equal: string } {
+): { row: string; above: string; below: string; equal: string; referenceLabel: string; annualLabel: string } {
   if (kind === 'past') {
     return {
       row: 'Diferença',
       above: 'acima da referência',
       below: 'abaixo da referência',
       equal: 'igual à referência',
+      referenceLabel: 'Média histórica',
+      annualLabel: 'Cenário se a média se repetir por 12 meses',
     };
   }
   if (mode === 'monthly_commitment') {
     return {
-      row: 'Diferença da média mensal até agora',
+      row: 'Diferença para a média mensal',
       above: 'acima da média mensal',
       below: 'abaixo da média mensal',
       equal: 'igual à média mensal',
+      referenceLabel: 'Média mensal histórica',
+      annualLabel: 'Cenário se a média se repetir por 12 meses',
     };
   }
   if (mode === 'investment_allocation') {
     return {
-      row: 'Diferença da média de aportes',
+      row: 'Diferença para a média de aportes',
       above: 'acima da média de aportes',
       below: 'abaixo da média de aportes',
       equal: 'igual à média de aportes',
+      referenceLabel: 'Média mensal histórica de aportes',
+      annualLabel: 'Cenário se a média de aportes se repetir por 12 meses',
     };
   }
   return {
-    row: 'Diferença no ritmo até hoje',
-    above: 'acima do ritmo até hoje',
-    below: 'abaixo do ritmo até hoje',
-    equal: 'no ritmo esperado até hoje',
+    row: 'Diferença para a média mensal',
+    above: 'acima da média mensal',
+    below: 'abaixo da média mensal',
+    equal: 'igual à média mensal',
+    referenceLabel: 'Média mensal histórica',
+    annualLabel: 'Cenário se a média se repetir por 12 meses',
   };
 }
 
@@ -164,45 +172,46 @@ function SummaryCard({ projection }: { projection: ProjectionPayloadSuccessV1 })
 
 function MonthCard({ projection }: { projection: ProjectionPayloadSuccessV1 }) {
   const c = projection.comparison;
-  if (c.referenceBasis === 'expected_to_date') {
+  if (projection.reference.kind === 'past') {
     return (
       <li>
         <article className="finance-ai-proj-card">
-          <h3 className="finance-ai-card-title">Mês atual</h3>
+          <h3 className="finance-ai-card-title">
+            Mês analisado · {monthNameOf(projection.reference.month)}
+          </h3>
           <dl className="finance-ai-card-dl">
-            <Row label="Realizado até hoje" value={brlCents(c.realizedCents)} />
-            <Row label="Esperado até hoje" value={brlCents(c.expectedToDateCents)} />
-            <Row label="Futuros registrados" value={brlCents(c.futureRegisteredCents)} />
-            <Row label="Comprometido" value={brlCents(c.committedCents)} />
-            <Row
-              label="Fechamento estimado"
-              value={
-                c.closingProjectionCents === null
-                  ? 'Disponível a partir do 7º dia'
-                  : brlCents(c.closingProjectionCents)
-              }
+            <Row label="Realizado" value={brlCents(c.realizedCents)} />
+            <Row label="Média histórica" value={brlCents(c.referenceCents)} />
+            <DirectionRow
+              deviation={c.deviation}
+              deviationCents={c.deviationCents}
+              rowLabel="Diferença"
+              above="acima da referência"
+              below="abaixo da referência"
+              equal="igual à referência"
             />
           </dl>
         </article>
       </li>
     );
   }
+  // PESSOAL-13C4A-E3.7: o mês atual usa a MESMA forma do passado — realizado do
+  // mês inteiro, média mensal histórica e diferença. Nunca ritmo/futuros/
+  // fechamento. Payloads legados (expected_to_date) também renderizam aqui.
   return (
     <li>
       <article className="finance-ai-proj-card">
-        <h3 className="finance-ai-card-title">
-          Mês analisado · {monthNameOf(projection.reference.month)}
-        </h3>
+        <h3 className="finance-ai-card-title">Mês atual</h3>
         <dl className="finance-ai-card-dl">
-          <Row label="Realizado" value={brlCents(c.realizedCents)} />
-          <Row label="Média histórica" value={brlCents(c.referenceCents)} />
+          <Row label="Realizado no mês" value={brlCents(c.realizedCents)} />
+          <Row label="Média mensal histórica" value={brlCents(c.referenceCents)} />
           <DirectionRow
             deviation={c.deviation}
             deviationCents={c.deviationCents}
             rowLabel="Diferença"
-            above="acima da referência"
-            below="abaixo da referência"
-            equal="igual à referência"
+            above="acima da média mensal"
+            below="abaixo da média mensal"
+            equal="igual à média mensal"
           />
         </dl>
       </article>
@@ -243,76 +252,22 @@ function CategoryCard({
       </li>
     );
   }
-  // Mês atual: "já lançado" (realizado + futuros) para compromissos e aportes;
-  // variável mostra realizado, futuros e total já lançado separadamente.
-  const committed = category.committedCents ?? category.realizedCents;
-  const future = category.futureRegisteredCents ?? 0;
-  if (category.mode === 'monthly_commitment') {
-    return (
-      <li>
-        <article className="finance-ai-proj-card finance-ai-proj-category">
-          <h3 className="finance-ai-card-title">{category.label}</h3>
-          <dl className="finance-ai-card-dl">
-            <Row label="Valor já lançado no mês" value={brlCents(committed)} />
-            {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
-            <Row label="Média mensal histórica" value={brlCents(category.referenceCents)} />
-            <DirectionRow
-              deviation={category.deviation}
-              deviationCents={category.deviationCents}
-              rowLabel={dir.row}
-              above={dir.above}
-              below={dir.below}
-              equal={dir.equal}
-            />
-            <Row
-              label="Cenário se a média se repetir por 12 meses"
-              value={brlCents(category.annualScenarioCents)}
-            />
-          </dl>
-        </article>
-      </li>
-    );
-  }
-  if (category.mode === 'investment_allocation') {
-    return (
-      <li>
-        <article className="finance-ai-proj-card finance-ai-proj-category">
-          <h3 className="finance-ai-card-title">{category.label}</h3>
-          <dl className="finance-ai-card-dl">
-            <Row label="Aportes já lançados no mês" value={brlCents(committed)} />
-            {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
-            <Row
-              label="Média mensal histórica de aportes"
-              value={brlCents(category.referenceCents)}
-            />
-            <DirectionRow
-              deviation={category.deviation}
-              deviationCents={category.deviationCents}
-              rowLabel={dir.row}
-              above={dir.above}
-              below={dir.below}
-              equal={dir.equal}
-            />
-            <Row
-              label="Cenário se a média de aportes se repetir por 12 meses"
-              value={brlCents(category.annualScenarioCents)}
-            />
-          </dl>
-        </article>
-      </li>
-    );
-  }
-  // variable_pace (rodada variável do mês atual): referência proporcional.
+  // Mês atual (PESSOAL-13C4A-E3.7): MESMA forma do mês passado — realizado do
+  // mês inteiro, média mensal histórica e diferença. O modo muda só a
+  // linguagem. Nunca futuros/comprometido/ritmo/fechamento.
+  const realizedLabel =
+    category.mode === 'monthly_commitment'
+      ? 'Valor lançado no mês'
+      : category.mode === 'investment_allocation'
+        ? 'Aportes lançados no mês'
+        : 'Total lançado no mês';
   return (
     <li>
       <article className="finance-ai-proj-card finance-ai-proj-category">
         <h3 className="finance-ai-card-title">{category.label}</h3>
         <dl className="finance-ai-card-dl">
-          <Row label="Realizado até hoje" value={brlCents(category.realizedCents)} />
-          <Row
-            label="Referência até hoje (média proporcional)"
-            value={brlCents(category.referenceCents)}
-          />
+          <Row label={realizedLabel} value={brlCents(category.realizedCents)} />
+          <Row label={dir.referenceLabel} value={brlCents(category.referenceCents)} />
           <DirectionRow
             deviation={category.deviation}
             deviationCents={category.deviationCents}
@@ -321,13 +276,7 @@ function CategoryCard({
             below={dir.below}
             equal={dir.equal}
           />
-          {future > 0 && <Row label="Futuros registrados" value={brlCents(future)} />}
-          {future > 0 && <Row label="Total já lançado no mês" value={brlCents(committed)} />}
-          <Row label="Média mensal histórica" value={brlCents(category.monthlyMeanCents)} />
-          <Row
-            label="Cenário se a média se repetir por 12 meses"
-            value={brlCents(category.annualScenarioCents)}
-          />
+          <Row label={dir.annualLabel} value={brlCents(category.annualScenarioCents)} />
         </dl>
       </article>
     </li>
@@ -353,23 +302,16 @@ function RemainingCard({ p }: { p: ProjectionPayloadSuccessV1 }) {
   );
 }
 
-const VARIABLE_PACE_NOTICE =
-  'A referência até hoje compara o realizado com a parcela da média histórica correspondente aos dias já transcorridos.';
+// PESSOAL-13C4A-E3.7: aviso curto do mês atual — o total observado pode
+// mudar enquanto novos lançamentos do mês forem registrados.
+const CURRENT_CHANGE_NOTICE =
+  'Novos lançamentos ainda podem alterar o total do mês.';
 
-const MONTHLY_COMMITMENT_NOTICE =
-  'Esta categoria costuma ser paga em uma ou poucas datas. Por isso, a comparação usa a média mensal completa, e não uma distribuição diária.';
-
-const CLOSING_NOTICE =
-  'O fechamento soma o ritmo do realizado aos lançamentos futuros já registrados e pode oscilar quando contas mensais são pagas no início do mês.';
-
-/** Notas por MODO de card presentes na resposta atual (deduplicadas). */
+/** Notas presentes na resposta atual (deduplicadas). */
 function categoryNotes(p: ProjectionPayloadSuccessV1): string[] {
   if (p.reference.kind !== 'current') return [];
   const notes: string[] = [];
-  if (p.categories.some((c) => c.mode === 'variable_pace')) notes.push(VARIABLE_PACE_NOTICE);
-  if (p.categories.some((c) => c.mode === 'monthly_commitment')) {
-    notes.push(MONTHLY_COMMITMENT_NOTICE);
-  }
+  if (p.categories.length > 0) notes.push(CURRENT_CHANGE_NOTICE);
   return notes;
 }
 
@@ -410,7 +352,7 @@ function SuccessCards({ projection }: { projection: ProjectionPayloadSuccessV1 }
       </ul>
       {projection.intent === 'projection_current_month' && (
         <p className="finance-ai-notice" role="note">
-          {CLOSING_NOTICE}
+          {CURRENT_CHANGE_NOTICE}
         </p>
       )}
     </>

@@ -117,13 +117,11 @@ describe('PESSOAL-13C4A-E1 — qualidade pela cobertura', () => {
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
     expect(r.comparison.referenceMonth).toEqual({ year: 2026, month: 9 });
+    // PESSOAL-13C4A-E3.7: o mês atual compara o MÊS INTEIRO contra a média.
     expect(r.comparison.realizedCents).toBe(100000);
-    expect(r.comparison.expectedToDateCents).toBe(53333);
-    expect(r.comparison.futureCents).toBe(0);
-    expect(r.comparison.committedCents).toBe(100000);
-    expect(r.comparison.closingProjectionCents).toBe(187500);
-    expect(r.comparison.deviationCents).toBe(46667);
-    expect(r.comparison.deviation).toBe('above');
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(0);
+    expect(r.comparison.deviation).toBe('equal');
   });
 
   it('2. 6 meses cobertos → preliminary', () => {
@@ -420,10 +418,10 @@ describe('PESSOAL-13C4A-E1 — filtros canônicos', () => {
   });
 });
 
-// ============ 18..21. Mês atual: realizado, futuro e ritmo ============
+// ============ 18..21. Mês atual: mês inteiro vs média mensal ============
 
-describe('PESSOAL-13C4A-E1 — mês atual', () => {
-  it('18. Futuro considera somente expense ativa', () => {
+describe('PESSOAL-13C4A-E1 — mês atual (PESSOAL-13C4A-E3.7)', () => {
+  it('18. Mês atual soma o mês inteiro; somente expense ativa entra', () => {
     const input: ProjectionEngineInput = {
       todayISO: TODAY,
       transactions: [
@@ -441,12 +439,14 @@ describe('PESSOAL-13C4A-E1 — mês atual', () => {
     if (r.status !== 'success') return;
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
-    expect(r.comparison.realizedCents).toBe(1000);
-    expect(r.comparison.futureCents).toBe(50000);
-    expect(r.comparison.committedCents).toBe(51000);
+    // Lançamento de 09-20 (após o todayISO 09-16) entra no total do mês.
+    expect(r.comparison.realizedCents).toBe(51000);
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(-49000);
+    expect(r.comparison.deviation).toBe('below');
   });
 
-  it('19. Futuro separado do realizado', () => {
+  it('19. Mês inteiro independe do dia do todayISO', () => {
     const input: ProjectionEngineInput = {
       todayISO: TODAY,
       transactions: [
@@ -461,14 +461,15 @@ describe('PESSOAL-13C4A-E1 — mês atual', () => {
     if (r.status !== 'success') return;
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
-    expect(r.comparison.realizedCents).toBe(100000);
-    expect(r.comparison.futureCents).toBe(50000);
-    expect(r.comparison.committedCents).toBe(150000);
-    expect(r.comparison.committedCents).not.toBe(r.comparison.realizedCents);
-    expect(r.comparison.expectedToDateCents).toBe(53333);
+    expect(r.comparison.realizedCents).toBe(150000);
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(50000);
+    expect(r.comparison.deviation).toBe('above');
+    expect('expectedToDateCents' in r.comparison).toBe(false);
+    expect('closingProjectionCents' in r.comparison).toBe(false);
   });
 
-  it('20. Ritmo ausente antes do 7º dia', () => {
+  it('20. Mês atual em 05-09: total do mês inteiro, sem proração', () => {
     const input: ProjectionEngineInput = {
       todayISO: '2026-09-05',
       transactions: [
@@ -482,12 +483,15 @@ describe('PESSOAL-13C4A-E1 — mês atual', () => {
     if (r.status !== 'success') return;
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
-    expect(r.comparison.closingProjectionCents).toBeNull();
-    expect(r.comparison.expectedToDateCents).toBe(16667);
     expect(r.comparison.realizedCents).toBe(100000);
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(0);
+    expect(r.comparison.deviation).toBe('equal');
+    expect('closingProjectionCents' in r.comparison).toBe(false);
+    expect('expectedToDateCents' in r.comparison).toBe(false);
   });
 
-  it('21. Ritmo presente a partir do 7º dia', () => {
+  it('21. Mês atual em 07-09: mesmo saldo, comparação vs média mensal', () => {
     const input: ProjectionEngineInput = {
       todayISO: '2026-09-07',
       transactions: [
@@ -501,9 +505,10 @@ describe('PESSOAL-13C4A-E1 — mês atual', () => {
     if (r.status !== 'success') return;
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
-    expect(r.comparison.closingProjectionCents).toBe(300000);
-    expect(r.comparison.expectedToDateCents).toBe(23333);
     expect(r.comparison.realizedCents).toBe(70000);
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(-30000);
+    expect(r.comparison.deviation).toBe('below');
   });
 });
 
@@ -672,8 +677,9 @@ describe('PESSOAL-13C4A-E1 — determinismo e insuficiência', () => {
     expect(r.summary.annualScenarioCents).toBe(999996);
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
-    expect(r.comparison.expectedToDateCents).toBe(44444);
-    expect(r.comparison.closingProjectionCents).toBe(56250);
+    expect(r.comparison.realizedCents).toBe(30000);
+    expect(r.comparison.referenceCents).toBe(83333);
+    expect(r.comparison.deviationCents).toBe(-53333);
     const first = JSON.stringify(r);
     const second = JSON.stringify(buildProjection(input));
     expect(second).toBe(first);
@@ -881,8 +887,8 @@ describe('PESSOAL-13C4A-E1 — inputs profundamente congelados não são modific
   });
 });
 
-describe('PESSOAL-13C4A-E1 — mês atual no dia ≥ 7 e realizado zero retorna 0, não null', () => {
-  it('realizado zero no 7º dia+ → closingProjectionCents é 0, não null', () => {
+describe('PESSOAL-13C4A-E1 — mês atual sem lançamentos retorna 0, não null', () => {
+  it('realizado zero no mês atual → realizedCents 0 vs média 100000 (below)', () => {
     const r = buildProjection({
       todayISO: '2026-09-07',
       transactions: monthlyExpenses(FULL_12, AUG_2026, 100000),
@@ -893,10 +899,10 @@ describe('PESSOAL-13C4A-E1 — mês atual no dia ≥ 7 e realizado zero retorna 
     expect(r.comparison.kind).toBe('current');
     if (r.comparison.kind !== 'current') return;
     expect(r.comparison.realizedCents).toBe(0);
-    expect(r.comparison.futureCents).toBe(0);
-    expect(r.comparison.committedCents).toBe(0);
-    expect(r.comparison.closingProjectionCents).toBe(0);
-    expect(r.comparison.closingProjectionCents).not.toBeNull();
+    expect(r.comparison.referenceCents).toBe(100000);
+    expect(r.comparison.deviationCents).toBe(-100000);
+    expect(r.comparison.deviation).toBe('below');
+    expect(r.comparison.referenceCents).not.toBeNull();
   });
 });
 
