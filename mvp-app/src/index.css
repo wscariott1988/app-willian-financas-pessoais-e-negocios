@@ -3998,6 +3998,40 @@ button.period-range-custom {
   background: var(--bg-card);
 }
 
+/* PESSOAL-13C4A-E6: grade dos próximos 12 meses (1 coluna no mobile; 2 e 3 nos
+   breakpoints). Classe própria — NÃO reutiliza .finance-ai-projection-list
+   (display flex coluna) para preservar o grid responsivo em qualquer layout. */
+.finance-ai-proj-forecast-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.finance-ai-proj-forecast-grid > li {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+@media (min-width: 600px) {
+  .finance-ai-proj-forecast-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 960px) {
+  .finance-ai-proj-forecast-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
 @media (max-width: 480px) {
   .finance-ai-submit {
     width: 100%;

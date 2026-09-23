@@ -79,6 +79,7 @@ import {
   type ProjectionBasis,
   type ProjectionEngineResult,
 } from '../../src/lib/analyticsProjection.js';
+import { addMonths } from '../../src/lib/period.js';
 
 // ============ Constantes e allowlists fechadas ============
 
@@ -253,6 +254,40 @@ export interface ProjectionPayloadReasonV1 {
   minimumCoveredMonths: number;
 }
 
+/**
+ * Um mês do horizonte da projeção dos próximos 12 meses (PESSOAL-13C4A-E6).
+ * Relação canônica por mês: projectedCents = registeredCents +
+ * estimatedRemainingCents (soma, por categoria, de max(média − registrado, 0)).
+ */
+export interface ProjectionPayloadForecastMonthV1 {
+  month: string;
+  registeredCents: number;
+  estimatedRemainingCents: number;
+  projectedCents: number;
+  historicalReferenceCents: number;
+}
+
+export interface ProjectionPayloadForecastSummaryV1 {
+  historicalReferenceCents: number;
+  registeredCents: number;
+  estimatedRemainingCents: number;
+  projectedCents: number;
+}
+
+/**
+ * Forecast do projection_base (PESSOAL-13C4A-E6). OPCIONAL e presente SOMENTE
+ * quando intent = 'projection_base' e reference.kind = 'current'. Horizonte de
+ * exatamente 12 meses consecutivos a partir do mês seguinte ao de referência
+ * (addMonths(reference.month, 1)..addMonths(reference.month, 12)). O summary é
+ * a soma byte-exata dos 12 meses — o sanitizador exige essa igualdade exata.
+ */
+export interface ProjectionPayloadForecastV1 {
+  horizonStart: string;
+  horizonEnd: string;
+  summary: ProjectionPayloadForecastSummaryV1;
+  months: ProjectionPayloadForecastMonthV1[];
+}
+
 export interface ProjectionPayloadSuccessV1 {
   version: 1;
   status: 'success';
@@ -266,6 +301,8 @@ export interface ProjectionPayloadSuccessV1 {
   remaining?: ProjectionPayloadRemainingV1;
   /** Lente ativa, quando houver (apenas rótulo de exibição). */
   lens?: ProjectionPayloadLensV1;
+  /** Projeção dos próximos 12 meses (apenas projection_base do mês atual). */
+  forecast?: ProjectionPayloadForecastV1;
 }
 
 export interface ProjectionPayloadInsufficientV1 {
@@ -390,6 +427,28 @@ export function mapProjectionToPayloadV1(
   }
   if (typeof lensLabel === 'string' && lensLabel.trim() !== '') {
     payload.lens = { label: lensLabel.trim() };
+  }
+  // PESSOAL-13C4A-E6: a projeção dos próximos 12 meses existe SOMENTE no
+  // projection_base com referência do mês atual. Demais intents e referências
+  // passadas nunca carregam forecast.
+  if (intent === 'projection_base' && reference.kind === 'current') {
+    payload.forecast = {
+      horizonStart: result.forecast.horizonStart,
+      horizonEnd: result.forecast.horizonEnd,
+      summary: {
+        historicalReferenceCents: result.forecast.summary.historicalReferenceCents,
+        registeredCents: result.forecast.summary.registeredCents,
+        estimatedRemainingCents: result.forecast.summary.estimatedRemainingCents,
+        projectedCents: result.forecast.summary.projectedCents,
+      },
+      months: result.forecast.months.map((m) => ({
+        month: m.month,
+        registeredCents: m.registeredCents,
+        estimatedRemainingCents: m.estimatedRemainingCents,
+        projectedCents: m.projectedCents,
+        historicalReferenceCents: m.historicalReferenceCents,
+      })),
+    };
   }
   return payload;
 }
@@ -709,6 +768,125 @@ function sanitizeLens(rawInput: unknown): ProjectionPayloadLensV1 | undefined {
   return { label };
 }
 
+const FORECAST_HORIZON_MONTHS = 12;
+
+function nextYearMonthKey(key: string): string | undefined {
+  const m = /^(\d{4})-(\d{2})$/.exec(key);
+  if (!m) return undefined;
+  const ym = addMonths({ year: Number(m[1]), month: Number(m[2]) }, 1);
+  return `${ym.year}-${PAD2(ym.month)}`;
+}
+
+function sanitizeForecastMonth(
+  rawInput: unknown,
+): ProjectionPayloadForecastMonthV1 | undefined {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined;
+  }
+  const raw = rawInput as Record<string, unknown>;
+  const month = yearMonthValue(raw.month);
+  const registeredCents = amountValue(raw.registeredCents);
+  const estimatedRemainingCents = amountValue(raw.estimatedRemainingCents);
+  const projectedCents = amountValue(raw.projectedCents);
+  const historicalReferenceCents = amountValue(raw.historicalReferenceCents);
+  if (
+    !month ||
+    registeredCents === undefined ||
+    estimatedRemainingCents === undefined ||
+    projectedCents === undefined ||
+    historicalReferenceCents === undefined
+  ) {
+    return undefined;
+  }
+  // Relação canônica byte-exata (PESSOAL-13C4A-E6).
+  if (projectedCents !== registeredCents + estimatedRemainingCents) return undefined;
+  return { month, registeredCents, estimatedRemainingCents, projectedCents, historicalReferenceCents };
+}
+
+function sanitizeForecastSummary(
+  rawInput: unknown,
+): ProjectionPayloadForecastSummaryV1 | undefined {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined;
+  }
+  const raw = rawInput as Record<string, unknown>;
+  const historicalReferenceCents = amountValue(raw.historicalReferenceCents);
+  const registeredCents = amountValue(raw.registeredCents);
+  const estimatedRemainingCents = amountValue(raw.estimatedRemainingCents);
+  const projectedCents = amountValue(raw.projectedCents);
+  if (
+    historicalReferenceCents === undefined ||
+    registeredCents === undefined ||
+    estimatedRemainingCents === undefined ||
+    projectedCents === undefined
+  ) {
+    return undefined;
+  }
+  return { historicalReferenceCents, registeredCents, estimatedRemainingCents, projectedCents };
+}
+
+/**
+ * Sanitiza um forecast (PESSOAL-13C4A-E6): horizonte de EXATAMENTE 12 meses
+ * consecutivos a partir de addMonths(referenceMonth, 1), invariante semanal por
+ * mês e summary byte-exato igual à soma dos meses. Volta undefined em qualquer
+ * desvio (o payload inteiro é então rejeitado — nunca objeto parcial).
+ */
+function sanitizeForecast(
+  rawInput: unknown,
+  referenceMonth: string,
+): ProjectionPayloadForecastV1 | undefined {
+  if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined;
+  }
+  const raw = rawInput as Record<string, unknown>;
+  const horizonStart = yearMonthValue(raw.horizonStart);
+  const horizonEnd = yearMonthValue(raw.horizonEnd);
+  const summary = sanitizeForecastSummary(raw.summary);
+  if (!horizonStart || !horizonEnd || !summary) return undefined;
+
+  const expectedFirst = nextYearMonthKey(referenceMonth);
+  if (!expectedFirst || expectedFirst !== horizonStart) return undefined;
+  if (!Array.isArray(raw.months) || raw.months.length !== FORECAST_HORIZON_MONTHS) {
+    return undefined;
+  }
+
+  const months: ProjectionPayloadForecastMonthV1[] = [];
+  let expected: string = expectedFirst;
+  for (const item of raw.months) {
+    const m = sanitizeForecastMonth(item);
+    if (!m || m.month !== expected) return undefined;
+    months.push(m);
+    const next = nextYearMonthKey(expected);
+    if (!next) return undefined;
+    expected = next;
+  }
+  // Depois do laço, expected já avançou para o mês SEGUINTE ao último; o
+  // horizonEnd precisa ser o PRÓPRIO último mês do horizonte.
+  if (horizonEnd !== months[months.length - 1].month) return undefined;
+
+  let historicalReferenceCents = 0;
+  let registeredCents = 0;
+  let estimatedRemainingCents = 0;
+  let projectedCents = 0;
+  for (const m of months) {
+    historicalReferenceCents += m.historicalReferenceCents;
+    registeredCents += m.registeredCents;
+    estimatedRemainingCents += m.estimatedRemainingCents;
+    projectedCents += m.projectedCents;
+  }
+  // O summary precisa ser a soma byte-exata dos 12 meses (idêntico ao motor).
+  if (
+    summary.historicalReferenceCents !== historicalReferenceCents ||
+    summary.registeredCents !== registeredCents ||
+    summary.estimatedRemainingCents !== estimatedRemainingCents ||
+    summary.projectedCents !== projectedCents
+  ) {
+    return undefined;
+  }
+
+  return { horizonStart, horizonEnd, summary, months };
+}
+
 /**
  * Sanitiza um payload de projeção desconhecido para a forma versionada. Qualquer
  * violação estrutural ou de allowlist → undefined (nunca objeto parcial). O
@@ -730,6 +908,9 @@ export function sanitizeProjectionPayloadV1(input: unknown): ProjectionPayloadV1
 
   if (raw.status === 'insufficient') {
     if (raw.quality !== 'insufficient') return undefined;
+    // PESSOAL-13C4A-E6: forecast nunca existe em payload insufficient — se
+    // alguém injetou, o payload inteiro é rejeitado (nunca objeto parcial).
+    if (raw.forecast !== undefined) return undefined;
     const realizedCents = amountValue(raw.realizedCents);
     const reason = sanitizeReason(raw.reason);
     if (realizedCents === undefined || !reason) return undefined;
@@ -776,6 +957,15 @@ export function sanitizeProjectionPayloadV1(input: unknown): ProjectionPayloadV1
       const lens = sanitizeLens(raw.lens);
       if (!lens) return undefined;
       payload.lens = lens;
+    }
+    if (raw.forecast !== undefined) {
+      // PESSOAL-13C4A-E6: forecast existe SOMENTE em projection_base do mês
+      // atual; em qualquer outra combinação (ou payload inválido) o payload
+      // inteiro é rejeitado — nunca um forecast parcial.
+      if (intent !== 'projection_base' || reference.kind !== 'current') return undefined;
+      const forecast = sanitizeForecast(raw.forecast, reference.month);
+      if (!forecast) return undefined;
+      payload.forecast = forecast;
     }
     return payload;
   }

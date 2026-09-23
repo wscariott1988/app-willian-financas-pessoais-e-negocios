@@ -35,7 +35,7 @@ import {
   type TransactionKind,
   type YearMonth,
 } from '../../src/lib/analyticsProjection.js';
-import { daysInMonth, toLocalISODate } from '../../src/lib/period.js';
+import { addMonths, daysInMonth, toLocalISODate } from '../../src/lib/period.js';
 import { providerStatusOf } from './observability.js';
 
 export const PROJECTION_PAGE_SIZE = 1000;
@@ -246,6 +246,14 @@ export interface ProjectionAdapterOptions {
   referenceMonth?: YearMonth | null;
   /** Lente de categoria que restringe os agregados (PESSOAL-13C4A-E3). Default: none. */
   lens?: ProjectionLensInput | null;
+  /**
+   * Amplia a janela única de consulta até o fim do MÊS ATUAL + 12
+   * (PESSOAL-13C4A-E6), cobrindo o mês de referência E todo o horizonte dos
+   * próximos 12 meses numa só leitura (sem consultas N+1). Opt-in EXCLUSIVO
+   * do intent projection_base: os demais intents mantêm o limite anterior ao
+   * fim do mês de referência (latência/volume preservados).
+   */
+  includeForecastWindow?: boolean;
   /** Tamanho da página de transações. Default: PROJECTION_PAGE_SIZE. */
   pageSize?: number;
 }
@@ -268,8 +276,12 @@ function resolveReferenceMonth(
 }
 
 /**
- * Consulta transações vivas até o fim do mês de referência e os períodos
- * persistidos, monta ProjectionEngineInput e chama buildProjection.
+ * Consulta transações vivas até o fim do mês de referência (ou, quando
+ * `includeForecastWindow` estiver ativo — PESSOAL-13C4A-E6, exclusivo do
+ * projection_base —, até o fim do MÊS ATUAL + 12, cobrindo numa única janela o
+ * mês de referência E todo o horizonte dos próximos 12 meses, sem consultas
+ * N+1) e os períodos persistidos, monta ProjectionEngineInput e chama
+ * buildProjection.
  */
 export async function fetchProjection(
   supabase: SupabaseClient,
@@ -278,11 +290,16 @@ export async function fetchProjection(
   const todayISO = options.todayISO ?? saoPauloTodayISO();
   const pageSize = options.pageSize ?? PROJECTION_PAGE_SIZE;
   const reference = resolveReferenceMonth(options.referenceMonth, todayISO);
-  const until = toLocalISODate(
-    reference.year,
-    reference.month,
-    daysInMonth(reference.year, reference.month),
-  );
+  let until: string;
+  if (options.includeForecastWindow) {
+    const end = addMonths(
+      { year: Number(todayISO.slice(0, 4)), month: Number(todayISO.slice(5, 7)) },
+      12,
+    );
+    until = toLocalISODate(end.year, end.month, daysInMonth(end.year, end.month));
+  } else {
+    until = toLocalISODate(reference.year, reference.month, daysInMonth(reference.year, reference.month));
+  }
 
   const [txRows, periods] = await Promise.all([
     fetchAllProjectionPages<ProjectionTxRow>(

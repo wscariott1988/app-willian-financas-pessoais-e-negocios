@@ -3,6 +3,8 @@ import type {
   ProjectionPayloadCategoryMode,
   ProjectionPayloadCategoryV1,
   ProjectionPayloadDeviation,
+  ProjectionPayloadForecastMonthV1,
+  ProjectionPayloadForecastV1,
   ProjectionPayloadReferenceKind,
   ProjectionPayloadSuccessV1,
   ProjectionPayloadV1,
@@ -302,6 +304,56 @@ function RemainingCard({ p }: { p: ProjectionPayloadSuccessV1 }) {
   );
 }
 
+// PESSOAL-13C4A-E6: card-resumo do horizonte (projetado = lançado + estimativa
+// ainda não lançada; referência histórica anualizada sem somar estimativas).
+function ForecastSummaryCard({ forecast }: { forecast: ProjectionPayloadForecastV1 }) {
+  return (
+    <li>
+      <article className="finance-ai-proj-card">
+        <h3 className="finance-ai-card-title">Horizonte projetado</h3>
+        <dl className="finance-ai-card-dl">
+          <Row label="Cenário projetado" value={brlCents(forecast.summary.projectedCents)} />
+          <Row label="Já lançado" value={brlCents(forecast.summary.registeredCents)} />
+          <Row
+            label="Estimativa ainda não lançada"
+            value={brlCents(forecast.summary.estimatedRemainingCents)}
+          />
+          <Row
+            label="Referência histórica anualizada"
+            value={brlCents(forecast.summary.historicalReferenceCents)}
+          />
+        </dl>
+      </article>
+    </li>
+  );
+}
+
+// PESSOAL-13C4A-E6: um card por mês do horizonte (out/2026..set/2027). Valores
+// byte-exatos do payload — o cliente nunca recalcula.
+function ForecastMonthCard({ forecastMonth }: { forecastMonth: ProjectionPayloadForecastMonthV1 }) {
+  return (
+    <li>
+      <article className="finance-ai-proj-card">
+        <h3 className="finance-ai-card-title">{monthNameOf(forecastMonth.month)}</h3>
+        <dl className="finance-ai-card-dl">
+          <Row label="Cenário projetado" value={brlCents(forecastMonth.projectedCents)} />
+          <Row label="Já lançado" value={brlCents(forecastMonth.registeredCents)} />
+          <Row
+            label="Estimativa ainda não lançada"
+            value={brlCents(forecastMonth.estimatedRemainingCents)}
+          />
+          <Row label="Referência histórica" value={brlCents(forecastMonth.historicalReferenceCents)} />
+        </dl>
+      </article>
+    </li>
+  );
+}
+
+// PESSOAL-13C4A-E6: nota única que explica POR QUE a estimativa não soma o
+// registrado ao projetado (opção de evitar contar o mesmo gasto duas vezes).
+const FORECAST_NOTE =
+  'A projeção considera o maior valor entre o que já está lançado e a média histórica de cada categoria, evitando contar o mesmo gasto duas vezes.';
+
 // PESSOAL-13C4A-E3.7: aviso curto do mês atual — o total observado pode
 // mudar enquanto novos lançamentos do mês forem registrados.
 const CURRENT_CHANGE_NOTICE =
@@ -339,6 +391,26 @@ function SuccessCards({ projection }: { projection: ProjectionPayloadSuccessV1 }
     );
   }
   if (projection.intent === 'projection_base') {
+    // PESSOAL-13C4A-E6: com forecast → card-resumo do horizonte + grade dos 12
+    // meses. Sem forecast (payload legado) → SummaryCard do E2 preservado.
+    if (projection.forecast) {
+      return (
+        <>
+          <ul className="finance-ai-projection-list">
+            <SummaryCard projection={projection} />
+            <ForecastSummaryCard forecast={projection.forecast} />
+          </ul>
+          <ul className="finance-ai-proj-forecast-grid">
+            {projection.forecast.months.map((m) => (
+              <ForecastMonthCard key={m.month} forecastMonth={m} />
+            ))}
+          </ul>
+          <p className="finance-ai-notice" role="note">
+            {FORECAST_NOTE}
+          </p>
+        </>
+      );
+    }
     return (
       <ul className="finance-ai-projection-list">
         <SummaryCard projection={projection} />
