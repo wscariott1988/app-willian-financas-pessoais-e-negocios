@@ -3224,6 +3224,8 @@ button.period-range-custom {
 }
 
 /* Parcelamentos e recorrências */
+/* E8: valores monetários nunca quebram a linha (nowrap); mobile reagrupa em
+   grid de 2 linhas para data/valor ficarem em células separadas. */
 .series-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3241,17 +3243,66 @@ button.period-range-custom {
   min-width: 0;
 }
 
+.series-metric--committed {
+  background: var(--bg-container);
+}
+
 .series-metric-value {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .series-metric-label {
   font-size: 11px;
   color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Linhas de "Próximos compromissos" e "Parcelas próximas de terminar":
+   desktop = badge/descrição | data/quantidade | valor; mobile = descrição na
+   primeira linha e data/quantidade + valor na segunda. */
+.series-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.series-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.series-row-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.series-row-meta {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.series-row-amount {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 .series-sub {
@@ -3307,6 +3358,7 @@ button.period-range-custom {
 
 @media (max-width: 480px) {
   .series-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -3314,8 +3366,13 @@ button.period-range-custom {
     padding: 8px;
   }
 
+  .series-metric--committed {
+    grid-column: 1 / -1;
+  }
+
   .series-metric-value {
     font-size: 15px;
+    font-variant-numeric: tabular-nums;
   }
 
   .evolution-chart {
@@ -3324,6 +3381,29 @@ button.period-range-custom {
 
   .evolution-col {
     min-width: 40px;
+  }
+}
+
+@media (max-width: 640px) {
+  .series-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label label'
+      'meta  amt';
+    column-gap: 14px;
+  }
+
+  .series-row-label {
+    grid-area: label;
+  }
+
+  .series-row-meta {
+    grid-area: meta;
+  }
+
+  .series-row-amount {
+    grid-area: amt;
+    justify-self: end;
   }
 }
 
@@ -3344,9 +3424,24 @@ button.period-range-custom {
   grid-template-columns: 220px minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
+  /* PESSOAL-13C4A-E5/E5.2: o DOM é mobile-first (composer → conversa atual →
+     histórico); no desktop as áreas recolocam o composer abaixo das mensagens
+     e o histórico à esquerda, preservando o layout. */
+  grid-template-areas:
+    'chats main'
+    'chats composer';
+}
+
+.finance-ai-composer {
+  grid-area: composer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .finance-ai-chats {
+  grid-area: chats;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -3486,6 +3581,7 @@ button.period-range-custom {
 }
 
 .finance-ai-main {
+  grid-area: main;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -3982,6 +4078,40 @@ button.period-range-custom {
   background: var(--bg-card);
 }
 
+/* PESSOAL-13C4A-E6: grade dos próximos 12 meses (1 coluna no mobile; 2 e 3 nos
+   breakpoints). Classe própria — NÃO reutiliza .finance-ai-projection-list
+   (display flex coluna) para preservar o grid responsivo em qualquer layout. */
+.finance-ai-proj-forecast-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.finance-ai-proj-forecast-grid > li {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+@media (min-width: 600px) {
+  .finance-ai-proj-forecast-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 960px) {
+  .finance-ai-proj-forecast-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
 @media (max-width: 480px) {
   .finance-ai-submit {
     width: 100%;
@@ -3996,6 +4126,13 @@ button.period-range-custom {
 @media (max-width: 820px) {
   .finance-ai-layout {
     grid-template-columns: 1fr;
+    /* PESSOAL-13C4A-E5.2: no mobile a ordem visual = ordem DOM (composer →
+       conversa atual → histórico), então a pergunta nunca fica separada da
+       resposta pelo painel "Nova conversa"/histórico. */
+    grid-template-areas:
+      'composer'
+      'main'
+      'chats';
   }
 
   .finance-ai-chats {

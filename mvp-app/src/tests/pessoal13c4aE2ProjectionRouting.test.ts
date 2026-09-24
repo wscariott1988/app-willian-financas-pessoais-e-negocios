@@ -257,6 +257,25 @@ function payloadMoneyValues(proj: unknown): string[] {
     add(remaining.monthlyMeanCents);
     add(remaining.annualScenarioCents);
   }
+  // PESSOAL-13C4A-E6: todos os valores monetários do forecast (resumo + os 12
+  // meses) entram na allowlist que o texto pode citar.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const forecast = p.forecast as any;
+  if (forecast) {
+    if (forecast.summary) {
+      add(forecast.summary.historicalReferenceCents);
+      add(forecast.summary.registeredCents);
+      add(forecast.summary.estimatedRemainingCents);
+      add(forecast.summary.projectedCents);
+    }
+    const months = Array.isArray(forecast.months) ? (forecast.months as any[]) : [];
+    for (const m of months) {
+      add(m.registeredCents);
+      add(m.estimatedRemainingCents);
+      add(m.projectedCents);
+      add(m.historicalReferenceCents);
+    }
+  }
   return out;
 }
 
@@ -317,11 +336,15 @@ describe('PESSOAL-13C4A-E2 — intents de projeção (determinístico, despacho 
     expect(ans?.intent).toBe('projection_base');
     expect(ans?.response.engine).toBe('deterministic');
     expect(ans?.response.geminiCallCount).toBe(0);
+    expect(ans?.response.answer).toContain('sem garantia nem recomendação');
     expect(ans?.response.answer).toContain(brlReais(1000));
     expect(ans?.response.answer).toContain(brlReais(12000));
+    expect(ans?.response.answer).toContain(brlReais(0));
     expect(ans?.response.answer).toContain('12 meses cobertos');
-    expect(ans?.response.answer).toContain('cenário anualizado');
-    expect(ans?.response.answer).toContain('sem garantia nem recomendação');
+    expect(ans?.response.answer).toContain('cenário projetado');
+    expect(ans?.response.answer).not.toContain('cenário anualizado');
+    expect(ans?.response.answer).not.toContain('melhor');
+    expect(ans?.response.answer).not.toContain('pior');
     expect(tables).toContain('transactions');
     expect(tables).toContain('account_profile_periods');
   });

@@ -240,6 +240,56 @@ export interface ProjectionSuccess {
   comparison: ProjectionComparison;
   categories: ProjectionCategory[];
   remainingCategories: RemainingProjectionCategories;
+  /**
+   * Projeção dos PRÓXIMOS 12 MESES a partir do MÊS ATUAL de todayISO
+   * (PESSOAL-13C4A-E6). Calculada para QUALQUER success; o mapeador decide em
+   * quais intents ela é exposta no payload (somente projection_base com
+   * referência do mês atual).
+   */
+  forecast: ProjectionForecast;
+}
+
+// ============ Projeção dos próximos 12 meses (PESSOAL-13C4A-E6) ============
+
+/**
+ * Um mês do horizonte da projeção de 12 meses (PESSOAL-13C4A-E6).
+ * Unidade: centavos inteiros. Relação canônica por mês:
+ *   projectedCents = registeredCents + estimatedRemainingCents
+ * onde `registeredCents` vem das despesas ELEGÍVEIS já registradas no mês do
+ * horizonte e `estimatedRemainingCents` é a soma, por categoria, de
+ * max(média mensal da base − registrado no mês, 0). `historicalReferenceCents`
+ * (PESSOAL-13C4A-E8) é a MESMA referência canônica da projeção geral
+ * (`summary.monthlyMeanCents` = round(totalBaseCents/coveredMonths)) aplicada a
+ * cada um dos 12 meses — garantindo que o summary histórico fica byte-exato
+ * (12 × mensal) e é idêntico a `summary.annualScenarioCents`. A referência
+ * histórica NÃO re-soma médias por categoria (evita o desvio de +1 cent/mês).
+ */
+export interface ProjectionForecastMonth {
+  month: string; // 'YYYY-MM'
+  registeredCents: number;
+  estimatedRemainingCents: number;
+  projectedCents: number;
+  historicalReferenceCents: number;
+}
+
+export interface ProjectionForecastSummary {
+  historicalReferenceCents: number;
+  registeredCents: number;
+  estimatedRemainingCents: number;
+  projectedCents: number;
+}
+
+/**
+ * Horizonte fixo de exatamente 12 meses consecutivos:
+ * addMonths(currentMonth, 1) até addMonths(currentMonth, 12). O summary é a
+ * soma BYTE-EXATA dos 12 meses (sem novo arredondamento), logo
+ * projected = registered + estimated também nos totais.
+ */
+export interface ProjectionForecast {
+  horizonStart: string; // 'YYYY-MM'
+  horizonEnd: string; // 'YYYY-MM'
+  summary: ProjectionForecastSummary;
+  months: ProjectionForecastMonth[];
 }
 
 // ============ Resultado Insufficient ============
@@ -620,6 +670,86 @@ function buildCategories(
   };
 }
 
+// ============ Projeção dos próximos 12 meses (PESSOAL-13C4A-E6) ============
+
+const FORECAST_HORIZON_MONTHS = 12;
+
+/**
+ * Constrói a projeção mês a mês dos próximos 12 meses — do mês SEGUINTE ao mês
+ * atual de todayISO (addMonths(currentMonth, 1)..addMonths(currentMonth, 12)) —
+ * a partir da agregação da base. Cada mês do horizonte agrega somente as
+ * despesas ELEGÍVEIS daquele mês-calendário (vivas, kind expense, data válida,
+ * período da própria conta cobrindo o dia e lente quando ativa). Por categoria:
+ * média mensal = round(bucket.cents / coveredMonths); estimativa do mês =
+ * max(média − registrado no mês, 0). `historicalReferenceCents`
+ * (PESSOAL-13C4A-E8) é o `canonicalMonthlyMeanCents` recebido por parâmetro — a
+ * MESMA referência da projeção geral — em todos os 12 meses; o summary sai
+ * byte-exato (12 × mensal). Nada é arredondado além da média.
+ */
+function buildForecast(
+  input: ProjectionEngineInput,
+  currentMonth: YearMonth,
+  base: BaseAggregation,
+  periods: ReadonlyArray<NormalizedPeriod>,
+  canonicalMonthlyMeanCents: number,
+): ProjectionForecast {
+  const lens = input.lens ?? null;
+  const horizon: YearMonth[] = [];
+  for (let i = 1; i <= FORECAST_HORIZON_MONTHS; i++) {
+    horizon.push(addMonths(currentMonth, i));
+  }
+
+  const meanByKey = new Map<string, number>();
+  for (const bucket of base.categories.values()) {
+    meanByKey.set(categoryKey(bucket.categoryId), Math.round(bucket.cents / base.coveredMonths));
+  }
+
+  const months: ProjectionForecastMonth[] = horizon.map((ym) => {
+    const start = toLocalISODate(ym.year, ym.month, 1);
+    const end = toLocalISODate(ym.year, ym.month, daysInMonth(ym.year, ym.month));
+    const registered = new Map<string, CategoryBucket>();
+    for (const t of input.transactions) {
+      addReferencedExpense(t, start, end, null, periods, registered, lens);
+    }
+    const keys = new Set<string>([...meanByKey.keys(), ...registered.keys()]);
+    let registeredCents = 0;
+    let estimatedRemainingCents = 0;
+    for (const key of keys) {
+      const mean = meanByKey.get(key) ?? 0;
+      const regCents = registered.get(key)?.cents ?? 0;
+      registeredCents += regCents;
+      estimatedRemainingCents += Math.max(mean - regCents, 0);
+    }
+    return {
+      month: monthKey(ym),
+      registeredCents,
+      estimatedRemainingCents,
+      projectedCents: registeredCents + estimatedRemainingCents,
+      historicalReferenceCents: canonicalMonthlyMeanCents,
+    };
+  });
+
+  let registeredCents = 0;
+  let estimatedRemainingCents = 0;
+  for (const m of months) {
+    registeredCents += m.registeredCents;
+    estimatedRemainingCents += m.estimatedRemainingCents;
+  }
+  const historicalReferenceCents = canonicalMonthlyMeanCents * months.length;
+
+  return {
+    horizonStart: monthKey(horizon[0] ?? currentMonth),
+    horizonEnd: monthKey(horizon[horizon.length - 1] ?? currentMonth),
+    summary: {
+      historicalReferenceCents,
+      registeredCents,
+      estimatedRemainingCents,
+      projectedCents: registeredCents + estimatedRemainingCents,
+    },
+    months,
+  };
+}
+
 // ============ Entrada principal ============
 
 export function buildProjection(input: ProjectionEngineInput): ProjectionEngineResult {
@@ -712,5 +842,6 @@ export function buildProjection(input: ProjectionEngineInput): ProjectionEngineR
     comparison,
     categories,
     remainingCategories,
+    forecast: buildForecast(input, currentMonth, base, periods, monthlyMeanCents),
   };
 }

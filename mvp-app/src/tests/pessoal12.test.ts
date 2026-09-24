@@ -402,7 +402,7 @@ describe('PESSOAL-12 — Estados vazios e números finitos', () => {
 });
 
 describe('PESSOAL-12 — View (consultas, read-only e blocos)', () => {
-  const view = readSource('views/AnalyticsView.tsx');
+  const view = `${readSource('views/AnalyticsView.tsx')}\n${readSource('components/SeriesFinancials.tsx')}`;
   const css = readSource('index.css');
 
   it('período selecionado respeitado com gte/lte inclusivos (2 consultas em transactions)', () => {

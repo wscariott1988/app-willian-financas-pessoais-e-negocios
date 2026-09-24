@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { PeriodSelector } from '../components/PeriodSelector';
-import { RefreshCw, TrendingUp, TrendingDown, Wallet, AlertCircle, Tag, Landmark, PieChart, CalendarRange, CheckCheck, Repeat, CreditCard } from 'lucide-react';
+import { RefreshCw, TrendingUp, TrendingDown, Wallet, AlertCircle, Tag, Landmark, PieChart, CalendarRange, CheckCheck, CreditCard } from 'lucide-react';
 import { fetchAllPages } from '../lib/pagination';
 import { isAbortError } from '../lib/status';
 import { STATUS_EDITABLE_FROM } from '../lib/status';
@@ -18,6 +18,7 @@ import { todayISO } from '../lib/series';
 import type { PageFetcher } from '../lib/pagination';
 import type { PeriodController } from '../components/AppShell';
 import { FinanceAiSection } from '../components/FinanceAiSection';
+import { SeriesFinancials } from '../components/SeriesFinancials';
 
 const PAGE_SIZE = 1000;
 const ANALYTICS_PAGE_SIZE = PAGE_SIZE;
@@ -383,65 +384,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ profileId, period 
             ) : null}
           </section>
 
-          {/* Parcelamentos e recorrências */}
-          <section className="analytics-section" aria-label="Parcelamentos e recorrências">
-            <h2 className="analytics-section-title"><Repeat size={15} /> Parcelamentos e recorrências</h2>
-            {seriesEmpty ? (
-              <p className="analytics-empty">Nenhuma parcela ou recorrência futura cadastrada.</p>
-            ) : (
-              <>
-                <div className="series-metrics">
-                  <div className="series-metric">
-                    <span className="series-metric-value">{insights.installment.count}</span>
-                    <span className="series-metric-label">parcelamentos ativos</span>
-                  </div>
-                  <div className="series-metric">
-                    <span className="series-metric-value">{formatBRL(insights.installment.committed)}</span>
-                    <span className="series-metric-label">futuro comprometido</span>
-                  </div>
-                  <div className="series-metric">
-                    <span className="series-metric-value">{insights.recurring.count}</span>
-                    <span className="series-metric-label">recorrências ativas</span>
-                  </div>
-                </div>
-
-                {insights.upcoming.length > 0 && (
-                  <div className="series-sub">
-                    <h3 className="analytics-section-subtitle">Próximos compromissos</h3>
-                    <ul className="analytics-rank">
-                      {insights.upcoming.map((c) => (
-                        <li key={c.key} className="analytics-rank-row">
-                          <span className="analytics-rank-label">
-                            <span className={`badge-pill ${c.kindLabel === 'Parcela' ? 'badge-pill-installment' : 'badge-pill-recurring'}`}>{c.kindLabel}</span>
-                            {c.displayName}
-                          </span>
-                          <span className="analytics-rank-share">{formatShortDate(c.occurredOn)}</span>
-                          <span className="analytics-rank-amount">{formatBRL(c.amount)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {insights.installment.finishingSoon.length > 0 && (
-                  <div className="series-sub">
-                    <h3 className="analytics-section-subtitle">Parcelas próximas de terminar</h3>
-                    <ul className="analytics-rank">
-                      {insights.installment.finishingSoon.map((c) => (
-                        <li key={c.seriesId} className="analytics-rank-row">
-                          <span className="analytics-rank-label">{c.displayName}</span>
-                          <span className="analytics-rank-share">
-                            {c.remaining} {c.remaining === 1 ? 'parcela restante' : 'parcelas restantes'}
-                          </span>
-                          <span className="analytics-rank-amount">{formatBRL(c.amount)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+          {/* Parcelamentos e recorrências (PESSOAL-13C4A-E8: componente dedicado) */}
+          <SeriesFinancials insights={insights} seriesEmpty={seriesEmpty} />
 
           {/* Maiores despesas */}
           <section className="analytics-section" aria-label="Maiores despesas">

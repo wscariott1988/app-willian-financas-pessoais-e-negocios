@@ -23,6 +23,22 @@
 //   - falha de LEITURA vira mensagem amigável de carregamento (nunca "lista
 //     vazia" nem "Serviço de inteligência indisponível").
 //
+// PESSOAL-13C4A-E5:
+//   - no mobile o formulário de pergunta (finance-ai-composer) vem antes do
+//     histórico (finance-ai-chats) na ordem DOM, visual e de leitor/teclado;
+//     no desktop o grid mantém chats | main e coloca o composer abaixo das
+//     mensagens via grid-template-areas (sem duplicar).
+//
+// PESSOAL-13C4A-E5.2:
+//   - a ordem DOM mobile é composer → finance-ai-main (conversa atual, com
+//     perguntas, respostas, cards e loading/erro) → finance-ai-chats (painel
+//     secundário com "+ Nova conversa" e histórico), para a pergunta nunca
+//     ficar separada da resposta pelo histórico;
+//   - o scroll ao enviar/trocar de conversa rola apenas o contêiner
+//     .finance-ai-messages (scrollHeight = última mensagem), nunca o painel de
+//     histórico abaixo; o histórico tem altura limitada própria no mobile;
+//   - desktop inalterado: 'chats main' / 'chats composer' via grid-template-areas.
+//
 // Regras invariantes mantidas: nunca expõe config técnica/secrets para o
 // usuário final; o perfil da conversa nunca vem do cliente (RLS decide).
 
@@ -388,68 +404,35 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
       </h2>
 
       <div className="finance-ai-layout">
-        <aside className="finance-ai-chats" aria-label="Histórico de conversas">
-          <button
-            type="button"
-            className="finance-ai-new-chat"
-            onClick={handleNewChat}
-            aria-label="Nova conversa"
-          >
-            <Plus size={15} /> Nova conversa
-          </button>
-          {hydrating && (
-            <div className="finance-ai-chat-loading" role="status">
-              <Loader2 size={13} className="spin-animation" /> Carregando
-              conversas…
-            </div>
-          )}
-          <ul className="finance-ai-chat-list">
-            {chat.conversations.map((c) => (
-              <li key={c.id} className="finance-ai-chat-item">
-                <button
-                  type="button"
-                  className={
-                    chat.activeId === c.id
-                      ? 'finance-ai-chat-open is-active'
-                      : 'finance-ai-chat-open'
-                  }
-                  onClick={() => void openConversation(c.id)}
-                  aria-label={`Abrir conversa: ${c.title || 'Sem título'}`}
-                  title={c.title || 'Sem título'}
-                >
-                  {c.title || 'Sem título'}
-                </button>
-                {chat.confirmDeleteId === c.id ? (
-                  <span className="finance-ai-delete-confirm">
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteConfirm(c.id)}
-                      aria-label="Confirmar exclusão da conversa"
-                    >
-                      Excluir
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => dispatch({ type: 'delete_confirm', id: null })}
-                      aria-label="Cancelar exclusão da conversa"
-                    >
-                      Cancelar
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="finance-ai-chat-delete"
-                    onClick={() => handleDeleteClick(c.id)}
-                    aria-label={`Excluir conversa: ${c.title || 'Sem título'}`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </aside>
+        <div className="finance-ai-composer">
+          <form className="finance-ai-form" onSubmit={handleSubmit}>
+            <textarea
+              className="finance-ai-input"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ex.: E em maio, quanto gastei no supermercado?"
+              rows={3}
+              maxLength={1000}
+              disabled={loading}
+              aria-label="Sua pergunta sobre as finanças"
+            />
+            <p className="finance-ai-key-hint">Enter envia · Shift+Enter quebra linha</p>
+            <button
+              type="submit"
+              className="finance-ai-submit"
+              disabled={loading || !question.trim()}
+              aria-busy={loading}
+            >
+              {loading ? <Loader2 size={16} className="spin-animation" /> : <Send size={16} />}
+              <span>{loading ? 'Analisando…' : 'Perguntar'}</span>
+            </button>
+          </form>
+          <p className="finance-ai-meta">
+            Análise gerada com base nos seus dados; transferências não são consideradas
+            receita ou despesa.
+          </p>
+        </div>
 
         <div className="finance-ai-main">
           <div className="finance-ai-messages" aria-live="polite" ref={messagesRef}>
@@ -607,35 +590,70 @@ export function FinanceAiSection({ period }: FinanceAiSectionProps) {
               <span>{error}</span>
             </div>
           )}
-
-          <form className="finance-ai-form" onSubmit={handleSubmit}>
-            <textarea
-              className="finance-ai-input"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ex.: E em maio, quanto gastei no supermercado?"
-              rows={3}
-              maxLength={1000}
-              disabled={loading}
-              aria-label="Sua pergunta sobre as finanças"
-            />
-            <p className="finance-ai-key-hint">Enter envia · Shift+Enter quebra linha</p>
-            <button
-              type="submit"
-              className="finance-ai-submit"
-              disabled={loading || !question.trim()}
-              aria-busy={loading}
-            >
-              {loading ? <Loader2 size={16} className="spin-animation" /> : <Send size={16} />}
-              <span>{loading ? 'Analisando…' : 'Perguntar'}</span>
-            </button>
-          </form>
-          <p className="finance-ai-meta">
-            Análise gerada com base nos seus dados; transferências não são consideradas
-            receita ou despesa.
-          </p>
         </div>
+
+        <aside className="finance-ai-chats" aria-label="Histórico de conversas">
+          <button
+            type="button"
+            className="finance-ai-new-chat"
+            onClick={handleNewChat}
+            aria-label="Nova conversa"
+          >
+            <Plus size={15} /> Nova conversa
+          </button>
+          {hydrating && (
+            <div className="finance-ai-chat-loading" role="status">
+              <Loader2 size={13} className="spin-animation" /> Carregando
+              conversas…
+            </div>
+          )}
+          <ul className="finance-ai-chat-list">
+            {chat.conversations.map((c) => (
+              <li key={c.id} className="finance-ai-chat-item">
+                <button
+                  type="button"
+                  className={
+                    chat.activeId === c.id
+                      ? 'finance-ai-chat-open is-active'
+                      : 'finance-ai-chat-open'
+                  }
+                  onClick={() => void openConversation(c.id)}
+                  aria-label={`Abrir conversa: ${c.title || 'Sem título'}`}
+                  title={c.title || 'Sem título'}
+                >
+                  {c.title || 'Sem título'}
+                </button>
+                {chat.confirmDeleteId === c.id ? (
+                  <span className="finance-ai-delete-confirm">
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteConfirm(c.id)}
+                      aria-label="Confirmar exclusão da conversa"
+                    >
+                      Excluir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => dispatch({ type: 'delete_confirm', id: null })}
+                      aria-label="Cancelar exclusão da conversa"
+                    >
+                      Cancelar
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="finance-ai-chat-delete"
+                    onClick={() => handleDeleteClick(c.id)}
+                    aria-label={`Excluir conversa: ${c.title || 'Sem título'}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </aside>
       </div>
     </section>
   );

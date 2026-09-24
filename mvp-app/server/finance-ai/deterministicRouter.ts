@@ -230,7 +230,10 @@ function extractMainQuestion(raw: string): string {
   const qIndex = t.indexOf('?');
   if (qIndex >= 0) end = Math.min(end, qIndex);
   const verb = COMPLEMENT_VERBS.exec(t);
-  if (verb) end = Math.min(end, verb.index);
+  // PESSOAL-13C1.1: verbos de instrução complementar NUNCA participam da
+  // intenção, mas só delimitam quando seguem a pergunta principal. Como verbo
+  // LÍDER ("Mostre a projeção...") faz parte da própria pergunta — não corta.
+  if (verb && verb.index > 0) end = Math.min(end, verb.index);
   const punct = /[;!]/.exec(t);
   if (punct) end = Math.min(end, punct.index);
   return t.slice(0, end).trim();
@@ -2387,7 +2390,7 @@ async function resolveProjectionFollowUp(
   if (/\b(?:comparar|comparaca?o|comparad[oa]|versus|vs|media)\b/.test(norm)) {
     return { kind: 'build', intent: 'projection_month_comparison', referenceMonth: projectCtxReference(ctx, todayISO), lens: ctxLens(ctx) };
   }
-  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual|anualizad|no\s+ano|por\s+mes)\b/.test(norm)) {
+  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual(?:iza(?:d[oa]s?)?)?|no\s+ano|por\s+mes)\b/.test(norm)) {
     return { kind: 'build', intent: 'projection_base', referenceMonth: yearMonthOfProjection(todayISO), lens: ctxLens(ctx) };
   }
   if (/\b(?:este|esse|neste|nesse)\s+mes\b|\bmes\s+atual\b|\bfech(?:o|amento)\b/.test(norm)) {
@@ -2404,6 +2407,9 @@ function isProjectionQuestion(norm: string): boolean {
     /\bestimar\b/.test(norm) ||
     /\britmo\b/.test(norm) ||
     /\bquanto\s+(?:vou|voce\s+vai)\s+gastar\b/.test(norm) ||
+    // PESSOAL-13C4A-E6: "cenário de custos" também pede a projeção dos
+    // próximos 12 meses (sinais de despesa explícitos).
+    /\bcenario\s+(?:de\s+)?custos?\b/.test(norm) ||
     /\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bmes\b/.test(norm) ||
     /\bfech(?:o|ar|amento|ando|a)\b[^.!?;]{0,40}\bano\b/.test(norm)
   );
@@ -2508,7 +2514,7 @@ function detectProjection(norm: string, todayISO: string): ProjectionRoute | nul
       referenceMonth: projectionComparisonReference(norm, todayISO),
     };
   }
-  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual|anualizad|no\s+ano|por\s+mes)\b/.test(norm)) {
+  if (/\b(?:proximos?\s+12\s+meses|12\s+meses|anual(?:iza(?:d[oa]s?)?)?|no\s+ano|por\s+mes)\b/.test(norm)) {
     return { intent: 'projection_base' };
   }
   if (
@@ -2615,8 +2621,23 @@ function projectionClarificationAnswer(
 }
 
 function projectionBaseText(p: ProjectionPayloadSuccessV1): string {
+  const coverage = coveragePhrase(p.quality, p.coverage.coveredMonths);
+  // PESSOAL-13C4A-E6: com forecast o texto passa a ser o cenário projetado mês
+  // a mês (projetado = lançado + estimativa ainda não lançada). Sem forecast
+  // (payload legado) a frase antiga é preservada byte a byte.
+  if (p.forecast) {
+    const f = p.forecast.summary;
+    return (
+      `Para os próximos 12 meses, o cenário projetado é de ${brlCents(f.projectedCents)}. ` +
+      `Desse valor, ${brlCents(f.registeredCents)} já está lançado e ${brlCents(
+        f.estimatedRemainingCents,
+      )} corresponde à estimativa ainda não lançada. ` +
+      `Base histórica: ${coverage}, com média mensal de ${brlCents(p.summary.monthlyMeanCents)}.` +
+      PROJECTION_DISCLAIMER
+    );
+  }
   return (
-    `Com ${coveragePhrase(p.quality, p.coverage.coveredMonths)}, a média mensal é de ${brlCents(
+    `Com ${coverage}, a média mensal é de ${brlCents(
       p.summary.monthlyMeanCents,
     )} e o cenário anualizado para os próximos 12 meses é de ${brlCents(
       p.summary.annualScenarioCents,
@@ -2783,6 +2804,10 @@ async function buildProjectionAnswer(
     todayISO,
     referenceMonth,
     lens: toLensInput(opts?.lens ?? null),
+    // PESSOAL-13C4A-E6: a janela única até mês+12 é opt-in EXCLUSIVO do intent
+    // projection_base (único que consome o forecast); os demais intents mantêm
+    // o limite do mês de referência — latência não cresce para quem não usa.
+    includeForecastWindow: intent === 'projection_base',
   });
   return toProjectionDeterministicAnswer(intent, result, opts?.lens ?? null, opts?.route ?? 'direct');
 }
