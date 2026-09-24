@@ -3224,6 +3224,8 @@ button.period-range-custom {
 }
 
 /* Parcelamentos e recorrências */
+/* E8: valores monetários nunca quebram a linha (nowrap); mobile reagrupa em
+   grid de 2 linhas para data/valor ficarem em células separadas. */
 .series-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3241,17 +3243,66 @@ button.period-range-custom {
   min-width: 0;
 }
 
+.series-metric--committed {
+  background: var(--bg-container);
+}
+
 .series-metric-value {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .series-metric-label {
   font-size: 11px;
   color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Linhas de "Próximos compromissos" e "Parcelas próximas de terminar":
+   desktop = badge/descrição | data/quantidade | valor; mobile = descrição na
+   primeira linha e data/quantidade + valor na segunda. */
+.series-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.series-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.series-row-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.series-row-meta {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.series-row-amount {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 .series-sub {
@@ -3307,6 +3358,7 @@ button.period-range-custom {
 
 @media (max-width: 480px) {
   .series-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -3314,8 +3366,13 @@ button.period-range-custom {
     padding: 8px;
   }
 
+  .series-metric--committed {
+    grid-column: 1 / -1;
+  }
+
   .series-metric-value {
     font-size: 15px;
+    font-variant-numeric: tabular-nums;
   }
 
   .evolution-chart {
@@ -3324,6 +3381,29 @@ button.period-range-custom {
 
   .evolution-col {
     min-width: 40px;
+  }
+}
+
+@media (max-width: 640px) {
+  .series-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label label'
+      'meta  amt';
+    column-gap: 14px;
+  }
+
+  .series-row-label {
+    grid-area: label;
+  }
+
+  .series-row-meta {
+    grid-area: meta;
+  }
+
+  .series-row-amount {
+    grid-area: amt;
+    justify-self: end;
   }
 }
 

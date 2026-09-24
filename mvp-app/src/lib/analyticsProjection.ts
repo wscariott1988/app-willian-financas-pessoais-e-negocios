@@ -258,8 +258,11 @@ export interface ProjectionSuccess {
  * onde `registeredCents` vem das despesas ELEGÍVEIS já registradas no mês do
  * horizonte e `estimatedRemainingCents` é a soma, por categoria, de
  * max(média mensal da base − registrado no mês, 0). `historicalReferenceCents`
- * é a soma das médias mensais da base das categorias daquele mês — a referência
- * histórica, sem somar estimativas.
+ * (PESSOAL-13C4A-E8) é a MESMA referência canônica da projeção geral
+ * (`summary.monthlyMeanCents` = round(totalBaseCents/coveredMonths)) aplicada a
+ * cada um dos 12 meses — garantindo que o summary histórico fica byte-exato
+ * (12 × mensal) e é idêntico a `summary.annualScenarioCents`. A referência
+ * histórica NÃO re-soma médias por categoria (evita o desvio de +1 cent/mês).
  */
 export interface ProjectionForecastMonth {
   month: string; // 'YYYY-MM'
@@ -678,14 +681,17 @@ const FORECAST_HORIZON_MONTHS = 12;
  * despesas ELEGÍVEIS daquele mês-calendário (vivas, kind expense, data válida,
  * período da própria conta cobrindo o dia e lente quando ativa). Por categoria:
  * média mensal = round(bucket.cents / coveredMonths); estimativa do mês =
- * max(média − registrado no mês, 0). Nada é arredondado além da média: as somas
- * do summary saem byte-exatas dos 12 meses.
+ * max(média − registrado no mês, 0). `historicalReferenceCents`
+ * (PESSOAL-13C4A-E8) é o `canonicalMonthlyMeanCents` recebido por parâmetro — a
+ * MESMA referência da projeção geral — em todos os 12 meses; o summary sai
+ * byte-exato (12 × mensal). Nada é arredondado além da média.
  */
 function buildForecast(
   input: ProjectionEngineInput,
   currentMonth: YearMonth,
   base: BaseAggregation,
   periods: ReadonlyArray<NormalizedPeriod>,
+  canonicalMonthlyMeanCents: number,
 ): ProjectionForecast {
   const lens = input.lens ?? null;
   const horizon: YearMonth[] = [];
@@ -707,13 +713,11 @@ function buildForecast(
     }
     const keys = new Set<string>([...meanByKey.keys(), ...registered.keys()]);
     let registeredCents = 0;
-    let historicalReferenceCents = 0;
     let estimatedRemainingCents = 0;
     for (const key of keys) {
       const mean = meanByKey.get(key) ?? 0;
       const regCents = registered.get(key)?.cents ?? 0;
       registeredCents += regCents;
-      historicalReferenceCents += mean;
       estimatedRemainingCents += Math.max(mean - regCents, 0);
     }
     return {
@@ -721,18 +725,17 @@ function buildForecast(
       registeredCents,
       estimatedRemainingCents,
       projectedCents: registeredCents + estimatedRemainingCents,
-      historicalReferenceCents,
+      historicalReferenceCents: canonicalMonthlyMeanCents,
     };
   });
 
-  let historicalReferenceCents = 0;
   let registeredCents = 0;
   let estimatedRemainingCents = 0;
   for (const m of months) {
-    historicalReferenceCents += m.historicalReferenceCents;
     registeredCents += m.registeredCents;
     estimatedRemainingCents += m.estimatedRemainingCents;
   }
+  const historicalReferenceCents = canonicalMonthlyMeanCents * months.length;
 
   return {
     horizonStart: monthKey(horizon[0] ?? currentMonth),
@@ -839,6 +842,6 @@ export function buildProjection(input: ProjectionEngineInput): ProjectionEngineR
     comparison,
     categories,
     remainingCategories,
-    forecast: buildForecast(input, currentMonth, base, periods),
+    forecast: buildForecast(input, currentMonth, base, periods, monthlyMeanCents),
   };
 }
