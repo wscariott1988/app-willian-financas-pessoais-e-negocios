@@ -225,6 +225,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
   const [seriesError, setSeriesError] = useState<string | null>(null);
   const [seriesInfo, setSeriesInfo] = useState<SeriesEditInfo | null>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const [extending, setExtending] = useState(false);
   const [extendMsg, setExtendMsg] = useState<string | null>(null);
   const [confirmPast, setConfirmPast] = useState(false);
@@ -399,9 +400,16 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
 
   // Package 015: escopo de série para edição/exclusão. Consulta SEPARADA e
   // não-bloqueante: se falhar ou pendurar, o formulário já está liberado.
+  // O SAVE, porém, espera a resposta (seriesLoading). Sem isso, salvar dentro
+  // da janela de detecção cairia no transaction_update genérico e o escopo da
+  // série seria perdido em silêncio, sem o check de concorrência da série.
   useEffect(() => {
-    if (!editId) return;
+    if (!editId) {
+      setSeriesLoading(false);
+      return;
+    }
     let active = true;
+    setSeriesLoading(true);
     const occAc = new AbortController();
     const occTimeout = setTimeout(() => occAc.abort(), 10000);
     supabase
@@ -430,10 +438,14 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         } else {
           setSeriesInfo(null);
         }
+        if (active) setSeriesLoading(false);
       })
       .then(undefined, () => {
         clearTimeout(occTimeout);
-        if (active) setSeriesInfo(null);
+        if (active) {
+          setSeriesInfo(null);
+          setSeriesLoading(false);
+        }
       });
     return () => {
       active = false;
@@ -537,11 +549,14 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     amountValue !== null &&
     !!form.occurred_on &&
     !!form.account_id &&
-    (form.kind === 'transfer' ? transferReady : true) &&
-    !!form.status &&
-    // E10B: em escopo coletivo de série, toda confirmação exigida pela prévia
-    // precisa estar marcada antes de liberar o salvamento.
-    (!collectiveScope || !seriesInfo || impactReady);
+   (form.kind === 'transfer' ? transferReady : true) &&
+   !!form.status &&
+   // E10B: o save espera a detecção de série para não degradar uma ocorrência
+   // de série para o caminho genérico e perder o escopo em silêncio.
+   !seriesLoading &&
+   // E10B: em escopo coletivo de série, toda confirmação exigida pela prévia
+   // precisa estar marcada antes de liberar o salvamento.
+   (!collectiveScope || !seriesInfo || impactReady);
 
   // ---- Package 015: preview local (nenhum write) ----
   const seriesValid = entryType === 'single' || (form.kind !== 'transfer' && !!form.account_id && !!form.occurred_on && amountValue !== null && (entryType === 'installment' ? (Number(seriesTotal) >= 1 && Number(seriesTotal) <= 120) : true));
@@ -944,7 +959,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   <option key={v} value={v}>{l}</option>
                 ))}
               </select>
-              {isEdit && seriesInfo && (impactLoading || impact) && (
+              {isEdit && seriesInfo && (impactLoading || impact || impactError) && (
                 <div
                   data-testid="series-impact-preview"
                   style={{
@@ -1009,7 +1024,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   )}
                 </div>
               )}
-              {collectiveScope && !impact && !impactLoading && (
+              {collectiveScope && !impact && !impactLoading && !impactError && (
                 <span style={{ fontSize: '11px', color: 'var(--color-warning)' }}>
                   "Esta e as próximas" nunca altera ocorrências anteriores a {SERIES_SCOPE_LABELS[activeScope].toLowerCase()} selecionada.
                 </span>

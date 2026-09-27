@@ -62,16 +62,22 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   const [retryKey, setRetryKey] = useState(0);
   // PESSOAL-13C4A-E10B: escopo de série também na exclusão.
   const [seriesInfo, setSeriesInfo] = useState<SeriesEditInfoLike | null>(null);
+  const [detectingSeries, setDetectingSeries] = useState(false);
   const [seriesScope, setSeriesScope] = useState<SeriesScope>('this');
   const [impact, setImpact] = useState<SeriesScopeImpact | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState<string | null>(null);
   const [confirms, setConfirms] = useState({ past: false, posted: false, edited: false });
 
   const activeScope: SeriesScope = seriesInfo ? seriesScope : 'this';
   const collectiveScope = !!seriesInfo && seriesScope !== 'this';
   const impactRequired = requiredConfirms(impact);
   const impactReady = confirmsSatisfied(impact, confirms);
-  const deleteBlocked = collectiveScope && !impactReady;
+  // A exclusão espera a detecção de série: antes dela, seriesInfo é null e o
+  // fluxo cairia em transaction_delete, ignorando o escopo escolhido. Sem
+  // série resolvida, nenhuma exclusão é oferecida.
+  const seriesLoading = detectingSeries;
+  const deleteBlocked = seriesLoading || (collectiveScope && (!impactReady || !!impactError));
 
   useEffect(() => {
     mounted.current = true;
@@ -131,10 +137,13 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   }, [tx.id, retryKey]);
 
   // PESSOAL-13C4A-E10B: detecta a série da transação e carrega a prévia de
-  // impacto. Falha aqui NÃO impede excluir a transação isolada ('this').
+  // impacto. Falha aqui NÃO impede excluir a transação isolada ('this'), mas
+  // a detecção pendente bloqueia a exclusão: sem saber se a transação é parte
+  // de uma série, qualquer exclusão poderia ignorar o escopo escolhido.
   useEffect(() => {
     let active = true;
     const ac = new AbortController();
+    setDetectingSeries(true);
     supabase
       .from('transaction_series_occurrences')
       .select('series_id, occurrence_index, transaction_series(kind, updated_at)')
@@ -143,7 +152,10 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
       .maybeSingle()
       .then(({ data, error: occErr }: any) => {
         if (!active || occErr || !data?.series_id) {
-          if (active) setSeriesInfo(null);
+          if (active) {
+            setSeriesInfo(null);
+            setDetectingSeries(false);
+          }
           return;
         }
         const ser = Array.isArray(data.transaction_series) ? data.transaction_series[0] : data.transaction_series;
@@ -155,9 +167,13 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
             kind: ser?.kind ?? 'recurring',
             series_updated_at: ser?.updated_at ?? null,
           } as SeriesEditInfoLike);
+          setDetectingSeries(false);
         }
       }, () => {
-        if (active) setSeriesInfo(null);
+        if (active) {
+          setSeriesInfo(null);
+          setDetectingSeries(false);
+        }
       });
     return () => {
       active = false;
@@ -169,21 +185,28 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   useEffect(() => {
     if (!seriesInfo) {
       setImpact(null);
+      setImpactError(null);
       return;
     }
     let active = true;
     setImpactLoading(true);
+    setImpactError(null);
     setConfirms({ past: false, posted: false, edited: false });
     supabase
       .rpc('series_scope_impact', buildImpactArgs(seriesInfo.series_id, seriesScope, seriesInfo.occurrence_index))
       .then(({ data, error: rpcError }: any) => {
         if (!active) return;
         setImpactLoading(false);
+        // Falha da prévia não pode virar silêncio: sem impacto não há como
+        // marcar as confirmações exigidas, então o botão fica bloqueado e o
+        // usuário precisa saber por quê.
         setImpact(rpcError ? null : normalizeSeriesImpact(data));
-      }, () => {
+        setImpactError(rpcError ? String(rpcError.message || rpcError) : null);
+      }, (e: any) => {
         if (!active) return;
         setImpactLoading(false);
         setImpact(null);
+        setImpactError(String(e?.message || 'Falha ao carregar a prévia de impacto.'));
       });
     return () => {
       active = false;
@@ -361,7 +384,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
             </span>
           </div>
 
-          {(impactLoading || impact) && (
+          {(impactLoading || impact || impactError) && (
             <div
               data-testid="delete-series-impact"
               style={{
@@ -373,6 +396,13 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
               }}
             >
               {impactLoading && <span>Calculando impacto…</span>}
+              {impactError && (
+                <span data-testid="delete-series-impact-error">
+                  Não foi possível calcular o impacto desta exclusão: {impactError} A exclusão
+                  em escopo amplo fica bloqueada, porque as confirmações exigidas não puderam ser
+                  verificadas. Tente novamente ou use “Somente esta ocorrência”.
+                </span>
+              )}
               {impact && impactSummaryLines(impact, 'delete').map((line) => (
                 <span key={line}>{line}</span>
               ))}

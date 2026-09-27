@@ -307,11 +307,15 @@ describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
   });
 
   it('installment: descrição, ocorrência de partida e série ainda são propagadas', () => {
-    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    const args = buildSeriesEditArgs(
+      installment, 'this', payload, 'ts-1', false,
+      { seriesUpdatedAt: 'serie-ts-1' },
+    );
     expect(args.p_display_name).toBe('Nova descrição da parcela');
     expect(args.p_from_occurrence).toBe(3);
     expect(args.p_series_id).toBe('s-1');
-    expect(args.p_expected_updated_at).toBe('ts-1');
+    // o token de concorrência é o da série, nunca o da transação
+    expect(args.p_expected_updated_at).toBe('serie-ts-1');
   });
 
   it('E10B: p_confirm_past/posted/edited são exigidos em this_and_next, não só em whole', () => {
@@ -370,7 +374,12 @@ describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
     });
     expect(withTs.p_expected_updated_at).toBe('series-ts-9');
     const without = buildSeriesEditArgs(recurring, 'whole', payload, 'ts-1', false);
-    expect(without.p_expected_updated_at).toBe('ts-1');
+    // Auditoria E10B: sem token da SÉRIE, o valor é null — e NÃO o
+    // updated_at da transação ('ts-1'). A 027 compara contra
+    // transaction_series.updated_at, então reutilizar o relógio da transação
+    // dispararia CONFLITO espúrio. Null faz o backend recusar com erro claro.
+    expect(without.p_expected_updated_at).toBeNull();
+    expect(without.p_expected_updated_at).not.toBe('ts-1');
   });
 });
 

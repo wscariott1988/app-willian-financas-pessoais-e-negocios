@@ -5,9 +5,16 @@
 //     confirmações e tri-estado de campos;
 //  2) contrato estático da migration 027 — porque NÃO há PostgreSQL local
 //     (proibido conectar) e a aplicação está bloqueada por backup (BL-4).
-//     As asserções leem o SQL e exigem que os defeitos do catálogo implantado
-//     NÃO reapareçam: status propagado, is_edited pulado, before_state depois
-//     da mutação, valor de parcela em lote, e ausência de wrapper público.
+//     As asserções leem o SQL e exigem que os defeitos semânticos do catálogo
+//     implantado NÃO reapareçam: status propagado, is_edited pulado,
+//     before_state depois da mutação e valor de parcela em lote.
+//
+//     Sobre os wrappers public.*: eles EXISTEM no catálogo implantado
+//     (E10A3_B13 reporta existe_no_banco=true para os cinco). B03
+//     (wrappers_public_dependentes) e B12 (objetos_public_por_nome_suspeito)
+//     não são inventários de pg_proc e não provam ausência. O defeito real é
+//     ACL: o 021 nunca aplicou REVOKE ... FROM PUBLIC nos wrappers, então anon
+//     herdava EXECUTE das RPCs mutáveis. Estes testes exigem o ACL correto.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -32,6 +39,7 @@ const ROOT = resolve(__dirname, '../../..');
 const sql = readFileSync(resolve(ROOT, 'supabase/migrations/027_series_scope_actions.sql'), 'utf8');
 const editorSrc = readFileSync(resolve(ROOT, 'mvp-app/src/components/TransactionEditor.tsx'), 'utf8');
 const delSrc = readFileSync(resolve(ROOT, 'mvp-app/src/components/DeleteConfirmation.tsx'), 'utf8');
+const seriesScopeSrc = readFileSync(resolve(ROOT, 'mvp-app/src/lib/seriesScope.ts'), 'utf8');
 
 const SCOPES: SeriesScope[] = ['this', 'this_and_next', 'whole'];
 
@@ -160,6 +168,26 @@ describe('E10B — confirmação forte de passado/posted antes de operar em lote
     expect(impactSummaryLines(impact({}), 'edit').length).toBeGreaterThan(0);
   });
 
+  it('a contagem anunciada é a de ATIVAS, que é o que os laços do backend tocam', () => {
+    // Regressão: a prévia anunciava total_no_escopo, mas os laços de
+    // mutation filtram transactions.deleted_at IS NULL. Com ocorrências já
+    // excluídas no intervalo, o número prometido era maior do que o
+    // realmente alterado/excluído. 42/36 são valores que não aparecem em
+    // nenhum outro campo, para detectar vazamento do total com precisão.
+    const imp = impact({ total_no_escopo: 42, ativas: 6, ja_excluidas: 36 });
+    for (const action of ['edit', 'delete'] as const) {
+      const linhas = impactSummaryLines(imp, action);
+      expect(linhas[0], `${action}: 1a linha`).toMatch(/^6 ocorr/);
+      expect(linhas[0], `${action}: 1a linha`).not.toMatch(/42/);
+      // o total bruto continua disponível, mas como diagnóstico explícito
+      expect(linhas.join(' ')).toMatch(/Total no escopo: 42/);
+      expect(linhas.join(' ')).toMatch(/36 .*exclu/);
+    }
+    // avisos e confirmações também nunca falam pelo total
+    expect(impactWarnings(imp, 'delete').join(' ')).not.toMatch(/42/);
+    expect(impactWarnings(imp, 'edit').join(' ')).not.toMatch(/42/);
+  });
+
   it('p_confirm_* só é true em escopo coletivo e com a confirmação marcada', () => {
     const c = { past: true, posted: true, edited: true };
     for (const scope of ['this_and_next', 'whole'] as SeriesScope[]) {
@@ -283,8 +311,27 @@ describe('E10B — concorrência otimista e atomicidade', () => {
     const info = { ...recurring, series_updated_at: 'serie-ts' };
     expect(buildSeriesEditArgs(info, 'whole', payload, 'tx-ts', false).p_expected_updated_at).toBe('serie-ts');
     expect(buildSeriesDeleteArgs(info, 'whole', 'tx-ts', 'serie-ts').p_expected_updated_at).toBe('serie-ts');
-    // sem o updated_at da série, cai no updated_at da transação (legado)
-    expect(buildSeriesDeleteArgs(recurring, 'this', 'tx-ts', null).p_expected_updated_at).toBe('tx-ts');
+  });
+
+  it('nunca usa o updated_at da TRANSAÇÃO como token de série', () => {
+    // Regressão: havia um fallback legado para expectedUpdatedAt (o
+    // updated_at da transação). Como a 027 compara contra
+    // transaction_series.updated_at, isso comparava relógios de domínios
+    // diferentes e gerava CONFLITO espúrio. Ausência vira null, e o backend
+    // recusa explicitamente.
+    const args = buildSeriesDeleteArgs(recurring, 'this', 'tx-ts', null);
+    expect(args.p_expected_updated_at).toBeNull();
+    const edit = buildSeriesEditArgs(recurring, 'this', payload, 'tx-ts', false);
+    expect(edit.p_expected_updated_at).toBeNull();
+    for (const v of [args.p_expected_updated_at, edit.p_expected_updated_at]) {
+      expect(v).not.toBe('tx-ts');
+    }
+  });
+
+  it('o token explícito da série tem prioridade sobre seriesInfo', () => {
+    const info = { ...recurring, series_updated_at: 'info-ts' };
+    expect(buildSeriesDeleteArgs(info, 'this', 'tx-ts', 'opts-ts').p_expected_updated_at).toBe('opts-ts');
+    expect(buildSeriesEditArgs(info, 'this', payload, 'tx-ts', false, { seriesUpdatedAt: 'opts-ts' }).p_expected_updated_at).toBe('opts-ts');
   });
 
   it('migration 027: bloqueia a série com FOR UPDATE e compara updated_at', () => {
@@ -320,14 +367,87 @@ describe('E10B — isolamento de perfil (Pessoal não toca Negócio)', () => {
   });
 });
 
-describe('E10B — exposição mínima: wrapper público só para authenticated', () => {
-  it('existe wrapper public para os três RPCs usados pelo app', () => {
-    for (const fn of ['series_scope_impact', 'transaction_series_edit', 'transaction_series_delete']) {
-      expect(sql).toMatch(new RegExp(`CREATE OR REPLACE FUNCTION public\\.${fn}\\(`));
+describe('E10B — exposição mínima: as 5 wrappers public só para authenticated', () => {
+  // Os wrappers public.* de série EXISTEM no catálogo implantado (B13,
+  // existe_no_banco=true). A 027 não pode recriá-los às cegas nem removê-los.
+  const ALL_PUBLIC = [
+    'public.series_scope_impact',
+    'public.transaction_series_create',
+    'public.transaction_series_delete',
+    'public.transaction_series_edit',
+    'public.transaction_series_materialize',
+    'public.transaction_series_preview',
+  ];
+
+  it('ACL correto para as 5 wrappers + a nova de impacto', () => {
+    const revokes = sql.match(/REVOKE ALL ON FUNCTION (app|public)\.[\s\S]*?FROM PUBLIC, anon;/g) ?? [];
+    const grants = sql.match(/GRANT EXECUTE ON FUNCTION (app|public)\.[\s\S]*?TO authenticated;/g) ?? [];
+    // 3 app.* + 6 public.* (impact, create, delete, edit, materialize, preview)
+    expect(revokes.length).toBe(9);
+    expect(grants.length).toBe(9);
+    expect(sql).not.toMatch(/TO anon;/);
+    expect(sql).not.toMatch(/TO service_role;/);
+    for (const fn of ALL_PUBLIC) {
+      const name = fn.slice('public.'.length);
+      expect(sql, `falta REVOKE PUBLIC/anon em ${fn}`).toMatch(
+        new RegExp(`REVOKE ALL ON FUNCTION ${fn.replace('.', '\\.')}\\([\\s\\S]*?\\) FROM PUBLIC, anon;`),
+      );
+      expect(sql, `falta GRANT authenticated em ${fn}`).toMatch(
+        new RegExp(`GRANT EXECUTE ON FUNCTION ${fn.replace('.', '\\.')}\\([\\s\\S]*?\\) TO authenticated;`),
+      );
+      expect(name).toBeTruthy();
     }
   });
 
-  it('wrappers são INVOKER (não definer) e o app é exposto via public', () => {
+  it('create, preview e materialize NÃO são dropadas nem recriadas (corpo preservado)', () => {
+    // Regressão do 7ed0f94: havia um DROP destrutivo em
+    // public.transaction_series_preview que nunca era recriado, o que
+    // removeria a RPC de prévia de criação de série.
+    for (const fn of ['public.transaction_series_create', 'public.transaction_series_preview', 'public.transaction_series_materialize']) {
+      expect(sql, `${fn} não pode ser DROPada`).not.toMatch(new RegExp(`DROP FUNCTION[^;]*${fn.replace('.', '\\.')}\\(`));
+      expect(sql, `${fn} não precisa ser recriada`).not.toMatch(
+        new RegExp(`CREATE (OR REPLACE )?FUNCTION ${fn.replace('.', '\\.')}\\(`),
+      );
+    }
+  });
+
+  it('os únicos DROP usam a assinatura exata implantada e são justificados', () => {
+    const drops = sql.match(/DROP FUNCTION IF EXISTS [\s\S]*?;/g) ?? [];
+    // 2 wrappers public (delete, edit) + 2 app.* (delete, edit) + 1 app.* defensivo
+    expect(drops.length).toBe(5);
+    for (const d of drops) expect(d).toMatch(/IF EXISTS/);
+    // a justificativa da aridade está no SQL
+    expect(sql).toMatch(/ARIDADE muda/);
+    expect(sql).toMatch(/CREATE OR REPLACE não troca/);
+    // nada de CASCADE em qualquer DROP FUNCTION: a ordem public -> app preserva as dependências
+    expect(sql).not.toMatch(/DROP FUNCTION[^;]*CASCADE/i);
+    // e a ordem está correta: todo wrapper public.* é removido antes do app.* correspondente
+    const ordem = [...sql.matchAll(/DROP FUNCTION IF EXISTS (public|app)\./g)].map((m) => m[1]);
+    expect(ordem).toEqual(['public', 'public', 'app', 'app', 'app']);
+  });
+
+  it('edit e delete mudam de aridade, então o DROP é necessário e o frontend acompanha', () => {
+    // 11 -> 15 (edit) e 5 -> 7 (delete): aridade nova, sem overload órfão
+    expect(sql).toMatch(/DROP FUNCTION IF EXISTS public\.transaction_series_edit\(uuid, integer, text, timestamptz, text, numeric, uuid, uuid, text, text, boolean\);/);
+    expect(sql).toMatch(/DROP FUNCTION IF EXISTS public\.transaction_series_delete\(uuid, integer, text, timestamptz, boolean\);/);
+    // o frontend envia exatamente a assinatura nova, via helper compartilhado
+    const args = buildSeriesEditArgs(recurring, 'whole', payload, 'ts', false, { confirms: { past: true, posted: true, edited: true } });
+    for (const k of Object.keys(args)) {
+      expect(sql, `parâmetro ${k} sem par no SQL`).toMatch(new RegExp(`\\b${k}\\b`));
+    }
+  });
+
+  it('a função de impacto tem wrapper public acessível pelo PostgREST', () => {
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.series_scope_impact\(/);
+    expect(editorSrc).toContain("rpc('series_scope_impact'");
+    expect(delSrc).toContain("rpc('series_scope_impact'");
+    const i = sql.indexOf('CREATE OR REPLACE FUNCTION public.series_scope_impact(');
+    const w = sql.slice(i, sql.indexOf('$$;', i));
+    expect(w).toMatch(/SECURITY INVOKER/);
+    expect(w).toMatch(/app\.series_scope_impact\(p_series_id, p_from_occurrence, p_scope\)/);
+  });
+
+  it('wrappers recriados são INVOKER com search_path fixo', () => {
     const wrappers = sql.match(/CREATE OR REPLACE FUNCTION public\.[\s\S]*?\$\$;/g) ?? [];
     expect(wrappers.length).toBe(3);
     for (const w of wrappers) {
@@ -337,20 +457,20 @@ describe('E10B — exposição mínima: wrapper público só para authenticated'
     }
   });
 
-  it('revoga PUBLIC/anon e concede apenas authenticated em app e public', () => {
-    const revokes = sql.match(/REVOKE ALL ON FUNCTION (app|public)\.[\s\S]*?FROM PUBLIC, anon;/g) ?? [];
-    expect(revokes.length).toBe(6);
-    const grants = sql.match(/GRANT EXECUTE ON FUNCTION (app|public)\.[\s\S]*?TO authenticated;/g) ?? [];
-    expect(grants.length).toBe(6);
-    expect(sql).not.toMatch(/TO anon;/);
-    expect(sql).not.toMatch(/TO service_role;/);
-  });
-
   it('as funções app que fazem o trabalho real são SECURITY DEFINER', () => {
     // a de impacto é STABLE (read-only); as mutantes são VOLATILE por padrão
-    expect(sql).toMatch(/FUNCTION app\.series_scope_impact[\s\S]*?LANGUAGE plpgsql\nSTABLE\nSECURITY DEFINER/);
-    const mut = sql.match(/FUNCTION app\.transaction_series_(edit|delete)[\s\S]*?LANGUAGE plpgsql\nSECURITY DEFINER/g) ?? [];
+    // \r?\n porque o arquivo pode ser lido com CRLF ou LF dependendo de como o
+    // checkout materializou a migration; a asserção é sobre o conteúdo, não
+    // sobre a quebra de linha.
+    expect(sql).toMatch(/FUNCTION app\.series_scope_impact[\s\S]*?LANGUAGE plpgsql\r?\nSTABLE\r?\nSECURITY DEFINER/);
+    const mut = sql.match(/FUNCTION app\.transaction_series_(edit|delete)[\s\S]*?LANGUAGE plpgsql\r?\nSECURITY DEFINER/g) ?? [];
     expect(mut.length).toBe(2);
+  });
+
+  it('helpers internos de app.* não recebem GRANT', () => {
+    for (const h of ['assert_account_for_profile', 'resolve_category_for_profile', 'normalize_description', 'tx_state_jsonb']) {
+      expect(sql).not.toMatch(new RegExp(`GRANT[^;]*${h}`));
+    }
   });
 });
 
@@ -407,5 +527,99 @@ describe('E10B — a prévia de impacto é sempre consultada no backend', () => 
     for (const e of withImpact) {
       expect(e).not.toMatch(/\.insert\(|\.update\(|\.delete\(|transaction_series_edit|transaction_series_delete/);
     }
+  });
+});
+
+describe('E10B — falha e corrida de detecção não viram silêncio', () => {
+  it('a prévia de impacto é sempre consultada no backend', () => {
+    expect(editorSrc).toContain("rpc('series_scope_impact'");
+    expect(delSrc).toContain("rpc('series_scope_impact'");
+  });
+
+  it('erro da prévia é renderizado, não engolido pelo gate de render', () => {
+    // Regressão: o bloco só abria com (impactLoading || impact), então uma
+    // falha de RPC deixava impact=null e a mensagem de erro nunca aparecia.
+    expect(editorSrc).toContain('(impactLoading || impact || impactError)');
+    expect(delSrc).toContain('(impactLoading || impact || impactError)');
+    // e o texto que aparecia no lugar ("nunca altera anteriores") some se houver erro
+    expect(editorSrc).toContain('!impact && !impactLoading && !impactError');
+  });
+
+  it('o erro da exclusão tem mensagem própria e orienta o usuário', () => {
+    expect(delSrc).toContain('delete-series-impact-error');
+    expect(delSrc).toMatch(/setImpactError\(rpcError \? String\(rpcError\.message \|\| rpcError\)/);
+  });
+
+  it('salvar/excluir espera a detecção de série para não perder o escopo', () => {
+    // Regressão: seriesInfo começa null, então salvar/excluir dentro da janela
+    // de detecção caía no caminho genérico (transaction_update/transaction_delete)
+    // e o escopo da série era perdido sem erro.
+    expect(editorSrc).toMatch(/const \[seriesLoading, setSeriesLoading\] = useState\(false\)/);
+    expect(editorSrc).toMatch(/!seriesLoading &&/);
+    expect(delSrc).toMatch(/const \[detectingSeries, setDetectingSeries\] = useState\(false\)/);
+    expect(delSrc).toMatch(/const seriesLoading = detectingSeries/);
+    expect(delSrc).toMatch(/const deleteBlocked = seriesLoading \|\|/);
+  });
+
+  it('a detecção sempre resolve o flag, inclusive no caminho de erro', () => {
+    for (const src of [editorSrc, delSrc]) {
+      const effects = src.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[/g) ?? [];
+      const det = effects.filter((e) => e.includes('transaction_series_occurrences'));
+      expect(det.length).toBe(1);
+      for (const e of det) {
+        // todo rejection handler (`, () => {` ou `.then(undefined, () => {`)
+        // também limpa o loading, senão o botão fica travado para sempre
+        expect(e, 'flag de loading nunca resolvido').toMatch(
+          /(\}\,|\.then\(undefined,)\s*\(\)\s*=>\s*\{[\s\S]*?set\w+\(false\)/,
+        );
+      }
+    }
+  });
+
+  it('impactError também bloqueia a exclusão coletiva', () => {
+    expect(delSrc).toMatch(/collectiveScope && \(!impactReady \|\| !!impactError\)/);
+  });
+});
+
+describe('E10B — concorrência otimista não pode ser desligada por omissão', () => {
+  it('nenhum guard aceita "p_expected_updated_at IS NOT NULL AND ..."', () => {
+    // Regressão: com DEFAULT NULL, esse padrão transformava a omissão do
+    // parâmetro em "sem verificação", sobrescrevendo edição concorrente.
+    expect(sql).not.toMatch(/p_expected_updated_at IS NOT NULL\s*\n\s*AND abs/);
+  });
+
+  it('edit e delete rejeitam explicitamente a ausência do token', () => {
+    const guards = sql.match(/IF p_expected_updated_at IS NULL THEN[\s\S]*?END IF;/g) ?? [];
+    expect(guards.length).toBe(2);
+    for (const g of guards) expect(g).toMatch(/CONFLITO: updated_at da serie ausente/);
+  });
+
+  it('o conflito é levantado antes de qualquer escrita', () => {
+    // o guard precisa vir antes do primeiro DML real da função, senão haveria
+    // alteração parcial antes de detectar o conflito. 'FOR UPDATE' é lock de
+    // leitura e comentário não é DML, então os padrões são específicos.
+    const dml = /\bUPDATE\s+transactions\b|\bDELETE\s+FROM\b|\bINSERT\s+INTO\b/i;
+    for (const fn of ['app.transaction_series_delete', 'app.transaction_series_edit']) {
+      const from = sql.indexOf(`FUNCTION ${fn}(`);
+      const to = sql.indexOf('$function$;', from);
+      const body = sql.slice(from, to);
+      const guard = body.indexOf('p_expected_updated_at IS NULL');
+      const firstWrite = body.search(dml);
+      expect(guard, `${fn}: guard ausente`).toBeGreaterThan(-1);
+      expect(firstWrite, `${fn}: sem escrita`).toBeGreaterThan(-1);
+      expect(guard, `${fn}: conflito só é detectado DEPOIS de mutar`).toBeLessThan(firstWrite);
+    }
+  });
+
+  it('o frontend sempre envia o updated_at da série nos dois caminhos', () => {
+    // nenhum builder pode inventar token a partir de outro domínio
+    expect(editorSrc).toContain('series_updated_at');
+    expect(delSrc).toContain('series_updated_at');
+    expect(seriesScopeSrc).toMatch(/p_expected_updated_at: opts\.seriesUpdatedAt \?\? seriesInfo\.series_updated_at \?\? null/);
+    expect(seriesScopeSrc).toMatch(/p_expected_updated_at: seriesUpdatedAt \?\? seriesInfo\.series_updated_at \?\? null/);
+    expect(seriesScopeSrc).not.toMatch(/series_updated_at \?\? expectedUpdatedAt/);
+    // e as consultas de detecção pedem o updated_at da série
+    expect(editorSrc).toContain('transaction_series(total_occurrences, kind, updated_at)');
+    expect(delSrc).toContain('transaction_series(kind, updated_at)');
   });
 });

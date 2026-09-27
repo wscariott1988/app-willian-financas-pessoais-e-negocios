@@ -139,9 +139,13 @@ export function impactSummaryLines(impact: SeriesScopeImpact | null, action: 'ed
   if (!impact) return [];
   const verb = action === 'delete' ? 'serão excluídas' : 'serão alteradas';
   const out: string[] = [];
-  out.push(`${plural(impact.total_no_escopo, 'ocorrência', 'ocorrências')} no escopo “${SERIES_SCOPE_LABELS[impact.scope]}” ${verb}.`);
+  // O número principal é o de ATIVAS, que é o que a mutação realmente toca:
+  // os laços do backend filtram transactions.deleted_at IS NULL. Anunciar
+  // total_no_escopo aqui inflaria a contagem quando há ocorrências já
+  // excluídas no intervalo.
+  out.push(`${plural(impact.ativas, 'ocorrência ativa', 'ocorrências ativas')} no escopo “${SERIES_SCOPE_LABELS[impact.scope]}” ${verb}.`);
 
-  if (impact.ativas > 0) out.push(`${plural(impact.ativas, 'ocorrência ativa', 'ocorrências ativas')}.`);
+  if (impact.ativas > 0) out.push(`Total no escopo: ${impact.total_no_escopo}.`);
   if (impact.passadas > 0) out.push(`${plural(impact.passadas, 'ocorrência passada', 'ocorrências passadas')} (datas anteriores a hoje).`);
   if (impact.pagas > 0) out.push(`${plural(impact.pagas, 'ocorrência paga/postada', 'ocorrências pagas/postadas')} (status posted).`);
   if (impact.pending > 0) out.push(`${plural(impact.pending, 'ocorrência pendente', 'ocorrências pendentes')}.`);
@@ -245,7 +249,12 @@ export function buildSeriesEditArgs(
     p_from_occurrence: seriesInfo.occurrence_index,
     p_scope: scope,
     // 027 compara contra transaction_series.updated_at
-    p_expected_updated_at: opts.seriesUpdatedAt ?? seriesInfo.series_updated_at ?? expectedUpdatedAt,
+    // O token de concorrência é SEMPRE o updated_at da SÉRIE, porque é contra
+   // transaction_series.updated_at que a 027 compara. Cair no updated_at da
+   // transação (legado do 021) compararia relógios de domínios diferentes e
+   // dispararia CONFLITO espúrio em quase toda edição. Sem token de série, o
+   // certo é mandar null e deixar o backend recusar com erro explícito.
+   p_expected_updated_at: opts.seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
     p_display_name: payload.description || null,
     p_amount: amountAllowed ? payload.amount ?? null : null,
     p_account_id: payload.account_id || null,
@@ -274,7 +283,9 @@ export function buildSeriesDeleteArgs(
     p_series_id: seriesInfo.series_id,
     p_from_occurrence: seriesInfo.occurrence_index,
     p_scope: scope,
-    p_expected_updated_at: seriesUpdatedAt ?? seriesInfo.series_updated_at ?? expectedUpdatedAt,
+    // Token de concorrência é o da SÉRIE (ver nota em buildSeriesEditArgs):
+   // nunca o da transação. Sem ele, null para o backend recusar.
+   p_expected_updated_at: seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
     p_confirm_past: collective ? !!confirms.past : false,
     p_confirm_posted: collective ? !!confirms.posted : false,
     p_confirm_edited: collective ? !!confirms.edited : false,

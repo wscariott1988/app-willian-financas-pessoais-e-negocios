@@ -60,21 +60,39 @@ END;
 $$;
 
 -- ============================================================================
--- 1) Remoção das assinaturas defeituosas.
---    A assinatura muda (parâmetros de ação/confirmação), então é preciso dropar
---    a anterior: CREATE OR REPLACE não troca aridade.
+-- 1) Remoção das assinaturas defeituosas (SOMENTE as que mudam de aridade).
 --
---    IMPORTANTE (PESSOAL-13C4A-E10B): os wrappers public.* são o ÚNICO caminho
---    do app, porque o PostgREST resolve supabase.rpc(...) no schema exposto
---    (public). O catálogo implantado NÃO tem wrappers public.* de série
---    (B03: wrappers_public_dependentes=[]; B12: nenhum objeto public de
---    função), então hoje edição/exclusão de recorrência pela UI está quebrada.
---    Este drop é defensivo: se o 021 tiver sido aplicado em algum ambiente,
---    remove a aridade antiga antes de recriar com a nova.
+--    Os wrappers public.* de série EXISTEM no catálogo implantado — B13
+--    reporta existe_no_banco=true para os cinco:
+--      public.transaction_series_create / _delete / _edit / _materialize /
+--      _preview
+--    B03 (wrappers_public_dependentes=[]) e B12 (objetos_public_por_nome_suspeito)
+--    NÃO são inventários de pg_proc e, portanto, não provam ausência: foram lidos
+--    como tal por engano numa versão anterior desta migration. B13 é a evidência
+--    positiva; B05 é escopo app-only (n_funcoes_app=35) e não cobre os wrappers.
+--
+--    Os wrappers são LANGUAGE sql / SECURITY INVOKER / search_path=public, app,
+--    delegando para app.*. O defeito real é ACL: o 021 faz
+--    GRANT EXECUTE ... TO authenticated nos wrappers, mas NUNCA
+--    REVOKE ... FROM PUBLIC neles. Como CREATE FUNCTION dá EXECUTE ao PUBLIC por
+--    padrão, anon herda EXECUTE das RPCs mutáveis de série. A correção de ACL
+--    está na seção 6, sem tocar no corpo dos wrappers.
+--
+--    Aqui só há DROP porque a ARIDADE muda e CREATE OR REPLACE não troca
+--    aridade. Cada DROP usa a assinatura exata implantada (B02/021):
+--      edit:   11 params -> 15 params
+--      delete:  5 params ->  7 params
+--    preview/create/materialize NÃO são tocados aqui: suas assinaturas não
+--    mudam e seus corpos permanecem intactos. Nenhum overload órfão é criado:
+--    cada assinatura antiga é removida antes da nova ser criada.
+--
+--    Ordem importa: os wrappers public são removidos ANTES das app.*, porque
+--    dependem delas (sem CASCADE). public.transaction_series_create,
+--    _preview e _materialize continuam depending de app.*, e essas app.* não
+--    são removidas — logo nada quebra.
 -- ============================================================================
 DROP FUNCTION IF EXISTS public.transaction_series_delete(uuid, integer, text, timestamptz, boolean);
 DROP FUNCTION IF EXISTS public.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, uuid, text, text, boolean);
-DROP FUNCTION IF EXISTS public.transaction_series_preview(text, text, text, numeric, integer, date, uuid, uuid);
 
 DROP FUNCTION IF EXISTS app.transaction_series_delete(uuid, integer, text, timestamptz, boolean);
 DROP FUNCTION IF EXISTS app.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, uuid, text, text, boolean);
@@ -256,8 +274,16 @@ BEGIN
     END IF;
 
     -- (4) concorrência otimista em TODOS os escopos, inclusive 'whole'
-    IF p_expected_updated_at IS NOT NULL
-       AND abs(extract(epoch FROM (v_ser.updated_at - p_expected_updated_at))) > 0.001 THEN
+    -- O guard NÃO pode ser "IS NOT NULL AND ...": assim, quem omitisse o
+    -- parâmetro (DEFAULT NULL) desligaria a verificação e sobrescreveria a
+    -- alteração de outro usuário sem erro. Ausência do token vira falha alta,
+    -- não passagem silenciosa. Os dois componentes sempre enviam
+    -- transaction_series.updated_at, então o NULL só ocorre em dado inválido.
+    IF p_expected_updated_at IS NULL THEN
+        RAISE EXCEPTION 'CONFLITO: updated_at da serie ausente; nao e possivel validar concorrencia'
+            USING ERRCODE = '40001';
+    END IF;
+    IF abs(extract(epoch FROM (v_ser.updated_at - p_expected_updated_at))) > 0.001 THEN
         RAISE EXCEPTION 'CONFLITO: serie foi modificada por outra operacao'
             USING ERRCODE = '40001';
     END IF;
@@ -455,8 +481,12 @@ BEGIN
     END IF;
 
     -- (4) concorrência otimista em TODOS os escopos
-    IF p_expected_updated_at IS NOT NULL
-       AND abs(extract(epoch FROM (v_ser.updated_at - p_expected_updated_at))) > 0.001 THEN
+    -- Mesma regra do impacto: null não é "sem verificação", é erro.
+    IF p_expected_updated_at IS NULL THEN
+        RAISE EXCEPTION 'CONFLITO: updated_at da serie ausente; nao e possivel validar concorrencia'
+            USING ERRCODE = '40001';
+    END IF;
+    IF abs(extract(epoch FROM (v_ser.updated_at - p_expected_updated_at))) > 0.001 THEN
         RAISE EXCEPTION 'CONFLITO: serie foi modificada por outra operacao'
             USING ERRCODE = '40001';
     END IF;
@@ -625,19 +655,21 @@ COMMENT ON FUNCTION app.transaction_series_edit(uuid, integer, text, timestamptz
     'E10B: edicao por escopo (this|this_and_next|whole). Nao propaga status fora de ''this''. Nao pula is_edited. before_state antes da mutacao. Concorrencia otimista em todos os escopos. category_id/memo usam *_action (preserve|set|clear). Valor em lote bloqueado para installment.';
 
 -- ============================================================================
--- 5) WRAPPERS public.* — o caminho real do app (PostgREST).
+-- 5) WRAPPERS public.* — o caminho do app via PostgREST.
 --
 --    O app chama supabase.rpc('transaction_series_edit' | '_delete' |
 --    'series_scope_impact') SEM qualificar o schema, e o PostgREST resolve no
---    schema exposto (public). O catálogo implantado não possui esses wrappers
---    (B03 wrappers_public_dependentes=[]; B12 sem função public de série), o
---    que torna a edição/exclusão de recorrência pela UI inoperante. Aqui o
---    gap é fechado com o menor privilégio possível:
---      - SECURITY INVOKER (o wrapper NÃO é definer; quem executa é o usuário);
---      - search_path fixo 'public, app';
---      - sem PUBLIC e sem anon; somente authenticated.
---    Sem GRANT USAGE em app de propósito: o wrapper é invoker e o usuário só
---    precisa de EXECUTE na função public, cujo corpo delega à app.
+--    schema exposto (public). Os wrappers public.* JÁ EXISTEM no catálogo
+--    implantado (B13: existe_no_banco=true) com o mesmo formato do 021:
+--    LANGUAGE sql / SECURITY INVOKER / search_path = public, app.
+--
+--    Aqui só há CREATE OR REPLACE para as funções cuja assinatura mudou
+--    (edit e delete) e para a nova de impacto. create, preview e materialize
+--    NÃO são recriadas: seus corpos e assinatures ficam intactos, e a
+--    correção de ACL delas é feita apenas por REVOKE/GRANT na seção 6.
+--
+--    Não há gap de acesso a fechar: o app já alcançava esses RPCs. O que
+--    faltava era privilégio mínimo, tratado na seção 6.
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.series_scope_impact(
     p_series_id       uuid,
@@ -704,7 +736,32 @@ COMMENT ON FUNCTION public.series_scope_impact(uuid, integer, text) IS
     'E10B: wrapper publico (invoker) da previa de impacto por escopo. Somente authenticated.';
 
 -- ============================================================================
--- 6) PRIVILÉGIOS: sem anon/PUBLIC; apenas authenticated.
+-- 6) PRIVILÉGIOS: sem PUBLIC, sem anon; apenas authenticated.
+--
+--    CAUSA RAIZ DA EXPOSIÇÃO (corrigida aqui): o 021 aplicou
+--    GRANT EXECUTE ... TO authenticated nos wrappers public.*, mas nunca
+--    REVOKE ... FROM PUBLIC neles (verificado: 0 REVOKE em public.* no 021).
+--    CREATE FUNCTION concede EXECUTE ao PUBLIC por padrão, logo anon herdava
+--    EXECUTE das RPCs mutáveis de série através do PostgREST. O ledger do
+--    catálogo (B12) registra 'HOTFIX_013_GRANTS_REVOKE_ANON.sql', o que
+--    confirma que esse padrão de vazamento por PUBLIC já foi tratado antes.
+--
+--    CREATE OR REPLACE FUNCTION NÃO altera privilégio; por isso os REVOKE
+--    explícitos abaixo são obrigatórios.
+--
+--    As três wrappers que a 027 NÃO recria (create, preview, materialize)
+--    recebem aqui apenas ajuste de ACL — corpo e assinatura intactos. preview
+--    é read-only, mas create e materialize são mutantes e ficavam expostas.
+--
+--    Resultado esperado após a 027, para as 5 wrappers de série:
+--      PUBLIC       sem EXECUTE
+--      anon          sem EXECUTE
+--      authenticated EXECUTE (o app precisa chamar as 5)
+--      postgres      dono
+--    As app.* ficam sem EXECUTE para PUBLIC/anon e com EXECUTE para
+--    authenticated; os helpers internos de app.* (assert_account_for_profile,
+--    resolve_category_for_profile, normalize_description, tx_state_jsonb) não
+--    recebem GRANT e permanecem só acessíveis por quem já os podia chamar.
 -- ============================================================================
 REVOKE ALL ON FUNCTION app.series_scope_impact(uuid, integer, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION app.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, text, uuid, text, text, text, boolean, boolean, boolean) FROM PUBLIC, anon;
@@ -714,6 +771,7 @@ GRANT EXECUTE ON FUNCTION app.series_scope_impact(uuid, integer, text) TO authen
 GRANT EXECUTE ON FUNCTION app.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, text, uuid, text, text, text, boolean, boolean, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION app.transaction_series_delete(uuid, integer, text, timestamptz, boolean, boolean, boolean) TO authenticated;
 
+-- wrappers que a 027 recria (aridade nova)
 REVOKE ALL ON FUNCTION public.series_scope_impact(uuid, integer, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, text, uuid, text, text, text, boolean, boolean, boolean) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.transaction_series_delete(uuid, integer, text, timestamptz, boolean, boolean, boolean) FROM PUBLIC, anon;
@@ -721,3 +779,12 @@ REVOKE ALL ON FUNCTION public.transaction_series_delete(uuid, integer, text, tim
 GRANT EXECUTE ON FUNCTION public.series_scope_impact(uuid, integer, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.transaction_series_edit(uuid, integer, text, timestamptz, text, numeric, uuid, text, uuid, text, text, text, boolean, boolean, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.transaction_series_delete(uuid, integer, text, timestamptz, boolean, boolean, boolean) TO authenticated;
+
+-- wrappers que a 027 NÃO recria: só ACL, corpo preservado
+REVOKE ALL ON FUNCTION public.transaction_series_create(uuid, text, text, text, text, numeric, integer, date, uuid, uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.transaction_series_preview(text, text, text, numeric, integer, date, uuid, uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.transaction_series_materialize(uuid) FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.transaction_series_create(uuid, text, text, text, text, numeric, integer, date, uuid, uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.transaction_series_preview(text, text, text, numeric, integer, date, uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.transaction_series_materialize(uuid) TO authenticated;
