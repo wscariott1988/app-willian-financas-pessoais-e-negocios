@@ -217,7 +217,19 @@ export interface SeriesEditOptions {
   original?: { category_id?: string | null; memo?: string | null };
   /** updated_at da SÉRIE (concorrência otimista correta: 027 compara a série) */
   seriesUpdatedAt?: string | null;
+  /**
+   * Aceite EXPLÍCITO do usuário (gate 3.5 / E10F). requiredConfirms(impact)
+   * mora na UI e decide O QUE precisa ser confirmado; estas flags SÓ recebem
+   * true quando o checkbox correspondente foi marcado. Em NENHUM escopo as
+   * confirmações são derivadas da prévia de impacto.
+   */
   confirms?: { past?: boolean; posted?: boolean; edited?: boolean };
+  /**
+   * true quando o usuário alterou explicitamente o status no formulário.
+   * Em 'this' o status só viaja assim: status legado (review/ignored) que o
+   * usuário não tocou é preservado sem normalização (STATUS-P0).
+   */
+  statusEdited?: boolean;
 }
 
 /** Valor só pode trafegar em 'this' para installment; recorrentecollective ok. */
@@ -238,11 +250,16 @@ export function buildSeriesEditArgs(
   confirmPast: boolean,
   opts: SeriesEditOptions = {},
 ): Record<string, any> {
-  const category = resolveFieldAction(opts.original?.category_id, payload.category_id);
+const category = resolveFieldAction(opts.original?.category_id, payload.category_id);
   const memo = resolveFieldAction(opts.original?.memo, payload.memo);
   const amountAllowed = seriesAmountAllowed(seriesInfo.kind, scope);
   const collective = scope !== 'this';
   const c = opts.confirms ?? {};
+  // E10F (gate 3.5): confirmações vêm EXCLUSIVAMENTE do aceite explícito do
+  // usuário, em TODOS os escopos (inclusive 'this'). requiredConfirms(impact)
+  // é responsabilidade da UI: decide o QUE precisa ser confirmado, nunca
+  // concede confirmação. Sem checkbox marcado, a flag sai false e o backend
+  // 027 bloqueia com erro claro — nunca auto-confirmamos por omissão.
 
   return {
     p_series_id: seriesInfo.series_id,
@@ -250,11 +267,11 @@ export function buildSeriesEditArgs(
     p_scope: scope,
     // 027 compara contra transaction_series.updated_at
     // O token de concorrência é SEMPRE o updated_at da SÉRIE, porque é contra
-   // transaction_series.updated_at que a 027 compara. Cair no updated_at da
-   // transação (legado do 021) compararia relógios de domínios diferentes e
-   // dispararia CONFLITO espúrio em quase toda edição. Sem token de série, o
-   // certo é mandar null e deixar o backend recusar com erro explícito.
-   p_expected_updated_at: opts.seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
+    // transaction_series.updated_at que a 027 compara. Cair no updated_at da
+    // transação (legado do 021) compararia relógios de domínios diferentes e
+    // dispararia CONFLITO espúrio em quase toda edição. Sem token de série, o
+    // certo é mandar null e deixar o backend recusar com erro explícito.
+    p_expected_updated_at: opts.seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
     p_display_name: payload.description || null,
     p_amount: amountAllowed ? payload.amount ?? null : null,
     p_account_id: payload.account_id || null,
@@ -262,15 +279,23 @@ export function buildSeriesEditArgs(
     p_category_id: category.action === 'set' ? category.value : null,
     p_memo_action: memo.action,
     p_memo: memo.action === 'set' ? memo.value : null,
-    // backend rejeita p_status fora de 'this'; o cliente não envia.
-    p_status: collective ? null : payload.status || null,
-    p_confirm_past: collective ? !!c.past || !!confirmPast : false,
-    p_confirm_posted: collective ? !!c.posted : false,
-    p_confirm_edited: collective ? !!c.edited : false,
+    // backend rejeita p_status fora de 'this'; em 'this' o status só viaja se
+    // o usuário o alterou explicitamente (statusEdited) — status legado não
+    // tocado permanece preservado, sem normalização silenciosa (STATUS-P0).
+    p_status: collective ? null : (opts.statusEdited === false ? null : payload.status || null),
+    // E10F: aceite explícito em todos os escopos. confirmPast é o checkbox de
+    // passado do fluxo de ocorrência única (também um aceite explícito).
+    p_confirm_past: !!c.past || !!confirmPast,
+    p_confirm_posted: !!c.posted,
+    p_confirm_edited: !!c.edited,
   };
 }
 
-/** Argumentos de app.transaction_series_delete. */
+/**
+ * Argumentos de app.transaction_series_delete.
+ * As confirmações vêm do aceite EXPLÍCITO do usuário em todos os escopos
+ * (gate 3.5 / E10F); requiredConfirms(impact) fica na UI.
+ */
 export function buildSeriesDeleteArgs(
   seriesInfo: SeriesEditInfoLike,
   scope: SeriesScope,
@@ -278,17 +303,17 @@ export function buildSeriesDeleteArgs(
   seriesUpdatedAt: string | null,
   confirms: { past?: boolean; posted?: boolean; edited?: boolean } = {},
 ): Record<string, any> {
-  const collective = scope !== 'this';
   return {
     p_series_id: seriesInfo.series_id,
     p_from_occurrence: seriesInfo.occurrence_index,
     p_scope: scope,
     // Token de concorrência é o da SÉRIE (ver nota em buildSeriesEditArgs):
-   // nunca o da transação. Sem ele, null para o backend recusar.
-   p_expected_updated_at: seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
-    p_confirm_past: collective ? !!confirms.past : false,
-    p_confirm_posted: collective ? !!confirms.posted : false,
-    p_confirm_edited: collective ? !!confirms.edited : false,
+    // nunca o da transação. Sem ele, null para o backend recusar.
+    p_expected_updated_at: seriesUpdatedAt ?? seriesInfo.series_updated_at ?? null,
+    // E10F: exclusivamente aceite explícito, inclusive em 'this'.
+    p_confirm_past: !!confirms.past,
+    p_confirm_posted: !!confirms.posted,
+    p_confirm_edited: !!confirms.edited,
   };
 }
 

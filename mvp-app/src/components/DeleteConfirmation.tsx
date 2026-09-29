@@ -77,7 +77,12 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   // fluxo cairia em transaction_delete, ignorando o escopo escolhido. Sem
   // série resolvida, nenhuma exclusão é oferecida.
   const seriesLoading = detectingSeries;
-  const deleteBlocked = seriesLoading || (collectiveScope && (!impactReady || !!impactError));
+  // E10F (gate 3.5): com série, bloqueia enquanto a prévia não assentar ou a
+  // confirmação exigida não for marcada — em TODOS os escopos, inclusive
+  // 'this'. Nunca auto-confirmamos por omissão; sem aceite, o backend (027)
+  // rejeitaria a operação.
+  const deleteBlocked =
+    seriesLoading || (!!seriesInfo && (impactLoading || !!impactError || !impact || !impactReady));
 
   useEffect(() => {
     mounted.current = true;
@@ -229,15 +234,15 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
     try {
       // PESSOAL-13C4A-E10B: transação de série exclusa pelo escopo escolhido.
       const { error: rpcError } = seriesInfo
-        ? await supabase.rpc('transaction_series_delete', {
-            ...buildSeriesDeleteArgs(
-              seriesInfo,
-              activeScope,
-              expectedUpdatedAt,
-              seriesInfo.series_updated_at ?? null,
-              confirms,
-            ),
-          })
+? await supabase.rpc('transaction_series_delete', {
+              ...buildSeriesDeleteArgs(
+                seriesInfo,
+                activeScope,
+                expectedUpdatedAt,
+                seriesInfo.series_updated_at ?? null,
+                confirms,
+              ),
+            })
         : await supabase.rpc('transaction_delete', {
             p_transaction_id: tx.id,
             p_expected_updated_at: expectedUpdatedAt,
@@ -399,8 +404,8 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
               {impactError && (
                 <span data-testid="delete-series-impact-error">
                   Não foi possível calcular o impacto desta exclusão: {impactError} A exclusão
-                  em escopo amplo fica bloqueada, porque as confirmações exigidas não puderam ser
-                  verificadas. Tente novamente ou use “Somente esta ocorrência”.
+                  fica bloqueada porque as confirmações exigidas não puderam ser verificadas.
+                  Tente novamente.
                 </span>
               )}
               {impact && impactSummaryLines(impact, 'delete').map((line) => (
@@ -413,22 +418,34 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
             <span key={w} style={{ fontSize: '12px', color: 'var(--color-warning)' }}>{w}</span>
           ))}
 
-          {collectiveScope && impactRequired.past && (
+          {impactRequired.past && (
             <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
               <input type="checkbox" checked={confirms.past} onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))} style={{ marginTop: '1px' }} />
-              <span>Confirmo que desejo excluir também ocorrências passadas.</span>
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências passadas.'
+                  : 'Confirmo que desejo excluir esta ocorrência, que está no passado (data anterior a hoje).'}
+              </span>
             </label>
           )}
-          {collectiveScope && impactRequired.posted && (
+          {impactRequired.posted && (
             <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
               <input type="checkbox" checked={confirms.posted} onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))} style={{ marginTop: '1px' }} />
-              <span>Confirmo que desejo excluir também ocorrências com status posted.</span>
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências com status posted.'
+                  : 'Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).'}
+              </span>
             </label>
           )}
-          {collectiveScope && impactRequired.edited && (
+          {impactRequired.edited && (
             <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
               <input type="checkbox" checked={confirms.edited} onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))} style={{ marginTop: '1px' }} />
-              <span>Confirmo que desejo excluir também ocorrências editadas individualmente.</span>
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências editadas individualmente.'
+                  : 'Confirmo que desejo excluir esta ocorrência, que foi editada individualmente.'}
+              </span>
             </label>
           )}
         </div>

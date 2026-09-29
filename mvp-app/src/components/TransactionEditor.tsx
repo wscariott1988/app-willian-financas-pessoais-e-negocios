@@ -554,9 +554,11 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
    // E10B: o save espera a detecção de série para não degradar uma ocorrência
    // de série para o caminho genérico e perder o escopo em silêncio.
    !seriesLoading &&
-   // E10B: em escopo coletivo de série, toda confirmação exigida pela prévia
-   // precisa estar marcada antes de liberar o salvamento.
-   (!collectiveScope || !seriesInfo || impactReady);
+   // E10F (gate 3.5): com série, o save exige prévia de impacto carregada SEM
+   // erro e TODAS as confirmações exigidas marcadas — em todos os escopos,
+   // inclusive 'this'. Nada é auto-confirmado; sem aceite, o backend (027)
+   // rejeitaria, então o botão fica preso até o usuário confirmar.
+   (!seriesInfo || (!impactLoading && !!impact && !impactError && impactReady));
 
   // ---- Package 015: preview local (nenhum write) ----
   const seriesValid = entryType === 'single' || (form.kind !== 'transfer' && !!form.account_id && !!form.occurred_on && amountValue !== null && (entryType === 'installment' ? (Number(seriesTotal) >= 1 && Number(seriesTotal) <= 120) : true));
@@ -613,6 +615,10 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
               original: { category_id: originalFields.category_id, memo: originalFields.memo },
               seriesUpdatedAt: seriesInfo.series_updated_at ?? null,
               confirms,
+              // E10F: confirmações viajam SÓ do aceite explícito (confirms), em
+              // todos os escopos; statusEdited garante que p_status só viaja
+              // quando o usuário o alterou explicitamente no formulário.
+              statusEdited,
             }),
           });
           data = res.data;
@@ -982,7 +988,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                 </div>
               )}
 
-              {collectiveScope && impact && impactSummaryLines(impact, 'edit').length > 0 && (
+              {impact && (impactRequired.past || impactRequired.posted || impactRequired.edited) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {impactRequired.past && (
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
@@ -992,7 +998,11 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                         onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))}
                         style={{ marginTop: '1px' }}
                       />
-                      <span>Confirmo que desejo alterar também ocorrências passadas. Ocorrências editadas individualmente entram na operação e são informadas na prévia.</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências passadas. Ocorrências editadas individualmente entram na operação e são informadas na prévia.'
+                          : 'Confirmo que desejo alterar esta ocorrência, que está no passado (data anterior a hoje).'}
+                      </span>
                     </label>
                   )}
                   {impactRequired.posted && (
@@ -1003,7 +1013,11 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                         onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))}
                         style={{ marginTop: '1px' }}
                       />
-                      <span>Confirmo que desejo alterar também ocorrências com status posted (paga/postada).</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências com status posted (paga/postada).'
+                          : 'Confirmo que desejo alterar esta ocorrência com status posted (paga/postada).'}
+                      </span>
                     </label>
                   )}
                   {impactRequired.edited && (
@@ -1014,12 +1028,16 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                         onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))}
                         style={{ marginTop: '1px' }}
                       />
-                      <span>Confirmo que desejo alterar também ocorrências que já foram editadas individualmente.</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências que já foram editadas individualmente.'
+                          : 'Confirmo que desejo alterar esta ocorrência, que foi editada individualmente.'}
+                      </span>
                     </label>
                   )}
                   {impactBlocking && (
                     <span style={{ fontSize: '11px', color: 'var(--color-danger)' }}>
-                      Sem a prévia de impacto não é possível confirmar esta operação em lote.
+                      Sem a prévia de impacto não é possível confirmar esta operação.
                     </span>
                   )}
                 </div>
@@ -1270,25 +1288,42 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                       ))}
                     </div>
                   )}
+                  {impactError && (
+                    <span style={{ color: 'var(--color-danger)', fontSize: '12px' }}>
+                      Não foi possível calcular a prévia de impacto desta exclusão. A exclusão fica bloqueada.
+                    </span>
+                  )}
                   {collectiveScope && impact && impactWarnings(impact, 'delete').map((w) => (
                     <span key={w} style={{ color: 'var(--color-warning)' }}>{w}</span>
                   ))}
-                  {collectiveScope && impactRequired.past && (
+                  {impactRequired.past && (
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={confirms.past} onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))} style={{ marginTop: '1px' }} />
-                      <span>Confirmo que desejo excluir também ocorrências passadas.</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências passadas.'
+                          : 'Confirmo que desejo excluir esta ocorrência, que está no passado (data anterior a hoje).'}
+                      </span>
                     </label>
                   )}
-                  {collectiveScope && impactRequired.posted && (
+                  {impactRequired.posted && (
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={confirms.posted} onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))} style={{ marginTop: '1px' }} />
-                      <span>Confirmo que desejo excluir também ocorrências com status posted.</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências com status posted.'
+                          : 'Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).'}
+                      </span>
                     </label>
                   )}
-                  {collectiveScope && impactRequired.edited && (
+                  {impactRequired.edited && (
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={confirms.edited} onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))} style={{ marginTop: '1px' }} />
-                      <span>Confirmo que desejo excluir também ocorrências editadas individualmente.</span>
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências editadas individualmente.'
+                          : 'Confirmo que desejo excluir esta ocorrência, que foi editada individualmente.'}
+                      </span>
                     </label>
                   )}
                   <span>A exclusão é lógica e pode ser revertida. Nenhuma ocorrência é apagada em definitivo.</span>
@@ -1311,7 +1346,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   className="btn-primary"
                   onClick={doDelete}
                   style={{ flex: '1 1 120px', padding: '8px', backgroundColor: 'var(--color-danger)', border: 'none' }}
-                  disabled={deleting || (!!seriesInfo && collectiveScope && !impactReady)}
+                  disabled={deleting || (!!seriesInfo && (impactLoading || !!impactError || !impact || !impactReady))}
                 >
                   {deleting ? <><RefreshCw size={14} className="spin-animation" /> Excluindo...</> : <><Trash2 size={14} /> Confirmar exclusão</>}
                 </button>

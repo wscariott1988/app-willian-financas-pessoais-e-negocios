@@ -188,16 +188,18 @@ describe('E10B — confirmação forte de passado/posted antes de operar em lote
     expect(impactWarnings(imp, 'edit').join(' ')).not.toMatch(/42/);
   });
 
-  it('p_confirm_* só é true em escopo coletivo e com a confirmação marcada', () => {
+  it('p_confirm_* vem SÓ do aceite explícito, em todos os escopos (inclusive this)', () => {
+    // nada marcado => tudo false, mesmo com prévia exigindo (E10F gate 3.5)
+    const none = buildSeriesEditArgs(recurring, 'this', payload, 'ts', false);
+    expect(none.p_confirm_past).toBe(false);
+    expect(none.p_confirm_posted).toBe(false);
+    expect(none.p_confirm_edited).toBe(false);
+
     const c = { past: true, posted: true, edited: true };
-    for (const scope of ['this_and_next', 'whole'] as SeriesScope[]) {
+    for (const scope of ['this', 'this_and_next', 'whole'] as SeriesScope[]) {
       const a = buildSeriesEditArgs(recurring, scope, payload, 'ts', false, { confirms: c });
       expect(a.p_confirm_past && a.p_confirm_posted && a.p_confirm_edited).toBe(true);
     }
-    const one = buildSeriesEditArgs(recurring, 'this', payload, 'ts', true, { confirms: c });
-    expect(one.p_confirm_past).toBe(false);
-    expect(one.p_confirm_posted).toBe(false);
-    expect(one.p_confirm_edited).toBe(false);
   });
 
   it('migration 027: exige as três confirmações em escopo coletivo', () => {
@@ -558,7 +560,7 @@ describe('E10B — falha e corrida de detecção não viram silêncio', () => {
     expect(editorSrc).toMatch(/!seriesLoading &&/);
     expect(delSrc).toMatch(/const \[detectingSeries, setDetectingSeries\] = useState\(false\)/);
     expect(delSrc).toMatch(/const seriesLoading = detectingSeries/);
-    expect(delSrc).toMatch(/const deleteBlocked = seriesLoading \|\|/);
+    expect(delSrc).toMatch(/const deleteBlocked =\s*\n?\s*seriesLoading \|\|/);
   });
 
   it('a detecção sempre resolve o flag, inclusive no caminho de erro', () => {
@@ -576,8 +578,10 @@ describe('E10B — falha e corrida de detecção não viram silêncio', () => {
     }
   });
 
-  it('impactError também bloqueia a exclusão coletiva', () => {
-    expect(delSrc).toMatch(/collectiveScope && \(!impactReady \|\| !!impactError\)/);
+  it('impactError também bloqueia a exclusão, em todos os escopos', () => {
+    // E10F (gate 3.5): o bloqueio vale também em 'this'; a prévia de impacto é
+    // pré-requisito das confirmações em qualquer escopo.
+    expect(delSrc).toMatch(/deleteBlocked =\s*\n?\s*seriesLoading \|\| \(!!seriesInfo && \(impactLoading \|\| !!impactError \|\| !impact \|\| !impactReady\)\)/);
   });
 });
 
@@ -621,5 +625,154 @@ describe('E10B — concorrência otimista não pode ser desligada por omissão',
     // e as consultas de detecção pedem o updated_at da série
     expect(editorSrc).toContain('transaction_series(total_occurrences, kind, updated_at)');
     expect(delSrc).toContain('transaction_series(kind, updated_at)');
+  });
+});
+
+describe('E10E — regressões relatadas: editar para "paga" e excluir série de parcelas', () => {
+  const info = { series_id: 's-1', occurrence_index: 2, total: 12, kind: 'installment', series_updated_at: 'series-ts' };
+
+  it('alterar apenas o status preserva a categoria (sem set espúrio)', () => {
+    const args = buildSeriesEditArgs(info, 'this', { ...payload, category_id: 'cat-1' }, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+      statusEdited: true,
+    });
+    expect(args.p_category_action).toBe('preserve');
+    expect(args.p_category_id).toBeNull();
+    expect(args.p_status).toBe('posted');
+    expect(args.p_confirm_posted).toBe(false);
+  });
+
+  it('substituir categoria = set com valor; remover = clear com id nulo (também em this)', () => {
+    const set = buildSeriesEditArgs(info, 'this', { ...payload, category_id: 'cat-9' }, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+    });
+    expect(set.p_category_action).toBe('set');
+    expect(set.p_category_id).toBe('cat-9');
+
+    const clear = buildSeriesEditArgs(info, 'this', { ...payload, category_id: '' }, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+    });
+    expect(clear.p_category_action).toBe('clear');
+    expect(clear.p_category_id).toBeNull();
+    // preserve/clear jamais enviam valor: nada de 'set' forçado para silenciar a validação
+    expect(clear.p_category_action === 'set' && clear.p_category_id).toBeFalsy();
+  });
+
+  it('status legado não tocado NÃO viaja (preservado sem normalização em this)', () => {
+    const args = buildSeriesEditArgs(info, 'this', { ...payload, status: 'review' }, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+      statusEdited: false,
+    });
+    expect(args.p_status).toBeNull();
+  });
+
+  it("'this' SEM aceite => flags false mesmo com prévia exigindo; COM aceite, envia como marcadas (edit)", () => {
+    const imp = impact({ scope: 'this', pagas: 1, posted: 1, passadas: 1, editadas: 1, indices_editados: [2] });
+    // requiredConfirms(imp) exige tudo, mas a prévia NUNCA concede confirmação:
+    const semAceite = buildSeriesEditArgs(info, 'this', payload, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+    });
+    expect(requiredConfirms(imp)).toEqual({ past: true, posted: true, edited: true });
+    expect(semAceite.p_confirm_posted).toBe(false);
+    expect(semAceite.p_confirm_past).toBe(false);
+    expect(semAceite.p_confirm_edited).toBe(false);
+
+    const comAceite = buildSeriesEditArgs(info, 'this', payload, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+      confirms: { past: true, posted: true, edited: true },
+    });
+    expect(comAceite.p_confirm_posted).toBe(true);
+    expect(comAceite.p_confirm_past).toBe(true);
+    expect(comAceite.p_confirm_edited).toBe(true);
+  });
+
+  it("'this' SEM aceite => false; COM aceite => flags correspondentes (delete)", () => {
+    const imp = impact({ scope: 'this', pagas: 1, posted: 1, passadas: 0, editadas: 0 });
+    expect(requiredConfirms(imp).posted).toBe(true);
+    const semAceite = buildSeriesDeleteArgs(info, 'this', 'tx-ts', 'series-ts');
+    expect(semAceite.p_confirm_posted).toBe(false);
+    expect(semAceite.p_confirm_past).toBe(false);
+    expect(semAceite.p_confirm_edited).toBe(false);
+
+    const comAceite = buildSeriesDeleteArgs(info, 'this', 'tx-ts', 'series-ts', { posted: true });
+    expect(comAceite.p_confirm_posted).toBe(true);
+    expect(comAceite.p_confirm_past).toBe(false);
+    expect(comAceite.p_confirm_edited).toBe(false);
+  });
+
+  it('confirmações vêm SÓ do aceite explícito em todos os escopos (a prévia nunca concede)', () => {
+    // prévia exige, mas sem checkbox marcado => false, inclusive em 'this'
+    const thisNo = buildSeriesEditArgs(info, 'this', payload, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+    });
+    expect(thisNo.p_confirm_posted).toBe(false);
+    expect(thisNo.p_confirm_past).toBe(false);
+    expect(thisNo.p_confirm_edited).toBe(false);
+
+    const wholeNo = buildSeriesEditArgs(info, 'whole', payload, 'tx-ts', false, {
+      original: { category_id: 'cat-1', memo: null },
+      seriesUpdatedAt: 'series-ts',
+    });
+    expect(wholeNo.p_confirm_posted).toBe(false);
+    expect(wholeNo.p_confirm_past).toBe(false);
+    expect(wholeNo.p_confirm_edited).toBe(false);
+
+    // coletivo com aceite explícito => envia como marcadas (comportamento preservado)
+    const del = buildSeriesDeleteArgs(info, 'this_and_next', 'tx-ts', 'series-ts', {
+      past: true,
+      posted: true,
+      edited: true,
+    });
+    expect(del.p_confirm_past).toBe(true);
+    expect(del.p_confirm_posted).toBe(true);
+    expect(del.p_confirm_edited).toBe(true);
+  });
+
+  it('delete com os escopos suportados: token da série + âncora em todos; whole sem âncora na prévia', () => {
+    for (const scope of ['this', 'this_and_next', 'whole'] as SeriesScope[]) {
+      const args = buildSeriesDeleteArgs(info, scope, 'tx-ts', 'series-ts');
+      expect(args.p_series_id).toBe('s-1');
+      expect(args.p_scope).toBe(scope);
+      expect(args.p_expected_updated_at).toBe('series-ts');
+    }
+    expect(buildImpactArgs('s-1', 'this', 2).p_from_occurrence).toBe(2);
+    expect(buildImpactArgs('s-1', 'whole', 2).p_from_occurrence).toBeNull();
+  });
+
+  it('os builders montam confirmações SÓ de aceite explícito; componentes passam confirms em edição e exclusão', () => {
+    const fromEdit = editorSrc.indexOf('buildSeriesEditArgs(seriesInfo, scope, payload');
+    const editCall = editorSrc.slice(fromEdit, fromEdit + 800);
+    expect(editCall).toContain('confirms,');
+    expect(editCall).toContain('statusEdited,');
+    // E10F: a prévia (impact) NÃO viaja mais para o builder; só o aceite.
+    expect(editCall).not.toContain('impact,');
+
+    const editorDel = editorSrc.indexOf('buildSeriesDeleteArgs(seriesInfo, seriesScope ??');
+    expect(editorDel).toBeGreaterThan(-1);
+    const delCall = editorSrc.slice(editorDel, editorDel + 400);
+    expect(delCall).toContain('confirms)');
+    expect(delCall).not.toContain('impact');
+
+    expect(delSrc).toMatch(
+      /buildSeriesDeleteArgs\(\s*seriesInfo,\s*activeScope,\s*expectedUpdatedAt,\s*seriesInfo\.series_updated_at \?\? null,\s*confirms,?\s*\)/,
+    );
+
+    // nenhum escopo deriva flags da prévia: requiredConfirms fica só na UI,
+    // e os builders leem exclusivamente o aceite explícito.
+    expect(seriesScopeSrc).not.toMatch(/:\s*req\.(past|posted|edited)/);
+    expect(seriesScopeSrc).toMatch(/p_confirm_posted:\s*!!c\.posted/);
+    expect(seriesScopeSrc).toMatch(/p_confirm_posted:\s*!!confirms\.posted/);
+
+    // a UI apresenta confirmação também em 'this' (texto de ocorrência única)
+    expect(editorSrc).toContain('Confirmo que desejo alterar esta ocorrência com status posted (paga/postada).');
+    expect(editorSrc).toContain('Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).');
+    expect(delSrc).toContain('Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).');
   });
 });

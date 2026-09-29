@@ -324,11 +324,18 @@ describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
     expect(tns.p_confirm_past).toBe(true);
     expect(tns.p_confirm_posted).toBe(true);
     expect(tns.p_confirm_edited).toBe(true);
-    // 'this' nunca propaga confirmação: nada de passado/posted/editado é tocado
+    // E10F: 'this' também aceita aceite explícito. confirmPast (5º param)
+    // cobre a confirmação de passado do fluxo de ocorrência única e 'confirms'
+    // vale em todos os escopos. Nada é derivado de prévia de impacto.
     const one = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', true, opts);
-    expect(one.p_confirm_past).toBe(false);
-    expect(one.p_confirm_posted).toBe(false);
-    expect(one.p_confirm_edited).toBe(false);
+    expect(one.p_confirm_past).toBe(true);
+    expect(one.p_confirm_posted).toBe(true);
+    expect(one.p_confirm_edited).toBe(true);
+    // sem aceite explícito, mesmo com prévia exigindo, nada é emitido
+    const none = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    expect(none.p_confirm_past).toBe(false);
+    expect(none.p_confirm_posted).toBe(false);
+    expect(none.p_confirm_edited).toBe(false);
   });
 
   it('E10B: status só é enviado em "this" (nunca propaga status em lote)', () => {
