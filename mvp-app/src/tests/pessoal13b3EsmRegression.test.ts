@@ -172,5 +172,11 @@ describe('PESSOAL-13B3.1 — Regressão ESM da Function (runtime Node real)', ()
     expect(importEmittedHandlerInCleanNode(scratch)).toContain('PESSOAL13_ESM_OK');
     rmSync(scratch, { recursive: true, force: true });
     expect(existsSync(scratch)).toBe(false);
-  });
+    // Este teste é o único que faz uma SEGUNDA compilação completa do grafo
+    // (o beforeAll já compila uma vez) e ainda importa num processo Node
+    // limpo. Sob carga de execução paralela isso passa de 5s e o teste
+    // falhava de forma intermitente com "Test timed out in 5000ms", sem
+    // qualquer relação com o que ele verifica. O timeout explícito abaixo
+    // acompanha o custo real da operação; as asserções permanecem idênticas.
+  }, 120_000);
 });

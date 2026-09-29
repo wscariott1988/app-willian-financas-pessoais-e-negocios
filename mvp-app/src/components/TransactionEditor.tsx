@@ -23,6 +23,18 @@ import {
   type SeriesScope,
   SERIES_SCOPE_LABELS,
 } from '../lib/series';
+import {
+  buildSeriesEditArgs,
+  buildSeriesDeleteArgs,
+  buildImpactArgs,
+  normalizeSeriesImpact,
+  requiredConfirms,
+  confirmsSatisfied,
+  impactSummaryLines,
+  impactWarnings,
+  type SeriesEditInfoLike,
+  type SeriesScopeImpact,
+} from '../lib/seriesScope';
 
 interface Transaction {
   id: string;
@@ -172,46 +184,18 @@ export function buildSavePayload(form: TxFormState): Record<string, any> {
 }
 
 // Contexto de série carregado para a edição (Package 015 · STATUS-P0).
-// Mantém o kind real da série para o frontend nunca reeditar o valor de uma
-// parcela em lote (o backend 021 rejeita p_amount em parcelamentos).
-export type SeriesEditInfo = {
-  series_id: string;
-  occurrence_index: number;
-  total: number | null;
-  kind: string;
+// PESSOAL-13C4A-E10B: o contrato de escopo mora em lib/seriesScope.ts (puro e
+// testável). Aqui só reexportamos para preservar a API pública anterior.
+// `series_updated_at` é o updated_at da SÉRIE: a migration 027 compara a
+// concorrência otimista contra transaction_series.updated_at, que sofre bump em
+// toda operação mutante (inclusive no escopo 'whole').
+export type SeriesEditInfo = SeriesEditInfoLike & {
+  series_updated_at?: string | null;
+  original_category_id?: string | null;
+  original_memo?: string | null;
 };
 
-// Payload exato enviado ao RPC transaction_series_edit.
-// Regra comprovada no backend (021_transaction_series.sql, app.transaction_series_edit):
-//   IF p_amount IS NOT NULL AND v_ser.kind = 'installment' THEN
-//       RAISE EXCEPTION 'parcelamento nao permite alterar valor em lote; edite ocorrencias individualmente';
-// Esse guarda é INCONDICIONAL (antes de qualquer lógica de escopo) e rejeita
-// p_amount em parcelamentos nos TRÊS escopos: 'this', 'this_and_next' e 'whole'.
-// Por isso o frontend envia SEMPRE p_amount = null em parcels (não undefined —
-// null é serializado e chega como NULL ao parâmetro DEFAULT, então o backend não
-// recusa a chamada); valor de parcela só se edita individualmente, via
-// transaction_update. Em recorrentes, p_amount carrega o valor do formulário.
-export function buildSeriesEditArgs(
-  seriesInfo: SeriesEditInfo,
-  scope: SeriesScope,
-  payload: Record<string, any>,
-  expectedUpdatedAt: string | null,
-  confirmPast: boolean,
-): Record<string, any> {
-  return {
-    p_series_id: seriesInfo.series_id,
-    p_from_occurrence: seriesInfo.occurrence_index,
-    p_scope: scope,
-    p_expected_updated_at: expectedUpdatedAt,
-    p_display_name: payload.description || null,
-    p_amount: seriesInfo.kind === 'recurring' ? payload.amount : null,
-    p_account_id: payload.account_id || null,
-    p_category_id: payload.category_id || null,
-    p_status: payload.status || null,
-    p_memo: payload.memo || null,
-    p_confirm_past: scope === 'whole' ? confirmPast : false,
-  };
-}
+export { buildSeriesEditArgs };
 
 export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   profileId,
@@ -241,9 +225,21 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
   const [seriesError, setSeriesError] = useState<string | null>(null);
   const [seriesInfo, setSeriesInfo] = useState<SeriesEditInfo | null>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const [extending, setExtending] = useState(false);
   const [extendMsg, setExtendMsg] = useState<string | null>(null);
   const [confirmPast, setConfirmPast] = useState(false);
+  // PESSOAL-13C4A-E10B: prévia de impacto + confirmações explícitas de
+  // passado / posted / editada. Nunca chutar contagens: vem do RPC.
+  const [impact, setImpact] = useState<SeriesScopeImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState<string | null>(null);
+  const [confirms, setConfirms] = useState({ past: false, posted: false, edited: false });
+  // valores originais da ocorrência editada: base para preserve/set/clear
+  const [originalFields, setOriginalFields] = useState<{ category_id: string | null; memo: string | null }>({
+    category_id: null,
+    memo: null,
+  });
   const [prefs, setPrefs] = useState<{
     favorites: Map<string, boolean>;
     usage: Map<string, { last_activity: string | null; usage_count: number }>;
@@ -258,7 +254,19 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
   // em lote — o backend rejeita p_amount nos escopos this/this_and_next/whole.
   // Só vale para edição de ocorrência de parcelamento existente; recorrência,
   // transação comum e criação não são afetados e o CurrencyInput segue normal.
-  const installmentValueLocked = isEdit && !!seriesInfo && seriesInfo.kind === 'installment';
+  // PESSOAL-13C4A-E10B: o valor de uma PARCELA só fica travado no escopo
+  // COLETIVO. Em "Somente esta ocorrência" o valor permanece editável — é uma
+  // única transação, sem semântica de redistribuição de parcelas. A migration
+  // 027 aplica exatamente esta regra no backend.
+  const activeScope: SeriesScope = seriesScope ?? 'this';
+  const installmentValueLocked =
+    isEdit && !!seriesInfo && seriesInfo.kind === 'installment' && activeScope !== 'this';
+
+  // Confirmações exigidas pela prévia; o botão só libera quando todas marcadas.
+  const impactRequired = requiredConfirms(impact);
+  const impactReady = confirmsSatisfied(impact, confirms);
+  const impactBlocking = !impact || impactError !== null;
+  const collectiveScope = activeScope !== 'this';
 
   useEffect(() => {
     mounted.current = true;
@@ -386,18 +394,27 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     });
     setStatusEdited(false);
     setExpectedUpdatedAt(t.updated_at || null);
+    // E10B: guarda os originais para distinguir "não alterado" de "limpar"
+    setOriginalFields({ category_id: t.category_id || null, memo: t.memo || null });
   }, [editId, detailData]);
 
   // Package 015: escopo de série para edição/exclusão. Consulta SEPARADA e
   // não-bloqueante: se falhar ou pendurar, o formulário já está liberado.
+  // O SAVE, porém, espera a resposta (seriesLoading). Sem isso, salvar dentro
+  // da janela de detecção cairia no transaction_update genérico e o escopo da
+  // série seria perdido em silêncio, sem o check de concorrência da série.
   useEffect(() => {
-    if (!editId) return;
+    if (!editId) {
+      setSeriesLoading(false);
+      return;
+    }
     let active = true;
+    setSeriesLoading(true);
     const occAc = new AbortController();
     const occTimeout = setTimeout(() => occAc.abort(), 10000);
     supabase
       .from('transaction_series_occurrences')
-      .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences, kind)')
+      .select('series_id, occurrence_index, occurred_on, transaction_series(total_occurrences, kind, updated_at)')
       .eq('transaction_id', editId)
       .abortSignal(occAc.signal)
       .maybeSingle()
@@ -406,15 +423,29 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
         if (!active) return;
         if (occErr) throw occErr;
         if (occ?.series_id) {
-          const ser = occ.transaction_series as unknown as { total_occurrences: number | null; kind: string | null } | null;
-          setSeriesInfo({ series_id: occ.series_id, occurrence_index: occ.occurrence_index, total: ser?.total_occurrences ?? null, kind: ser?.kind ?? 'recurring' });
+          const ser = occ.transaction_series as unknown as {
+            total_occurrences: number | null;
+            kind: string | null;
+            updated_at?: string | null;
+          } | null;
+          setSeriesInfo({
+            series_id: occ.series_id,
+            occurrence_index: occ.occurrence_index,
+            total: ser?.total_occurrences ?? null,
+            kind: ser?.kind ?? 'recurring',
+            series_updated_at: ser?.updated_at ?? null,
+          });
         } else {
           setSeriesInfo(null);
         }
+        if (active) setSeriesLoading(false);
       })
       .then(undefined, () => {
         clearTimeout(occTimeout);
-        if (active) setSeriesInfo(null);
+        if (active) {
+          setSeriesInfo(null);
+          setSeriesLoading(false);
+        }
       });
     return () => {
       active = false;
@@ -422,6 +453,40 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       occAc.abort();
     };
   }, [editId]);
+
+  // PESSOAL-13C4A-E10B: prévia de impacto por escopo (somente leitura).
+  // Recalcula quando a ocorrência, o escopo ou o perfil mudam. Nunca bloqueia
+  // o formulário: se falhar, o usuário continua podendo usar o escopo 'this'.
+  useEffect(() => {
+    if (!isEdit || !seriesInfo) {
+      setImpact(null);
+      return;
+    }
+    let active = true;
+    setImpactLoading(true);
+    setImpactError(null);
+    setConfirms({ past: false, posted: false, edited: false });
+    supabase
+      .rpc('series_scope_impact', buildImpactArgs(seriesInfo.series_id, seriesScope ?? 'this', seriesInfo.occurrence_index))
+      .then(({ data, error: rpcError }: any) => {
+        if (!active) return;
+        setImpactLoading(false);
+        if (rpcError) {
+          setImpact(null);
+          setImpactError('Não foi possível calcular o impacto desta operação.');
+          return;
+        }
+        setImpact(normalizeSeriesImpact(data));
+      }, () => {
+        if (!active) return;
+        setImpactLoading(false);
+        setImpact(null);
+        setImpactError('Não foi possível calcular o impacto desta operação.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [isEdit, seriesInfo, seriesScope]);
 
   // ---- Load categories by kind/profile ----
   useEffect(() => {
@@ -484,8 +549,16 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
     amountValue !== null &&
     !!form.occurred_on &&
     !!form.account_id &&
-    (form.kind === 'transfer' ? transferReady : true) &&
-    !!form.status;
+   (form.kind === 'transfer' ? transferReady : true) &&
+   !!form.status &&
+   // E10B: o save espera a detecção de série para não degradar uma ocorrência
+   // de série para o caminho genérico e perder o escopo em silêncio.
+   !seriesLoading &&
+   // E10F (gate 3.5): com série, o save exige prévia de impacto carregada SEM
+   // erro e TODAS as confirmações exigidas marcadas — em todos os escopos,
+   // inclusive 'this'. Nada é auto-confirmado; sem aceite, o backend (027)
+   // rejeitaria, então o botão fica preso até o usuário confirmar.
+   (!seriesInfo || (!impactLoading && !!impact && !impactError && impactReady));
 
   // ---- Package 015: preview local (nenhum write) ----
   const seriesValid = entryType === 'single' || (form.kind !== 'transfer' && !!form.account_id && !!form.occurred_on && amountValue !== null && (entryType === 'installment' ? (Number(seriesTotal) >= 1 && Number(seriesTotal) <= 120) : true));
@@ -535,10 +608,18 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       let rpcError: any;
       if (isEdit && editId) {
         if (seriesInfo) {
-          // Package 015: edição com escopo de série (this | this_and_next | whole)
+          // Package 015 + E10B: edição com escopo de série (this | this_and_next | whole)
           const scope = seriesScope ?? 'this';
           const res = await supabase.rpc('transaction_series_edit', {
-            ...buildSeriesEditArgs(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast),
+            ...buildSeriesEditArgs(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast, {
+              original: { category_id: originalFields.category_id, memo: originalFields.memo },
+              seriesUpdatedAt: seriesInfo.series_updated_at ?? null,
+              confirms,
+              // E10F: confirmações viajam SÓ do aceite explícito (confirms), em
+              // todos os escopos; statusEdited garante que p_status só viaja
+              // quando o usuário o alterou explicitamente no formulário.
+              statusEdited,
+            }),
           });
           data = res.data;
           rpcError = res.error;
@@ -636,13 +717,10 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
       let data: any;
       let rpcError: any;
       if (seriesInfo) {
-        // Package 015: exclusão com escopo de série (this | this_and_next | whole)
+        // Package 015 + E10B: exclusão com escopo de série. Soft delete only;
+        // confirmações de passado/posted/editada vêm da prévia de impacto.
         const res = await supabase.rpc('transaction_series_delete', {
-          p_series_id: seriesInfo.series_id,
-          p_from_occurrence: seriesInfo.occurrence_index,
-          p_scope: seriesScope ?? 'this',
-          p_expected_updated_at: expectedUpdatedAt,
-          p_confirm_past: (seriesScope ?? 'this') === 'whole' ? confirmPast : false,
+          ...buildSeriesDeleteArgs(seriesInfo, seriesScope ?? 'this', expectedUpdatedAt, seriesInfo.series_updated_at ?? null, confirms),
         });
         data = res.data;
         rpcError = res.error;
@@ -887,22 +965,86 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   <option key={v} value={v}>{l}</option>
                 ))}
               </select>
-              {seriesScope === 'whole' && (
-                <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={confirmPast}
-                    onChange={(e) => setConfirmPast(e.target.checked)}
-                    style={{ marginTop: '1px' }}
-                  />
-                  <span>
-                    Confirmo que desejo alterar também ocorrências passadas. Ocorrências editadas individualmente são preservadas.
-                  </span>
-                </label>
+              {isEdit && seriesInfo && (impactLoading || impact || impactError) && (
+                <div
+                  data-testid="series-impact-preview"
+                  style={{
+                    backgroundColor: 'var(--color-surface-raised, rgba(0,0,0,0.04))',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    fontSize: '12px',
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  {impactLoading && <span>Calculando impacto…</span>}
+                  {impact && impactSummaryLines(impact, 'edit').map((line) => (
+                    <span key={line}>{line}</span>
+                  ))}
+                  {impactError && <span style={{ color: 'var(--color-danger)' }}>{impactError}</span>}
+                </div>
               )}
-              {seriesScope !== 'whole' && (
-                <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                  "Esta e as próximas" nunca altera ocorrências anteriores.
+
+              {impact && (impactRequired.past || impactRequired.posted || impactRequired.edited) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {impactRequired.past && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={confirms.past}
+                        onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))}
+                        style={{ marginTop: '1px' }}
+                      />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências passadas. Ocorrências editadas individualmente entram na operação e são informadas na prévia.'
+                          : 'Confirmo que desejo alterar esta ocorrência, que está no passado (data anterior a hoje).'}
+                      </span>
+                    </label>
+                  )}
+                  {impactRequired.posted && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={confirms.posted}
+                        onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))}
+                        style={{ marginTop: '1px' }}
+                      />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências com status posted (paga/postada).'
+                          : 'Confirmo que desejo alterar esta ocorrência com status posted (paga/postada).'}
+                      </span>
+                    </label>
+                  )}
+                  {impactRequired.edited && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={confirms.edited}
+                        onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))}
+                        style={{ marginTop: '1px' }}
+                      />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo alterar também ocorrências que já foram editadas individualmente.'
+                          : 'Confirmo que desejo alterar esta ocorrência, que foi editada individualmente.'}
+                      </span>
+                    </label>
+                  )}
+                  {impactBlocking && (
+                    <span style={{ fontSize: '11px', color: 'var(--color-danger)' }}>
+                      Sem a prévia de impacto não é possível confirmar esta operação.
+                    </span>
+                  )}
+                </div>
+              )}
+              {collectiveScope && !impact && !impactLoading && !impactError && (
+                <span style={{ fontSize: '11px', color: 'var(--color-warning)' }}>
+                  "Esta e as próximas" nunca altera ocorrências anteriores a {SERIES_SCOPE_LABELS[activeScope].toLowerCase()} selecionada.
                 </span>
               )}
 
@@ -1138,14 +1280,53 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                 </>
               ) : seriesInfo ? (
                 <>
-                  <span><strong>Este lançamento pertence a uma série.</strong> A exclusão será aplicada a: <strong>{SERIES_SCOPE_LABELS[seriesScope ?? 'this'].toLowerCase()}</strong>.</span>
-                  {seriesScope === 'whole' && (
+                  <span><strong>Este lançamento pertence a uma série.</strong> A exclusão será aplicada a: <strong>{SERIES_SCOPE_LABELS[activeScope].toLowerCase()}</strong>.</span>
+                  {impact && (
+                    <div data-testid="series-delete-impact" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {impactSummaryLines(impact, 'delete').map((line) => (
+                        <span key={line}>{line}</span>
+                      ))}
+                    </div>
+                  )}
+                  {impactError && (
+                    <span style={{ color: 'var(--color-danger)', fontSize: '12px' }}>
+                      Não foi possível calcular a prévia de impacto desta exclusão. A exclusão fica bloqueada.
+                    </span>
+                  )}
+                  {collectiveScope && impact && impactWarnings(impact, 'delete').map((w) => (
+                    <span key={w} style={{ color: 'var(--color-warning)' }}>{w}</span>
+                  ))}
+                  {impactRequired.past && (
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={confirmPast} onChange={(e) => setConfirmPast(e.target.checked)} style={{ marginTop: '1px' }} />
-                      <span>Confirmo que desejo excluir também ocorrências passadas.</span>
+                      <input type="checkbox" checked={confirms.past} onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))} style={{ marginTop: '1px' }} />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências passadas.'
+                          : 'Confirmo que desejo excluir esta ocorrência, que está no passado (data anterior a hoje).'}
+                      </span>
                     </label>
                   )}
-                  <span>Tem certeza que deseja excluir? Esta ação não pode ser desfeita.</span>
+                  {impactRequired.posted && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={confirms.posted} onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))} style={{ marginTop: '1px' }} />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências com status posted.'
+                          : 'Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).'}
+                      </span>
+                    </label>
+                  )}
+                  {impactRequired.edited && (
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={confirms.edited} onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))} style={{ marginTop: '1px' }} />
+                      <span>
+                        {collectiveScope
+                          ? 'Confirmo que desejo excluir também ocorrências editadas individualmente.'
+                          : 'Confirmo que desejo excluir esta ocorrência, que foi editada individualmente.'}
+                      </span>
+                    </label>
+                  )}
+                  <span>A exclusão é lógica e pode ser revertida. Nenhuma ocorrência é apagada em definitivo.</span>
                 </>
               ) : (
                 <span>Tem certeza que deseja excluir esta transação? Esta ação não pode ser desfeita.</span>
@@ -1165,7 +1346,7 @@ export const TransactionEditor: React.FC<TransactionEditorProps> = ({
                   className="btn-primary"
                   onClick={doDelete}
                   style={{ flex: '1 1 120px', padding: '8px', backgroundColor: 'var(--color-danger)', border: 'none' }}
-                  disabled={deleting}
+                  disabled={deleting || (!!seriesInfo && (impactLoading || !!impactError || !impact || !impactReady))}
                 >
                   {deleting ? <><RefreshCw size={14} className="spin-animation" /> Excluindo...</> : <><Trash2 size={14} /> Confirmar exclusão</>}
                 </button>

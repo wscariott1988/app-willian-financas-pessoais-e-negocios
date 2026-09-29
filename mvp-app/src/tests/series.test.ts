@@ -212,8 +212,11 @@ describe('Package 015 — UI (TransactionEditor)', () => {
 
   it('confirmação forte de passado no backend (checkbox + confirm_past no RPC)', () => {
     expect(src).toContain('Confirmo que desejo alterar também ocorrências passadas');
-    expect(src).toContain('p_confirm_past');
     expect(src).toContain('Confirmo que desejo excluir também ocorrências passadas');
+    // os parâmetros p_confirm_* são montados pelo helper compartilhado
+    expect(src).toContain('buildSeriesEditArgs');
+    expect(src).toContain('buildSeriesDeleteArgs');
+    expect(src).toMatch(/confirms\.past|confirms:\s*confirms/);
   });
 
   it('ação amigável "Gerar próximas ocorrências" (nunca automática) para recorrência aberta', () => {
@@ -234,20 +237,30 @@ describe('Package 015 — UI (TransactionEditor)', () => {
     expect(jsx).not.toContain('p_idempotency_key');
   });
 
-  it('ocorrências editadas individualmente são preservadas (is_edited)', () => {
-    expect(src).toMatch(/Ocorrências editadas individualmente são preservadas/i);
+  it('E10B: ocorrências editadas individualmente NÃO são mais preservadas (entram no escopo com confirmação)', () => {
+    expect(src).not.toMatch(/Ocorrências editadas independentemente são preservadas/i);
+    expect(src).toContain('Confirmo que desejo alterar também ocorrências que já foram editadas individualmente');
+    expect(src).toContain('Confirmo que desejo excluir também ocorrências editadas individualmente');
   });
 
-  it('BUG 1: recorrente envia p_amount com o novo valor; parcelas enviam null (nunca numérico)', () => {
-    expect(src).toContain("p_amount: seriesInfo.kind === 'recurring' ? payload.amount : null,");
+  it('E10B: confirmação de posted (pagas/postadas) também é exigida em escopo coletivo', () => {
+    expect(src).toContain('Confirmo que desejo alterar também ocorrências com status posted');
+    expect(src).toContain('Confirmo que desejo excluir também ocorrências com status posted');
+  });
+
+  it('BUG 1: o valor decide o escopo dentro do helper (não há p_amount inline no editor)', () => {
+    // a trava de valor de parcela é avaliada por installmentValueLocked e
+    // traduzida em p_amount dentro de buildSeriesEditArgs (lib/seriesScope.ts)
+    expect(src).toMatch(/const installmentValueLocked\s*=\s*[^;]*installment[^;]*;/);
+    expect(src).toMatch(/activeScope\s*!==\s*'this'/);
   });
 
   it('BUG 1: installment não envia alteração indevida de amount pelo caminho de série', () => {
     const from = src.indexOf("supabase.rpc('transaction_series_edit'");
     const to = src.indexOf("supabase.rpc('transaction_update'");
     const editCall = src.slice(from, to);
-    // os argumentos da edição em lote vêm do helper buildSeriesEditArgs (p_amount null em parcelas)
-    expect(editCall).toMatch(/buildSeriesEditArgs\(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast\)/);
+    // os argumentos da edição em lote vêm do helper buildSeriesEditArgs
+    expect(editCall).toMatch(/buildSeriesEditArgs\(seriesInfo, scope, payload, expectedUpdatedAt, confirmPast/);
     expect(editCall).not.toContain('p_amount: payload.amount,');
   });
 
@@ -276,16 +289,14 @@ describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
     expect(args.p_scope).toBe('this');
   });
 
-  it('installment: p_amount é null (backend rejeitaria valor em lote)', () => {
-    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
-    expect(args.p_amount).toBeNull();
+  it('installment: p_amount é null em escopo COLETIVO (backend rejeita valor em lote)', () => {
+    expect(buildSeriesEditArgs(installment, 'this_and_next', payload, 'ts-1', false).p_amount).toBeNull();
+    expect(buildSeriesEditArgs(installment, 'whole', payload, 'ts-1', false).p_amount).toBeNull();
   });
 
-  it('installment: p_amount é null nos TRÊS escopos (guarda do backend é incondicional)', () => {
-    for (const scope of ['this', 'this_and_next', 'whole'] as const) {
-      const args = buildSeriesEditArgs(installment, scope, payload, 'ts-1', false);
-      expect(args.p_amount).toBeNull();
-    }
+  it('E10B: installment: p_amount é PERMITIDO em "this" (transação isolada, sem redistribuição)', () => {
+    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    expect(args.p_amount).toBe('49.84');
   });
 
   it('recorrente: p_amount carrega o valor novo nos TRÊS escopos', () => {
@@ -296,17 +307,86 @@ describe('Package 015 — BUG 1 regressão (buildSeriesEditArgs)', () => {
   });
 
   it('installment: descrição, ocorrência de partida e série ainda são propagadas', () => {
-    const args = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    const args = buildSeriesEditArgs(
+      installment, 'this', payload, 'ts-1', false,
+      { seriesUpdatedAt: 'serie-ts-1' },
+    );
     expect(args.p_display_name).toBe('Nova descrição da parcela');
     expect(args.p_from_occurrence).toBe(3);
     expect(args.p_series_id).toBe('s-1');
-    expect(args.p_expected_updated_at).toBe('ts-1');
+    // o token de concorrência é o da série, nunca o da transação
+    expect(args.p_expected_updated_at).toBe('serie-ts-1');
   });
 
-  it('scope whole propaga p_confirm_past; this/this_and_next enviam false', () => {
-    expect(buildSeriesEditArgs(installment, 'whole', payload, 'ts-1', true).p_confirm_past).toBe(true);
-    expect(buildSeriesEditArgs(installment, 'this_and_next', payload, 'ts-1', true).p_confirm_past).toBe(false);
-    expect(buildSeriesEditArgs(installment, 'this', payload, 'ts-1', true).p_confirm_past).toBe(false);
+  it('E10B: p_confirm_past/posted/edited são exigidos em this_and_next, não só em whole', () => {
+    const opts = { confirms: { past: true, posted: true, edited: true } };
+    const tns = buildSeriesEditArgs(installment, 'this_and_next', payload, 'ts-1', false, opts);
+    expect(tns.p_confirm_past).toBe(true);
+    expect(tns.p_confirm_posted).toBe(true);
+    expect(tns.p_confirm_edited).toBe(true);
+    // E10F: 'this' também aceita aceite explícito. confirmPast (5º param)
+    // cobre a confirmação de passado do fluxo de ocorrência única e 'confirms'
+    // vale em todos os escopos. Nada é derivado de prévia de impacto.
+    const one = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', true, opts);
+    expect(one.p_confirm_past).toBe(true);
+    expect(one.p_confirm_posted).toBe(true);
+    expect(one.p_confirm_edited).toBe(true);
+    // sem aceite explícito, mesmo com prévia exigindo, nada é emitido
+    const none = buildSeriesEditArgs(installment, 'this', payload, 'ts-1', false);
+    expect(none.p_confirm_past).toBe(false);
+    expect(none.p_confirm_posted).toBe(false);
+    expect(none.p_confirm_edited).toBe(false);
+  });
+
+  it('E10B: status só é enviado em "this" (nunca propaga status em lote)', () => {
+    for (const scope of ['this_and_next', 'whole'] as const) {
+      const args = buildSeriesEditArgs(recurring, scope, payload, 'ts-1', false);
+      expect(args.p_status).toBeNull();
+    }
+    expect(buildSeriesEditArgs(recurring, 'this', payload, 'ts-1', false).p_status).toBe('posted');
+  });
+
+  it('E10B: categoria/memo usam *_action tri-state (preserve|set|clear)', () => {
+    // sem mudança em relação ao original => preserve (não "set" espúrio)
+    const none = buildSeriesEditArgs(recurring, 'whole', payload, 'ts-1', false, {
+      original: { category_id: 'cat-1', memo: null },
+    });
+    expect(none.p_category_action).toBe('preserve');
+    expect(none.p_memo_action).toBe('preserve');
+
+    const set = buildSeriesEditArgs(
+      recurring, 'whole',
+      { ...payload, category_id: 'cat-9', memo: 'nota' },
+      'ts-1', false,
+      { original: { category_id: 'cat-1', memo: null } },
+    );
+    expect(set.p_category_action).toBe('set');
+    expect(set.p_category_id).toBe('cat-9');
+    expect(set.p_memo_action).toBe('set');
+
+    const clear = buildSeriesEditArgs(
+      recurring, 'whole',
+      { ...payload, category_id: '', memo: '' },
+      'ts-1', false,
+      { original: { category_id: 'cat-1', memo: 'nota' } },
+    );
+    expect(clear.p_category_action).toBe('clear');
+    expect(clear.p_category_id).toBeNull();
+    expect(clear.p_memo_action).toBe('clear');
+  });
+
+  it('E10B: p_expected_updated_at usa o updated_at da SÉRIE quando informado (concorrência otimista)', () => {
+    const withTs = buildSeriesEditArgs(recurring, 'whole', payload, 'ts-1', false, {
+      seriesUpdatedAt: 'series-ts-9',
+    });
+    expect(withTs.p_expected_updated_at).toBe('series-ts-9');
+    const without = buildSeriesEditArgs(recurring, 'whole', payload, 'ts-1', false);
+    // Auditoria E10B: sem token da SÉRIE, o valor é null — e NÃO o
+    // updated_at da transação ('ts-1'). A 027 compara contra
+    // transaction_series.updated_at, então reutilizar o relógio da transação
+    // dispararia CONFLITO espúrio. Null faz o backend recusar com erro claro.
+    expect(without.p_expected_updated_at).toBeNull();
+    expect(without.p_expected_updated_at).not.toBe('ts-1');
   });
 });
 
@@ -377,19 +457,19 @@ describe('PESSOAL-10 — valor bloqueado em parcelas existentes (edição)', () 
   });
 
   it('recurring e transação comum => valor permanece editável (lock só para installment)', () => {
-    const flag = src.match(/const installmentValueLocked = ([^;]+);/);
+    const flag = src.match(/const installmentValueLocked\s*=\s*([^;]+);/);
     expect(flag).not.toBeNull();
     expect(flag![1]).toContain('isEdit');
     expect(flag![1]).toContain("seriesInfo.kind === 'installment'");
   });
 
   it('novo lançamento / criação de parcelamento não bloqueia o valor', () => {
-    const flag = src.match(/const installmentValueLocked = ([^;]+);/);
+    const flag = src.match(/const installmentValueLocked\s*=\s*([^;]+);/);
     expect(flag![1]).not.toContain('entryType');
     expect(flag![1].includes('isEdit')).toBe(true);
   });
 
-  it('descrição de installment salva com p_amount = null (valor nunca enviado)', () => {
+  it('E10B: descrição de installment salva preservando o valor no escopo coletivo', () => {
     const payload = {
       description: 'Renomear mercado',
       amount: '49.84',
@@ -400,7 +480,7 @@ describe('PESSOAL-10 — valor bloqueado em parcelas existentes (edição)', () 
     };
     const args = buildSeriesEditArgs(
       { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'installment' },
-      'this',
+      'whole',
       payload,
       'ts-1',
       false,
@@ -408,6 +488,17 @@ describe('PESSOAL-10 — valor bloqueado em parcelas existentes (edição)', () 
     expect(args.p_amount).toBeNull();
     expect(args.p_display_name).toBe('Renomear mercado');
     expect(args.p_memo).toBe('nova obs');
+  });
+
+  it('E10B: installment em "this" envia o valor (trava é só no lote)', () => {
+    const args = buildSeriesEditArgs(
+      { series_id: 's-1', occurrence_index: 3, total: 12, kind: 'installment' },
+      'this',
+      { description: 'X', amount: '49.84', account_id: 'a', category_id: null, status: 'posted', memo: null },
+      'ts-1',
+      false,
+    );
+    expect(args.p_amount).toBe('49.84');
   });
 
   it('recorrente continua enviando o valor alterado', () => {

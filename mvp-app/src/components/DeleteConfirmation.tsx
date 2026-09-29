@@ -3,6 +3,18 @@ import { supabase } from '../supabaseClient';
 import { Trash2, AlertCircle, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { formatAmountForInput } from './TransactionEditor';
 import { accountDisplayLabel } from '../lib/accountCrud';
+import { SERIES_SCOPE_LABELS, type SeriesScope } from '../lib/series';
+import {
+  buildSeriesDeleteArgs,
+  buildImpactArgs,
+  normalizeSeriesImpact,
+  requiredConfirms,
+  confirmsSatisfied,
+  impactSummaryLines,
+  impactWarnings,
+  type SeriesEditInfoLike,
+  type SeriesScopeImpact,
+} from '../lib/seriesScope';
 
 const RPC_TIMEOUT_MS = 15000;
 
@@ -48,6 +60,29 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   const [loadFailed, setLoadFailed] = useState(false);
   const mounted = useRef(true);
   const [retryKey, setRetryKey] = useState(0);
+  // PESSOAL-13C4A-E10B: escopo de série também na exclusão.
+  const [seriesInfo, setSeriesInfo] = useState<SeriesEditInfoLike | null>(null);
+  const [detectingSeries, setDetectingSeries] = useState(false);
+  const [seriesScope, setSeriesScope] = useState<SeriesScope>('this');
+  const [impact, setImpact] = useState<SeriesScopeImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState<string | null>(null);
+  const [confirms, setConfirms] = useState({ past: false, posted: false, edited: false });
+
+  const activeScope: SeriesScope = seriesInfo ? seriesScope : 'this';
+  const collectiveScope = !!seriesInfo && seriesScope !== 'this';
+  const impactRequired = requiredConfirms(impact);
+  const impactReady = confirmsSatisfied(impact, confirms);
+  // A exclusão espera a detecção de série: antes dela, seriesInfo é null e o
+  // fluxo cairia em transaction_delete, ignorando o escopo escolhido. Sem
+  // série resolvida, nenhuma exclusão é oferecida.
+  const seriesLoading = detectingSeries;
+  // E10F (gate 3.5): com série, bloqueia enquanto a prévia não assentar ou a
+  // confirmação exigida não for marcada — em TODOS os escopos, inclusive
+  // 'this'. Nunca auto-confirmamos por omissão; sem aceite, o backend (027)
+  // rejeitaria a operação.
+  const deleteBlocked =
+    seriesLoading || (!!seriesInfo && (impactLoading || !!impactError || !impact || !impactReady));
 
   useEffect(() => {
     mounted.current = true;
@@ -106,6 +141,83 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
     };
   }, [tx.id, retryKey]);
 
+  // PESSOAL-13C4A-E10B: detecta a série da transação e carrega a prévia de
+  // impacto. Falha aqui NÃO impede excluir a transação isolada ('this'), mas
+  // a detecção pendente bloqueia a exclusão: sem saber se a transação é parte
+  // de uma série, qualquer exclusão poderia ignorar o escopo escolhido.
+  useEffect(() => {
+    let active = true;
+    const ac = new AbortController();
+    setDetectingSeries(true);
+    supabase
+      .from('transaction_series_occurrences')
+      .select('series_id, occurrence_index, transaction_series(kind, updated_at)')
+      .eq('transaction_id', tx.id)
+      .abortSignal(ac.signal)
+      .maybeSingle()
+      .then(({ data, error: occErr }: any) => {
+        if (!active || occErr || !data?.series_id) {
+          if (active) {
+            setSeriesInfo(null);
+            setDetectingSeries(false);
+          }
+          return;
+        }
+        const ser = Array.isArray(data.transaction_series) ? data.transaction_series[0] : data.transaction_series;
+        if (active) {
+          setSeriesInfo({
+            series_id: data.series_id,
+            occurrence_index: data.occurrence_index,
+            total: null,
+            kind: ser?.kind ?? 'recurring',
+            series_updated_at: ser?.updated_at ?? null,
+          } as SeriesEditInfoLike);
+          setDetectingSeries(false);
+        }
+      }, () => {
+        if (active) {
+          setSeriesInfo(null);
+          setDetectingSeries(false);
+        }
+      });
+    return () => {
+      active = false;
+      ac.abort();
+    };
+  }, [tx.id]);
+
+  // PESSOAL-13C4A-E10B: prévia de impacto por escopo (somente leitura)
+  useEffect(() => {
+    if (!seriesInfo) {
+      setImpact(null);
+      setImpactError(null);
+      return;
+    }
+    let active = true;
+    setImpactLoading(true);
+    setImpactError(null);
+    setConfirms({ past: false, posted: false, edited: false });
+    supabase
+      .rpc('series_scope_impact', buildImpactArgs(seriesInfo.series_id, seriesScope, seriesInfo.occurrence_index))
+      .then(({ data, error: rpcError }: any) => {
+        if (!active) return;
+        setImpactLoading(false);
+        // Falha da prévia não pode virar silêncio: sem impacto não há como
+        // marcar as confirmações exigidas, então o botão fica bloqueado e o
+        // usuário precisa saber por quê.
+        setImpact(rpcError ? null : normalizeSeriesImpact(data));
+        setImpactError(rpcError ? String(rpcError.message || rpcError) : null);
+      }, (e: any) => {
+        if (!active) return;
+        setImpactLoading(false);
+        setImpact(null);
+        setImpactError(String(e?.message || 'Falha ao carregar a prévia de impacto.'));
+      });
+    return () => {
+      active = false;
+    };
+  }, [seriesInfo, seriesScope]);
+
   const handleRetry = useCallback(() => {
     setExpectedUpdatedAt(null);
     setIsTransfer(false);
@@ -116,13 +228,25 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
 
   const handleConfirm = async () => {
     if (!expectedUpdatedAt) return;
+    if (deleteBlocked) return;
     setDeleting(true);
     setError(null);
     try {
-      const { error: rpcError } = await supabase.rpc('transaction_delete', {
-        p_transaction_id: tx.id,
-        p_expected_updated_at: expectedUpdatedAt,
-      });
+      // PESSOAL-13C4A-E10B: transação de série exclusa pelo escopo escolhido.
+      const { error: rpcError } = seriesInfo
+? await supabase.rpc('transaction_series_delete', {
+              ...buildSeriesDeleteArgs(
+                seriesInfo,
+                activeScope,
+                expectedUpdatedAt,
+                seriesInfo.series_updated_at ?? null,
+                confirms,
+              ),
+            })
+        : await supabase.rpc('transaction_delete', {
+            p_transaction_id: tx.id,
+            p_expected_updated_at: expectedUpdatedAt,
+          });
       if (rpcError) {
         const msg = String(rpcError.message || rpcError);
         if (msg.includes('CONFLITO')) {
@@ -154,7 +278,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
         <div>
           <h3 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>Excluir transacao</h3>
           <p style={{ fontSize: '12px', color: 'var(--color-text-muted)', margin: 0 }}>
-            Esta acao nao pode ser desfeita.
+            A exclusao e logica e pode ser revertida.
           </p>
         </div>
       </div>
@@ -239,6 +363,94 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
         </div>
       )}
 
+      {seriesInfo && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{
+            backgroundColor: 'rgba(6, 182, 212, 0.08)',
+            border: '1px solid rgba(6, 182, 212, 0.15)',
+            borderRadius: '8px', padding: '12px 14px', fontSize: '12px',
+            display: 'flex', flexDirection: 'column', gap: '8px',
+          }}>
+            <span style={{ color: 'var(--color-secondary)', fontWeight: 600 }}>
+              Este lançamento pertence a uma série. Escolha o escopo da exclusão:
+            </span>
+            <select
+              data-testid="delete-series-scope"
+              value={seriesScope}
+              onChange={(e) => setSeriesScope(e.target.value as SeriesScope)}
+              style={{ width: '100%' }}
+            >
+              {Object.entries(SERIES_SCOPE_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+            <span style={{ color: 'var(--color-secondary)' }}>
+              A exclusão é lógica (soft delete) e pode ser revertida. Nada é apagado em definitivo.
+            </span>
+          </div>
+
+          {(impactLoading || impact || impactError) && (
+            <div
+              data-testid="delete-series-impact"
+              style={{
+                backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                borderRadius: '8px', padding: '10px 12px', fontSize: '12px',
+                display: 'flex', flexDirection: 'column', gap: '4px',
+                color: 'var(--color-danger)',
+              }}
+            >
+              {impactLoading && <span>Calculando impacto…</span>}
+              {impactError && (
+                <span data-testid="delete-series-impact-error">
+                  Não foi possível calcular o impacto desta exclusão: {impactError} A exclusão
+                  fica bloqueada porque as confirmações exigidas não puderam ser verificadas.
+                  Tente novamente.
+                </span>
+              )}
+              {impact && impactSummaryLines(impact, 'delete').map((line) => (
+                <span key={line}>{line}</span>
+              ))}
+            </div>
+          )}
+
+          {collectiveScope && impactWarnings(impact, 'delete').map((w) => (
+            <span key={w} style={{ fontSize: '12px', color: 'var(--color-warning)' }}>{w}</span>
+          ))}
+
+          {impactRequired.past && (
+            <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={confirms.past} onChange={(e) => setConfirms((c) => ({ ...c, past: e.target.checked }))} style={{ marginTop: '1px' }} />
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências passadas.'
+                  : 'Confirmo que desejo excluir esta ocorrência, que está no passado (data anterior a hoje).'}
+              </span>
+            </label>
+          )}
+          {impactRequired.posted && (
+            <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={confirms.posted} onChange={(e) => setConfirms((c) => ({ ...c, posted: e.target.checked }))} style={{ marginTop: '1px' }} />
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências com status posted.'
+                  : 'Confirmo que desejo excluir esta ocorrência com status posted (paga/postada).'}
+              </span>
+            </label>
+          )}
+          {impactRequired.edited && (
+            <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--color-warning)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={confirms.edited} onChange={(e) => setConfirms((c) => ({ ...c, edited: e.target.checked }))} style={{ marginTop: '1px' }} />
+              <span>
+                {collectiveScope
+                  ? 'Confirmo que desejo excluir também ocorrências editadas individualmente.'
+                  : 'Confirmo que desejo excluir esta ocorrência, que foi editada individualmente.'}
+              </span>
+            </label>
+          )}
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '4px' }}>
         <button
           type="button"
@@ -254,7 +466,7 @@ export const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
           className="btn-primary"
           onClick={handleConfirm}
           style={{ flex: '1 1 140px', minWidth: 0, padding: '12px', backgroundColor: 'var(--color-danger)', border: 'none' }}
-          disabled={loadingDetail || deleting || !expectedUpdatedAt}
+          disabled={loadingDetail || deleting || !expectedUpdatedAt || deleteBlocked}
         >
           {deleting ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
